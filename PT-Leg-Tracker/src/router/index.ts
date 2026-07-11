@@ -12,6 +12,18 @@ const router = createRouter({
       component: () => import('../views/SetupView.vue'),
       meta: { title: 'ลงทะเบียน' },
     },
+    {
+      path: '/knowledge',
+      name: 'knowledge',
+      component: () => import('../views/KnowledgeView.vue'),
+      meta: { title: 'ความรู้' },
+    },
+    {
+      path: '/knowledge/:id',
+      name: 'article',
+      component: () => import('../views/ArticleView.vue'),
+      meta: { title: 'ความรู้' },
+    },
   ],
 })
 
