@@ -16,8 +16,8 @@ html {
   font-size: 20px; /* elderly baseline; everything below uses rem */
 }
 
-.font-large {
-  font-size: 1.2em;
+html.font-large {
+  font-size: 24px;
 }
 
 body {

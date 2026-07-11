@@ -1,14 +1,19 @@
 <script setup lang="ts">
+import { watchEffect } from 'vue'
 import { RouterView, useRoute, useRouter } from 'vue-router'
 import { useSettingsStore } from '@/stores/settings'
 
 const route = useRoute()
 const router = useRouter()
 const settings = useSettingsStore()
+
+watchEffect(() => {
+  document.documentElement.classList.toggle('font-large', settings.settings.fontLarge)
+})
 </script>
 
 <template>
-  <div :class="{ 'font-large': settings.settings.fontLarge }">
+  <div>
     <header class="topbar" v-if="route.name !== 'home' && route.name !== 'setup'">
       <button class="back" @click="router.back()" aria-label="ย้อนกลับ">← กลับ</button>
       <h1>{{ route.meta.title ?? '' }}</h1>
