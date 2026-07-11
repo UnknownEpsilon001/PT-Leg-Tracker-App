@@ -2,3 +2,6 @@ node_modules/
 
 # Claude Code local state
 .claude/
+
+# funding proposal PDF contains personal data (phones, bank account)
+docs/*.pdf
