@@ -24,6 +24,12 @@ const router = createRouter({
       component: () => import('../views/ArticleView.vue'),
       meta: { title: 'ความรู้' },
     },
+    {
+      path: '/guide',
+      name: 'guide',
+      component: () => import('../views/DeviceGuideView.vue'),
+      meta: { title: 'วิธีใช้เครื่อง' },
+    },
   ],
 })
 
