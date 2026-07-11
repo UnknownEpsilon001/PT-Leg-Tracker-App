@@ -36,6 +36,12 @@ const router = createRouter({
       component: () => import('../views/SessionView.vue'),
       meta: { title: 'ออกกำลังกาย' },
     },
+    {
+      path: '/records',
+      name: 'records',
+      component: () => import('../views/RecordsView.vue'),
+      meta: { title: 'บันทึกของฉัน' },
+    },
   ],
 })
 
