@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">PT Leg Tracker</string>
+    <string name="title_activity_main">PT Leg Tracker</string>
+    <string name="package_name">com.unknownaimo.ptlegtracker</string>
+    <string name="custom_url_scheme">com.unknownaimo.ptlegtracker</string>
+</resources>
