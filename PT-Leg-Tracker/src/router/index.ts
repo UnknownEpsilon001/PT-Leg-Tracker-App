@@ -42,6 +42,12 @@ const router = createRouter({
       component: () => import('../views/RecordsView.vue'),
       meta: { title: 'บันทึกของฉัน' },
     },
+    {
+      path: '/quiz/:quizId',
+      name: 'quiz',
+      component: () => import('../views/QuizView.vue'),
+      meta: { title: 'แบบทดสอบ' },
+    },
   ],
 })
 
