@@ -16,13 +16,17 @@ async function submit() {
     error.value = 'กรุณากรอกข้อมูลให้ครบทุกช่อง'
     return
   }
-  await store.save({
-    name: name.value.trim(),
-    age: age.value,
-    patientCode: patientCode.value.trim(),
-    createdAt: store.profile?.createdAt ?? new Date().toISOString(),
-  })
-  router.replace({ name: 'home' })
+  try {
+    await store.save({
+      name: name.value.trim(),
+      age: age.value,
+      patientCode: patientCode.value.trim(),
+      createdAt: store.profile?.createdAt ?? new Date().toISOString(),
+    })
+    router.replace({ name: 'home' })
+  } catch {
+    error.value = 'บันทึกไม่สำเร็จ กรุณาลองใหม่'
+  }
 }
 </script>
 
