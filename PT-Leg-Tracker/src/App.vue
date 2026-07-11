@@ -1,16 +1,20 @@
 <script setup lang="ts">
 import { RouterView, useRoute, useRouter } from 'vue-router'
+import { useSettingsStore } from '@/stores/settings'
 
 const route = useRoute()
 const router = useRouter()
+const settings = useSettingsStore()
 </script>
 
 <template>
-  <header class="topbar" v-if="route.name !== 'home' && route.name !== 'setup'">
-    <button class="back" @click="router.back()" aria-label="ย้อนกลับ">← กลับ</button>
-    <h1>{{ route.meta.title ?? '' }}</h1>
-  </header>
-  <RouterView />
+  <div :class="{ 'font-large': settings.settings.fontLarge }">
+    <header class="topbar" v-if="route.name !== 'home' && route.name !== 'setup'">
+      <button class="back" @click="router.back()" aria-label="ย้อนกลับ">← กลับ</button>
+      <h1>{{ route.meta.title ?? '' }}</h1>
+    </header>
+    <RouterView />
+  </div>
 </template>
 
 <style scoped>

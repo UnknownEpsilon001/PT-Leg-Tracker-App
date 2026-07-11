@@ -10,7 +10,7 @@ export interface Session {
   date: string // ISO date-time
   durationSec: number
   painBefore?: number
-  painAfter: number
+  painAfter?: number
   source: 'manual' | 'device'
 }
 

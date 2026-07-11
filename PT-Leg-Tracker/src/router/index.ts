@@ -48,6 +48,12 @@ const router = createRouter({
       component: () => import('../views/QuizView.vue'),
       meta: { title: 'แบบทดสอบ' },
     },
+    {
+      path: '/settings',
+      name: 'settings',
+      component: () => import('../views/SettingsView.vue'),
+      meta: { title: 'ตั้งค่า' },
+    },
   ],
 })
 

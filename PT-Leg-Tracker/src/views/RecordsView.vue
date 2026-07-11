@@ -11,9 +11,10 @@ const sorted = computed(() =>
 
 const painPoints = computed(() =>
   [...store.sessions]
+    .filter((s) => s.painAfter !== undefined)
     .sort((a, b) => a.date.localeCompare(b.date))
     .slice(-10)
-    .map((s) => ({ label: s.date.slice(5, 10), value: s.painAfter })),
+    .map((s) => ({ label: s.date.slice(5, 10), value: s.painAfter as number })),
 )
 
 const thisWeekCount = computed(() => {
@@ -50,7 +51,8 @@ function mins(sec: number) {
     <div v-for="s in sorted" :key="s.id" class="card row">
       <span>{{ fmt(s.date) }}</span>
       <span>{{ mins(s.durationSec) }} นาที</span>
-      <span>ปวด {{ s.painAfter }}/10</span>
+      <span v-if="s.painAfter !== undefined">ปวด {{ s.painAfter }}/10</span>
+      <span v-else>—</span>
       <span class="src">{{ s.source === 'device' ? '📡' : '✍️' }}</span>
     </div>
   </main>
