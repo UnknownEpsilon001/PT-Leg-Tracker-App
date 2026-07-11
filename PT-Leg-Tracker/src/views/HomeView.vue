@@ -1,9 +1,5 @@
-<script setup lang="ts">
-import TheWelcome from '../components/TheWelcome.vue'
-</script>
-
 <template>
-  <main>
-    <TheWelcome />
+  <main class="page">
+    <h1>Smart OA Knee</h1>
   </main>
 </template>
