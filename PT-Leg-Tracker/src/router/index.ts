@@ -30,6 +30,12 @@ const router = createRouter({
       component: () => import('../views/DeviceGuideView.vue'),
       meta: { title: 'วิธีใช้เครื่อง' },
     },
+    {
+      path: '/session',
+      name: 'session',
+      component: () => import('../views/SessionView.vue'),
+      meta: { title: 'ออกกำลังกาย' },
+    },
   ],
 })
 
