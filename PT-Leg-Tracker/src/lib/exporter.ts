@@ -23,7 +23,8 @@ export function buildExport(
 
 export async function shareExport(json: string, patientCode: string): Promise<void> {
   const date = new Date().toISOString().slice(0, 10)
-  const fileName = `smart-oa-knee-${patientCode}-${date}.json`
+  const safeCode = patientCode.replace(/[^A-Za-z0-9_-]/g, '_')
+  const fileName = `smart-oa-knee-${safeCode}-${date}.json`
   const { uri } = await Filesystem.writeFile({
     path: fileName,
     data: json,
