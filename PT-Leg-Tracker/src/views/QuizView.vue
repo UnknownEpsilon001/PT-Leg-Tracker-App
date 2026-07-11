@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import data from '@/content/quizzes.json'
 import { scoreQuiz } from '@/lib/quiz'
@@ -15,6 +15,16 @@ const qIndex = ref(0)
 const answers = ref<number[]>([])
 const done = ref(false)
 const finalScore = ref(0)
+
+watch(
+  () => route.params.quizId,
+  () => {
+    qIndex.value = 0
+    answers.value = []
+    done.value = false
+    finalScore.value = 0
+  },
+)
 
 async function answer(choiceIndex: number) {
   if (!quiz.value) return
