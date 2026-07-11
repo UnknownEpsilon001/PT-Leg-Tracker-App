@@ -1,11 +1,21 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import guide from '@/content/deviceGuide.json'
 
 const stepIndex = ref(0)
 const online = ref(navigator.onLine)
-window.addEventListener('online', () => (online.value = true))
-window.addEventListener('offline', () => (online.value = false))
+const setOnline = () => (online.value = true)
+const setOffline = () => (online.value = false)
+
+onMounted(() => {
+  window.addEventListener('online', setOnline)
+  window.addEventListener('offline', setOffline)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('online', setOnline)
+  window.removeEventListener('offline', setOffline)
+})
 
 const currentStep = computed(() => guide.steps[stepIndex.value]!)
 </script>
