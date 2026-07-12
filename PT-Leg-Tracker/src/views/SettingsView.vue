@@ -54,7 +54,7 @@ function fmtSync(iso: string | null) {
     <div class="card">
       <h2>การแสดงผล</h2>
       <button class="wide" @click="toggleFont">
-        {{ settings.settings.fontLarge ? 'ตัวหนังสือปกติ' : 'ตัวหนังสือใหญ่พิเศษ' }}
+        🔠 {{ settings.settings.fontLarge ? 'ตัวหนังสือปกติ' : 'ตัวหนังสือใหญ่พิเศษ' }}
       </button>
     </div>
 
@@ -80,7 +80,7 @@ function fmtSync(iso: string | null) {
     <div class="card">
       <h2>เซิร์ฟเวอร์ (สำหรับเจ้าหน้าที่)</h2>
       <label>ที่อยู่เซิร์ฟเวอร์<input v-model="serverUrl" type="url" placeholder="http://..." /></label>
-      <button class="wide" @click="saveServer">บันทึก</button>
+      <button class="wide" @click="saveServer">💾 บันทึก</button>
       <button class="wide" :disabled="syncing" @click="doSync">
         {{ syncing ? 'กำลังดึงข้อมูล...' : '🔄 ดึงข้อมูลจากเครื่องบริหาร' }}
       </button>
@@ -91,7 +91,7 @@ function fmtSync(iso: string | null) {
     <div class="card">
       <h2>ข้อมูลผู้ใช้</h2>
       <p>{{ profile.profile?.name }} (รหัส {{ profile.profile?.patientCode }})</p>
-      <button class="wide" @click="router.push({ name: 'setup' })">แก้ไขข้อมูล</button>
+      <button class="wide" @click="router.push({ name: 'setup' })">✏️ แก้ไขข้อมูล</button>
     </div>
   </main>
 </template>
