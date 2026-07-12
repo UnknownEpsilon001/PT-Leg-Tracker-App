@@ -3,11 +3,11 @@ import { painColor } from './pain'
 
 describe('painColor', () => {
   it('maps 0 to green hue 120 and 10 to red hue 0', () => {
-    expect(painColor(0)).toBe('hsl(120 65% 38%)')
-    expect(painColor(10)).toBe('hsl(0 65% 38%)')
+    expect(painColor(0)).toBe('hsl(120 65% 28%)')
+    expect(painColor(10)).toBe('hsl(0 65% 28%)')
   })
   it('interpolates linearly (5 → hue 60)', () => {
-    expect(painColor(5)).toBe('hsl(60 65% 38%)')
+    expect(painColor(5)).toBe('hsl(60 65% 28%)')
   })
   it('clamps out-of-range input', () => {
     expect(painColor(-3)).toBe(painColor(0))

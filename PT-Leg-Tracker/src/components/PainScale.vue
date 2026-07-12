@@ -49,6 +49,6 @@ defineEmits<{ 'update:modelValue': [value: number] }>()
   justify-content: space-between;
   margin-top: 0.5rem;
   color: var(--c-muted);
-  font-size: 0.9rem;
+  font-size: 1rem;
 }
 </style>
