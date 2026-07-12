@@ -26,7 +26,7 @@ describe('buildRecordRows', () => {
     const rows = buildRecordRows([], logs)
     expect(rows).toHaveLength(1)
     expect(rows[0]).toMatchObject({
-      id: 'pain-2026-07-12T10:00:00Z',
+      id: 'pain-2026-07-12T10:00:00Z-0',
       date: '2026-07-12T10:00:00Z',
       durationSec: null,
       painBefore: 4,
@@ -50,8 +50,32 @@ describe('buildRecordRows', () => {
     expect(rows).toHaveLength(2)
     expect(rows[0]).toMatchObject({ id: 's1', durationSec: 600, painBefore: 5, painAfter: 2 })
     expect(rows[1]).toMatchObject({
-      id: 'pain-2026-07-12T11:00:00Z',
+      id: 'pain-2026-07-12T11:00:00Z-1',
       date: '2026-07-12T11:00:00Z',
+      durationSec: null,
+      painBefore: 7,
+      painAfter: 4,
+      source: 'manual',
+    })
+  })
+
+  it('gives distinct ids to standalone logs with identical recordedAt', () => {
+    const logs: PainLog[] = [
+      { sessionId: 'gone1', recordedAt: '2026-07-12T10:00:00Z', painBefore: 5, painAfter: 2 },
+      { sessionId: 'gone2', recordedAt: '2026-07-12T10:00:00Z', painBefore: 7, painAfter: 4 },
+    ]
+    const rows = buildRecordRows([], logs)
+    expect(rows).toHaveLength(2)
+    expect(rows[0].id).not.toBe(rows[1].id)
+    expect(rows[0]).toMatchObject({
+      date: '2026-07-12T10:00:00Z',
+      durationSec: null,
+      painBefore: 5,
+      painAfter: 2,
+      source: 'manual',
+    })
+    expect(rows[1]).toMatchObject({
+      date: '2026-07-12T10:00:00Z',
       durationSec: null,
       painBefore: 7,
       painAfter: 4,

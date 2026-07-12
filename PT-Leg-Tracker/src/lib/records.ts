@@ -31,10 +31,10 @@ export function buildRecordRows(sessions: Session[], painLogs: PainLog[]): Recor
       source: s.source,
     }
   })
-  for (const log of painLogs) {
+  for (const [index, log] of painLogs.entries()) {
     if (consumed.has(log)) continue
     rows.push({
-      id: `pain-${log.recordedAt}`,
+      id: `pain-${log.recordedAt}-${index}`,
       date: log.recordedAt,
       durationSec: null,
       painBefore: log.painBefore,
