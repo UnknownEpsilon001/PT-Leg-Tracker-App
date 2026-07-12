@@ -1,21 +1,31 @@
 <script setup lang="ts">
+import { painColor } from '@/lib/pain'
+
 defineProps<{ modelValue: number | null }>()
 defineEmits<{ 'update:modelValue': [value: number] }>()
-
-const faces = ['😀', '😀', '🙂', '🙂', '😐', '😐', '😟', '😟', '😣', '😣', '😭']
 </script>
 
 <template>
-  <div class="scale">
-    <button
-      v-for="n in 11"
-      :key="n - 1"
-      :class="{ selected: modelValue === n - 1 }"
-      @click="$emit('update:modelValue', n - 1)"
-    >
-      <span class="face">{{ faces[n - 1] }}</span>
-      <span>{{ n - 1 }}</span>
-    </button>
+  <div>
+    <div class="scale">
+      <button
+        v-for="n in 11"
+        :key="n - 1"
+        :class="{ selected: modelValue === n - 1 }"
+        :style="
+          modelValue === n - 1
+            ? { background: painColor(n - 1), borderColor: painColor(n - 1), color: '#fff' }
+            : { borderColor: painColor(n - 1), color: painColor(n - 1) }
+        "
+        @click="$emit('update:modelValue', n - 1)"
+      >
+        {{ n - 1 }}
+      </button>
+    </div>
+    <div class="ends">
+      <span>ไม่ปวด</span>
+      <span>ปวดมากที่สุด</span>
+    </div>
   </div>
 </template>
 
@@ -27,19 +37,18 @@ const faces = ['😀', '😀', '🙂', '🙂', '😐', '😐', '😟', '😟', '
 }
 
 .scale button {
+  min-height: 3.25rem;
+  font-size: 1.25rem;
+  font-weight: 700;
+  border-width: 2px;
+  background: var(--c-card);
+}
+
+.ends {
   display: flex;
-  flex-direction: column;
-  align-items: center;
-  min-height: 4rem;
-}
-
-.scale button.selected {
-  background: var(--c-primary);
-  color: #fff;
-  border-color: var(--c-primary-dark);
-}
-
-.face {
-  font-size: 1.5rem;
+  justify-content: space-between;
+  margin-top: 0.5rem;
+  color: var(--c-muted);
+  font-size: 0.9rem;
 }
 </style>
