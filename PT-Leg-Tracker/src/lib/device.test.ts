@@ -48,6 +48,37 @@ describe('getStatus', () => {
     mockFetchOnce(jsonRes(200, { state: 'weird' }))
     await expect(getStatus('http://dev')).rejects.toMatchObject({ kind: 'unreachable' })
   })
+  it('throws unreachable when res.json() rejects', async () => {
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.reject(new SyntaxError('bad json')) })
+    await expect(getStatus('http://dev')).rejects.toMatchObject({ kind: 'unreachable' })
+  })
+})
+
+describe('request timeout', () => {
+  it('aborts and throws unreachable after 5s of no response', async () => {
+    vi.useFakeTimers()
+    try {
+      const fn = vi.fn((_url: string, init?: RequestInit) => {
+        return new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => {
+            reject(new DOMException('The operation was aborted.', 'AbortError'))
+          })
+        })
+      })
+      vi.stubGlobal('fetch', fn)
+
+      const result = getStatus('http://dev')
+      const assertion = expect(result).rejects.toMatchObject({ kind: 'unreachable' })
+      await vi.advanceTimersByTimeAsync(5000)
+      await assertion
+      expect(fn).toHaveBeenCalledWith(
+        'http://dev/status',
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      )
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })
 
 describe('stopSession', () => {
