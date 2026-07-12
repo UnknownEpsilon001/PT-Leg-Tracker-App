@@ -19,6 +19,7 @@ describe('buildExport', () => {
         },
       ],
       [{ quizId: 'pre', answers: [0, 1], score: 2, timestamp: '2026-07-01T01:00:00Z' }],
+      [],
     )
     const parsed = JSON.parse(json)
     expect(parsed.profile.patientCode).toBe('P01')
@@ -28,8 +29,17 @@ describe('buildExport', () => {
   })
 
   it('handles null profile', () => {
-    const parsed = JSON.parse(buildExport(null, [], []))
+    const parsed = JSON.parse(buildExport(null, [], [], []))
     expect(parsed.profile).toBeNull()
     expect(parsed.sessions).toEqual([])
+  })
+
+  it('includes painLogs in export', () => {
+    const json = buildExport(null, [], [], [
+      { sessionId: 's1', recordedAt: '2026-07-12T10:00:00Z', painBefore: 5, painAfter: 2 },
+    ])
+    const data = JSON.parse(json)
+    expect(data.painLogs).toHaveLength(1)
+    expect(data.painLogs[0].sessionId).toBe('s1')
   })
 })

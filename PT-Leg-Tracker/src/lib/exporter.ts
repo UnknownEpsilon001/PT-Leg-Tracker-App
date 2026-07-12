@@ -1,11 +1,12 @@
 import { Directory, Encoding, Filesystem } from '@capacitor/filesystem'
 import { Share } from '@capacitor/share'
-import type { Profile, QuizResult, Session } from '@/types'
+import type { PainLog, Profile, QuizResult, Session } from '@/types'
 
 export function buildExport(
   profile: Profile | null,
   sessions: Session[],
   quizResults: QuizResult[],
+  painLogs: PainLog[],
 ): string {
   return JSON.stringify(
     {
@@ -15,6 +16,7 @@ export function buildExport(
       profile,
       sessions,
       quizResults,
+      painLogs,
     },
     null,
     2,

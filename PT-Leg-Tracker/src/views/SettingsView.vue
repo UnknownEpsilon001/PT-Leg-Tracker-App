@@ -5,6 +5,7 @@ import { useSettingsStore } from '@/stores/settings'
 import { useProfileStore } from '@/stores/profile'
 import { useSessionsStore } from '@/stores/sessions'
 import { useQuizStore } from '@/stores/quiz'
+import { usePainLogStore } from '@/stores/painlog'
 import { buildExport, shareExport } from '@/lib/exporter'
 import { syncNow } from '@/lib/api'
 
@@ -13,6 +14,7 @@ const settings = useSettingsStore()
 const profile = useProfileStore()
 const sessions = useSessionsStore()
 const quiz = useQuizStore()
+const painLog = usePainLogStore()
 
 const serverUrl = ref(settings.settings.serverUrl)
 const syncing = ref(false)
@@ -37,7 +39,7 @@ async function doSync() {
 
 async function doExport() {
   try {
-    const json = buildExport(profile.profile, sessions.sessions, quiz.results)
+    const json = buildExport(profile.profile, sessions.sessions, quiz.results, painLog.painLogs)
     await shareExport(json, profile.profile?.patientCode ?? 'unknown')
   } catch {
     exportMessage.value = 'ส่งออกไม่สำเร็จ'
