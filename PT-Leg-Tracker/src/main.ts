@@ -9,6 +9,7 @@ import router from './router'
 import { useProfileStore } from './stores/profile'
 import { useSessionsStore } from './stores/sessions'
 import { useQuizStore } from './stores/quiz'
+import { usePainLogStore } from './stores/painlog'
 import { useSettingsStore } from './stores/settings'
 import { syncNow } from './lib/api'
 
@@ -21,6 +22,8 @@ await profileStore.hydrate()
 await useSessionsStore().hydrate()
 
 await useQuizStore().hydrate()
+
+await usePainLogStore().hydrate()
 
 const settingsStore = useSettingsStore()
 await settingsStore.hydrate()
