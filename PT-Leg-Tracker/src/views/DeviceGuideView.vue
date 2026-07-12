@@ -46,7 +46,7 @@ const currentStep = computed(() => guide.steps[stepIndex.value]!)
         ></iframe>
       </div>
     </template>
-    <p v-else class="card">📶 วิดีโอต้องใช้อินเทอร์เน็ต กรุณาเชื่อมต่อแล้วลองใหม่</p>
+    <p v-else class="card">วิดีโอต้องใช้อินเทอร์เน็ต กรุณาเชื่อมต่อแล้วลองใหม่</p>
   </main>
 </template>
 

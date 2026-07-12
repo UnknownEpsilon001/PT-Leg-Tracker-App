@@ -66,7 +66,7 @@ async function answer(choiceIndex: number) {
 
     <template v-else>
       <div class="card center">
-        <h2>เสร็จเรียบร้อย ขอบคุณค่ะ 🎉</h2>
+        <h2>เสร็จเรียบร้อย ขอบคุณค่ะ</h2>
         <p v-if="quiz.id !== 'satisfaction'">
           ได้ {{ finalScore }} จาก {{ quiz.questions.length }} คะแนน
         </p>

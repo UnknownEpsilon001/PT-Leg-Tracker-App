@@ -2,6 +2,7 @@
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useProfileStore } from '@/stores/profile'
+import AppIcon from '@/components/AppIcon.vue'
 
 const router = useRouter()
 const store = useProfileStore()
@@ -39,7 +40,7 @@ async function submit() {
       <label>อายุ (ปี)<input v-model.number="age" type="number" min="1" max="120" /></label>
       <label>รหัสผู้ป่วย (จากเจ้าหน้าที่)<input v-model="patientCode" type="text" /></label>
       <p v-if="error" class="error">{{ error }}</p>
-      <button class="primary wide" @click="submit">✔ บันทึก</button>
+      <button class="primary wide" @click="submit"><AppIcon name="check" /> บันทึก</button>
     </div>
   </main>
 </template>
