@@ -66,7 +66,7 @@ describe('buildRecordRows', () => {
     ]
     const rows = buildRecordRows([], logs)
     expect(rows).toHaveLength(2)
-    expect(rows[0].id).not.toBe(rows[1].id)
+    expect(rows[0]!.id).not.toBe(rows[1]!.id)
     expect(rows[0]).toMatchObject({
       date: '2026-07-12T10:00:00Z',
       durationSec: null,
