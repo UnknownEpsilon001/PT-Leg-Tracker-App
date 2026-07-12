@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import BigButton from '@/components/BigButton.vue'
+import AppIcon from '@/components/AppIcon.vue'
 import { useProfileStore } from '@/stores/profile'
 import { useQuizStore } from '@/stores/quiz'
 
@@ -14,14 +15,16 @@ const quizStore = useQuizStore()
     <div v-if="!quizStore.hasTaken('pre')" class="card banner">
       <p>ก่อนเริ่มใช้งาน ทำแบบทดสอบก่อนใช้งานสั้น ๆ ก่อนนะคะ</p>
       <button class="primary" @click="$router.push({ name: 'quiz', params: { quizId: 'pre' } })">
-        📝 ทำแบบทดสอบก่อนใช้งาน
+        <AppIcon name="clipboard" /> ทำแบบทดสอบก่อนใช้งาน
       </button>
     </div>
-    <BigButton icon="📖" label="ความรู้เรื่องข้อเข่าเสื่อม" to="knowledge" />
-    <BigButton icon="🦵" label="วิธีใช้เครื่องบริหารเข่า" to="guide" />
-    <BigButton icon="⏱️" label="เริ่มออกกำลังกาย" to="session" />
-    <BigButton icon="📊" label="บันทึกของฉัน" to="records" />
-    <button class="settings-link" @click="$router.push({ name: 'settings' })">⚙ ตั้งค่า</button>
+    <BigButton icon="book-open" label="ความรู้เรื่องข้อเข่าเสื่อม" to="knowledge" />
+    <BigButton icon="wrench" label="วิธีใช้เครื่องบริหารเข่า" to="guide" />
+    <BigButton icon="activity" label="เริ่มออกกำลังกาย" to="session" />
+    <BigButton icon="bar-chart" label="บันทึกของฉัน" to="records" />
+    <button class="settings-link" @click="$router.push({ name: 'settings' })">
+      <AppIcon name="settings" /> ตั้งค่า
+    </button>
   </main>
 </template>
 
@@ -38,5 +41,9 @@ const quizStore = useQuizStore()
   background: transparent;
   color: var(--c-primary-dark);
   text-decoration: underline;
+}
+
+.banner {
+  border-color: var(--c-primary);
 }
 </style>

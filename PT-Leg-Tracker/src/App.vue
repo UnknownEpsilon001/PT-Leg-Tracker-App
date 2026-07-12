@@ -2,6 +2,7 @@
 import { watchEffect } from 'vue'
 import { RouterView, useRoute, useRouter } from 'vue-router'
 import { useSettingsStore } from '@/stores/settings'
+import AppIcon from '@/components/AppIcon.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -15,7 +16,9 @@ watchEffect(() => {
 <template>
   <div>
     <header class="topbar" v-if="route.name !== 'home' && route.name !== 'setup'">
-      <button class="back" @click="router.back()" aria-label="ย้อนกลับ">← กลับ</button>
+      <button class="back" @click="router.back()" aria-label="ย้อนกลับ">
+        <AppIcon name="chevron-left" /> กลับ
+      </button>
       <h1>{{ route.meta.title ?? '' }}</h1>
     </header>
     <RouterView />
