@@ -12,6 +12,7 @@ import { useQuizStore } from './stores/quiz'
 import { usePainLogStore } from './stores/painlog'
 import { useSettingsStore } from './stores/settings'
 import { syncNow } from './lib/api'
+import { syncAlarmFromSettings } from './lib/alarm'
 
 const app = createApp(App)
 app.use(createPinia())
@@ -38,3 +39,4 @@ void CapacitorApp.addListener('backButton', () => {
 })
 
 void syncNow() // background; silent on failure
+void syncAlarmFromSettings(settingsStore.settings)
