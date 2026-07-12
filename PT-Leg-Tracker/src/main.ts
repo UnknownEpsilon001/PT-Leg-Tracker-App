@@ -2,6 +2,7 @@ import './assets/main.css'
 
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
+import { App as CapacitorApp } from '@capacitor/app'
 
 import App from './App.vue'
 import router from './router'
@@ -26,5 +27,11 @@ await settingsStore.hydrate()
 
 app.use(router)
 app.mount('#app')
+
+void CapacitorApp.addListener('backButton', () => {
+  const name = router.currentRoute.value.name
+  if (name === 'home' || name === 'setup') void CapacitorApp.minimizeApp()
+  else router.back()
+})
 
 void syncNow() // background; silent on failure
