@@ -23,7 +23,7 @@ Support knee osteoarthritis patients (age 40+, 30-person study sample) in learni
 - **Stack:** Vue 3 + TypeScript + Vite, Pinia, Vue Router, Capacitor 8 (Android). App code lives in `PT-Leg-Tracker/`.
 - **Data flow:** UI → Pinia stores → persistence module (Capacitor Preferences). Stores hydrate from Preferences on app start and persist on every mutation.
 - **Sync module:** a single API service with a configurable server base URL. On launch (and manual refresh), it fetches ESP32 sessions for the patient code and merges them into the local session log, deduplicating by session ID. Network failure is silent and non-blocking; the app retries on next launch.
-- **Elderly-friendly UI rules:** minimum 20px body font with a larger-font toggle, large touch targets (≥ 48dp), high contrast, at most 4 primary menu items per screen, icon + Thai label on every button.
+- **Elderly-friendly UI rules:** minimum 20px body font with a larger-font toggle, large touch targets (≥ 48dp), high contrast, at most 4 primary menu items per screen, icon + Thai label on every primary button (secondary/utility buttons: Thai label required, icon encouraged but optional).
 
 ## Screens
 

@@ -12,7 +12,7 @@
 
 - All commands run from `PT-Leg-Tracker/` (NOT repo root).
 - Spec: `docs/superpowers/specs/2026-07-11-smart-oa-knee-app-design.md`.
-- UI language: Thai only. Elderly UI: body font ≥ 20px, touch targets ≥ 48dp (use ≥ 3rem), max 4 primary menu items per screen, every button = icon + Thai label.
+- UI language: Thai only. Elderly UI: body font ≥ 20px, touch targets ≥ 48dp (use ≥ 3rem), max 4 primary menu items per screen, every primary button = icon + Thai label (secondary/utility buttons: Thai label required, icon optional).
 - Offline-first: every feature except YouTube playback and server sync must work with no network.
 - App must never crash on malformed/missing stored data — fall back to empty defaults.
 - One patient per phone; no login.
