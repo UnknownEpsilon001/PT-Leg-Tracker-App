@@ -4,7 +4,14 @@ import type { Settings } from '@/types'
 import { loadJson, saveJson } from '@/lib/storage'
 
 const KEY = 'settings'
-const DEFAULTS: Settings = { fontLarge: false, serverUrl: '', lastSync: null }
+export const DEFAULTS: Settings = {
+  fontLarge: false,
+  serverUrl: '',
+  deviceUrl: '',
+  lastSync: null,
+  alarmEnabled: false,
+  alarmTime: '09:00',
+}
 
 export const useSettingsStore = defineStore('settings', () => {
   const settings = ref<Settings>({ ...DEFAULTS })

@@ -24,5 +24,21 @@ export interface QuizResult {
 export interface Settings {
   fontLarge: boolean
   serverUrl: string
+  deviceUrl: string
   lastSync: string | null
+  alarmEnabled: boolean
+  alarmTime: string // "HH:mm"
+}
+
+export interface PainLog {
+  sessionId: string | null
+  recordedAt: string // ISO date-time
+  painBefore: number
+  painAfter: number
+}
+
+export interface DeviceStatus {
+  state: 'idle' | 'running'
+  elapsedSec: number
+  sessionId: string | null
 }
