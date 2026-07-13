@@ -6,5 +6,5 @@ node_modules/
 # funding proposal PDF contains personal data (phones, bank account)
 docs/*.pdf
 
-# PT-Leg-Tracker-Server is a separate repo
-PT-Leg-Tracker-Server/
+# superpowers working scratch (progress ledger etc.)
+.superpowers/
