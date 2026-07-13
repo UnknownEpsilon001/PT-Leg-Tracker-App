@@ -8,6 +8,8 @@ PT Leg Tracker — companion Android app for a leg physical therapy device (ส�
 
 The app itself lives in the `PT-Leg-Tracker/` subdirectory — **run all npm/npx commands from there, not the repo root.**
 
+The FastAPI + SQLite server (session state, app↔ESP32 relay) lives in `server/` — Python subproject with its own venv (`server\.venv`); run pytest/uvicorn from `server/`. Contract spec: `docs/superpowers/specs/2026-07-13-server-mediated-device-control-design.md`.
+
 ## Stack
 
 Vue 3 + TypeScript + Vite, Pinia (state), Vue Router, wrapped in Capacitor 8 for Android. No test framework configured yet.

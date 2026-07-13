@@ -152,10 +152,10 @@ the app requires no change for that (standard `https://` URL).
 
 ## Delivery: two plans, server first
 
-1. **Plan 1 — server repo** (new repo `PT-Leg-Tracker-Server`, FastAPI +
-   SQLite, from scratch; the previously planned repo no longer exists):
-   endpoints above, state machine, pytest, `mock-esp32.mjs` equivalent for
-   dev, README with run instructions.
+1. **Plan 1 — server subproject** (`server/` directory in this repo — user
+   chose monorepo over a separate server repo; FastAPI + SQLite, from
+   scratch): endpoints above, state machine, pytest, `mock-esp32.mjs`
+   equivalent for dev, README with run instructions.
 2. **Plan 2 — app v3 rework** on top of `feature/app-screens` (be38996):
    client rewrite, SessionView attach flow + reps, Settings field removal,
    records sync switch, mock script swap.
