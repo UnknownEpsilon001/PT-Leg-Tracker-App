@@ -20,6 +20,7 @@ const connLost = ref(false)
 const errorMsg = ref('')
 
 let poller: ReturnType<typeof setInterval> | null = null
+let disposed = false
 
 const deviceUrl = computed(() => settings.settings.deviceUrl.trim())
 
@@ -60,6 +61,7 @@ async function start() {
   phase.value = 'starting'
   try {
     sessionId.value = await startSession(deviceUrl.value)
+    if (disposed) return
     elapsedSec.value = 0
     phase.value = 'running'
     poller = setInterval(poll, 2000)
@@ -93,7 +95,10 @@ async function save() {
   router.replace({ name: 'records' })
 }
 
-onUnmounted(stopPolling)
+onUnmounted(() => {
+  disposed = true
+  stopPolling()
+})
 </script>
 
 <template>
