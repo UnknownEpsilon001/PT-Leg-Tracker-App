@@ -38,6 +38,15 @@ def test_stop_command_does_not_set_start_origin(clock):
     assert state.consume_start_origin() is False
 
 
+def test_later_stop_fetch_clears_start_origin(clock):
+    state = DeviceState(now=clock)
+    state.queue_command("start")
+    state.fetch_command()
+    state.queue_command("stop")
+    state.fetch_command()
+    assert state.consume_start_origin() is False
+
+
 def test_device_online_tracking(clock):
     state = DeviceState(now=clock)
     assert state.device_online() is False

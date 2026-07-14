@@ -36,6 +36,8 @@ class DeviceState:
         self._pending_command = None
         if command == "start":
             self._start_command_fetched = True
+        elif command is not None:
+            self._start_command_fetched = False
         return command
 
     def consume_start_origin(self) -> bool:
