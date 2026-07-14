@@ -62,7 +62,7 @@ process.stdin.setRawMode?.(true)
 process.stdin.resume()
 process.stdin.on('data', async (key) => {
   const k = key.toString()
-  if (k === 'b') (running ? stop : start)('button')
+  if (k === 'b') (running ? stop : start)('button').catch(() => console.log('[mock-esp32] server unreachable, button ignored'))
   if (k === 'q' || k === '\u0003') process.exit(0) // q or Ctrl-C
 })
 console.log(`[mock-esp32] polling ${base} — "b" = physical button, "q" = quit`)
