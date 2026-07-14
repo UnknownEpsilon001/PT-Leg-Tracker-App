@@ -12,6 +12,7 @@ class DeviceState:
         self._pending_command: str | None = None
         self._queued_at = 0.0
         self._start_command_fetched = False
+        self._start_fetched_at = 0.0
         self._last_heartbeat_at: float | None = None
         self.live_state = "idle"
         self.live_elapsed_sec = 0
@@ -36,6 +37,7 @@ class DeviceState:
         self._pending_command = None
         if command == "start":
             self._start_command_fetched = True
+            self._start_fetched_at = self._now()
         elif command is not None:
             self._start_command_fetched = False
         return command
@@ -45,6 +47,13 @@ class DeviceState:
         fetched = self._start_command_fetched
         self._start_command_fetched = False
         return fetched
+
+    def start_in_flight(self) -> bool:
+        """True while a fetched start awaits its 'started' confirmation (bounded by COMMAND_TTL_SEC)."""
+        return (
+            self._start_command_fetched
+            and self._now() - self._start_fetched_at <= COMMAND_TTL_SEC
+        )
 
     def heartbeat(self, state: str, elapsed_sec: int, reps: int) -> None:
         self._last_heartbeat_at = self._now()

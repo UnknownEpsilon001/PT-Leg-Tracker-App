@@ -123,6 +123,24 @@ def test_current_starting_expires_back_to_idle(clock):
     assert svc.current()["state"] == "idle"
 
 
+def test_fetched_start_still_reports_starting_until_confirmed(clock):
+    svc = make_service(clock)
+    svc.queue_start()
+    svc.fetch_command()
+    assert svc.current()["state"] == "starting"
+    with pytest.raises(ConflictError):
+        svc.queue_start()
+
+
+def test_fetched_start_in_flight_expires(clock):
+    svc = make_service(clock)
+    svc.queue_start()
+    svc.fetch_command()
+    clock.advance(31)
+    assert svc.current()["state"] == "idle"
+    svc.queue_start()  # must not raise
+
+
 # --- healing rules ---
 
 def test_auto_close_after_heartbeat_silence(clock):

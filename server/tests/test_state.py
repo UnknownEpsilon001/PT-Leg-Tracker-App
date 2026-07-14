@@ -47,6 +47,16 @@ def test_later_stop_fetch_clears_start_origin(clock):
     assert state.consume_start_origin() is False
 
 
+def test_start_in_flight_tracks_fetch_and_expiry(clock):
+    state = DeviceState(now=clock)
+    assert state.start_in_flight() is False
+    state.queue_command("start")
+    state.fetch_command()
+    assert state.start_in_flight() is True
+    clock.advance(COMMAND_TTL_SEC + 1)
+    assert state.start_in_flight() is False
+
+
 def test_device_online_tracking(clock):
     state = DeviceState(now=clock)
     assert state.device_online() is False

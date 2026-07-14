@@ -71,6 +71,8 @@ class SessionService:
             raise ConflictError("session already running")
         if self.device.pending_command() == "start":
             raise ConflictError("start already queued")
+        if self.device.start_in_flight():
+            raise ConflictError("start in progress")
         self.device.queue_command("start")
 
     def queue_stop(self) -> None:
@@ -91,7 +93,11 @@ class SessionService:
                 "reps": self.device.live_reps,
                 "deviceOnline": online,
             }
-        state = "starting" if self.device.pending_command() == "start" else "idle"
+        state = (
+            "starting"
+            if self.device.pending_command() == "start" or self.device.start_in_flight()
+            else "idle"
+        )
         return {
             "sessionId": None,
             "state": state,
