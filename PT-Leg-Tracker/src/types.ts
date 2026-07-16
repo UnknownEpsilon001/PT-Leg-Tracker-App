@@ -42,3 +42,11 @@ export interface DeviceStatus {
   elapsedSec: number
   sessionId: string | null
 }
+
+export interface CurrentSession {
+  sessionId: string | null
+  state: 'idle' | 'starting' | 'running'
+  elapsedSec: number
+  reps: number
+  deviceOnline: boolean
+}
