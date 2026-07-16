@@ -42,6 +42,16 @@ class DeviceState:
             self._start_command_fetched = False
         return command
 
+    def clear_pending_start(self) -> None:
+        """Drop a still-queued 'start' if the start intent is already satisfied
+        (e.g. the physical button won the race before the device fetched it)."""
+        if self._pending_command == "start":
+            self._pending_command = None
+
+    def clear_start_in_flight(self) -> None:
+        """A start cannot be in flight across a completed session."""
+        self._start_command_fetched = False
+
     def consume_start_origin(self) -> bool:
         """True exactly once if the upcoming 'started' event follows an app command."""
         fetched = self._start_command_fetched

@@ -57,6 +57,29 @@ def test_start_in_flight_tracks_fetch_and_expiry(clock):
     assert state.start_in_flight() is False
 
 
+def test_clear_pending_start_drops_only_start(clock):
+    state = DeviceState(now=clock)
+    state.queue_command("start")
+    state.clear_pending_start()
+    assert state.pending_command() is None
+
+
+def test_clear_pending_start_leaves_other_commands(clock):
+    state = DeviceState(now=clock)
+    state.queue_command("stop")
+    state.clear_pending_start()
+    assert state.pending_command() == "stop"
+
+
+def test_clear_start_in_flight_resets_flag(clock):
+    state = DeviceState(now=clock)
+    state.queue_command("start")
+    state.fetch_command()
+    assert state.start_in_flight() is True
+    state.clear_start_in_flight()
+    assert state.start_in_flight() is False
+
+
 def test_device_online_tracking(clock):
     state = DeviceState(now=clock)
     assert state.device_online() is False

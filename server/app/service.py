@@ -38,14 +38,19 @@ class SessionService:
                     self.device.live_reps,
                 )
             origin = "app" if self.device.consume_start_origin() else "device"
+            # the start intent is satisfied; a still-queued "start" would otherwise
+            # be fetched stale by the device's next poll
+            self.device.clear_pending_start()
             session_id = db.create_session(self._iso_now(), origin)
-            self.device.live_state = "running"
-            self.device.live_elapsed_sec = elapsed_sec
-            self.device.live_reps = reps
+            # an event is proof of life: refresh liveness so a fresh session isn't
+            # immediately auto-closed by silence that preceded this event
+            self.device.heartbeat("running", elapsed_sec, reps)
             return session_id
 
         open_session = db.get_open_session()
-        self.device.live_state = "idle"
+        self.device.heartbeat("idle", elapsed_sec, reps)
+        # a start cannot be in flight across a completed session
+        self.device.clear_start_in_flight()
         if open_session is None:
             return None
         db.close_session(open_session["id"], self._iso_now(), elapsed_sec, reps)
