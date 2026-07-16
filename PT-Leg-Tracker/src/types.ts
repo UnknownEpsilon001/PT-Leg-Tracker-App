@@ -37,12 +37,6 @@ export interface PainLog {
   painAfter: number
 }
 
-export interface DeviceStatus {
-  state: 'idle' | 'running'
-  elapsedSec: number
-  sessionId: string | null
-}
-
 export interface CurrentSession {
   sessionId: string | null
   state: 'idle' | 'starting' | 'running'

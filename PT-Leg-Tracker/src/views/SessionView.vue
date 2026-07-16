@@ -1,14 +1,16 @@
 <script setup lang="ts">
-import { computed, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import AppIcon from '@/components/AppIcon.vue'
 import PainScale from '@/components/PainScale.vue'
-import { DeviceError, getStatus, startSession, stopSession } from '@/lib/device'
+import { DeviceError, claimSession, getCurrent, queueStart, queueStop } from '@/lib/device'
 import { usePainLogStore } from '@/stores/painlog'
+import { useProfileStore } from '@/stores/profile'
 import { useSettingsStore } from '@/stores/settings'
 
 const router = useRouter()
 const painLogStore = usePainLogStore()
+const profileStore = useProfileStore()
 const settings = useSettingsStore()
 
 const phase = ref<'before' | 'starting' | 'running' | 'after'>('before')
@@ -16,13 +18,15 @@ const painBefore = ref<number | null>(null)
 const painAfter = ref<number | null>(null)
 const sessionId = ref<string | null>(null)
 const elapsedSec = ref<number | null>(null)
+const reps = ref(0)
+const attachAvailable = ref(false)
 const connLost = ref(false)
 const errorMsg = ref('')
 
 let poller: ReturnType<typeof setInterval> | null = null
 let disposed = false
 
-const deviceUrl = computed(() => settings.settings.deviceUrl.trim())
+const serverUrl = computed(() => settings.settings.serverUrl.trim())
 
 const clock = computed(() => {
   if (elapsedSec.value === null) return '--:--'
@@ -36,49 +40,79 @@ function stopPolling() {
   poller = null
 }
 
+function startPolling() {
+  stopPolling()
+  poller = setInterval(poll, 2000)
+}
+
 async function poll() {
   try {
-    const status = await getStatus(deviceUrl.value)
+    const cur = await getCurrent(serverUrl.value)
+    if (disposed) return
     connLost.value = false
-    if (status.state === 'running') {
-      elapsedSec.value = status.elapsedSec
+    if (cur.state === 'running') {
+      phase.value = 'running'
+      sessionId.value = cur.sessionId
+      elapsedSec.value = cur.elapsedSec
+      reps.value = cur.reps
+    } else if (cur.state === 'starting') {
+      if (!cur.deviceOnline) failOffline()
+    } else if (phase.value === 'starting') {
+      // command expired before the device ever confirmed → device offline
+      failOffline()
     } else {
       // device finished (by itself or via our stop)
       stopPolling()
       phase.value = 'after'
     }
   } catch {
-    connLost.value = true // keep last known elapsed; keep polling
+    connLost.value = true // keep last-known values; keep polling
   }
+}
+
+function failOffline() {
+  stopPolling()
+  phase.value = 'before'
+  errorMsg.value = 'เครื่องออฟไลน์'
 }
 
 async function start() {
   errorMsg.value = ''
-  if (!deviceUrl.value) {
-    errorMsg.value = 'ยังไม่ได้ตั้งค่าที่อยู่เครื่องบริหาร (ให้เจ้าหน้าที่ตั้งค่าในเมนูตั้งค่า)'
+  if (!serverUrl.value) {
+    errorMsg.value = 'ยังไม่ได้ตั้งค่าที่อยู่เซิร์ฟเวอร์ (ให้เจ้าหน้าที่ตั้งค่าในเมนูตั้งค่า)'
     return
   }
   phase.value = 'starting'
+  attachAvailable.value = false
   try {
-    sessionId.value = await startSession(deviceUrl.value)
+    await queueStart(serverUrl.value)
     if (disposed) return
-    elapsedSec.value = 0
-    phase.value = 'running'
-    poller = setInterval(poll, 2000)
+    startPolling()
   } catch (e) {
+    if (disposed) return
     phase.value = 'before'
-    errorMsg.value =
-      e instanceof DeviceError && e.kind === 'busy'
-        ? 'เครื่องกำลังทำงานอยู่แล้ว'
-        : 'เชื่อมต่อเครื่องบริหารไม่ได้ ตรวจสอบว่าโทรศัพท์กับเครื่องอยู่ WiFi เดียวกัน'
+    if (e instanceof DeviceError && e.kind === 'busy') {
+      errorMsg.value = 'เครื่องกำลังทำงานอยู่แล้ว'
+      attachAvailable.value = true
+    } else {
+      errorMsg.value = 'เชื่อมต่อไม่สำเร็จ ลองใหม่ภายหลัง'
+    }
   }
+}
+
+function attach() {
+  errorMsg.value = ''
+  attachAvailable.value = false
+  phase.value = 'running'
+  startPolling()
+  void poll()
 }
 
 async function stop() {
   try {
-    await stopSession(deviceUrl.value)
+    await queueStop(serverUrl.value)
   } catch {
-    // device idle or unreachable — polling/flow advances regardless
+    // session already over or server unreachable — flow advances regardless
   }
   stopPolling()
   phase.value = 'after'
@@ -92,8 +126,27 @@ async function save() {
     painBefore: painBefore.value,
     painAfter: painAfter.value,
   })
+  const code = profileStore.profile?.patientCode
+  if (sessionId.value && code && serverUrl.value) {
+    try {
+      await claimSession(serverUrl.value, sessionId.value, code)
+    } catch {
+      // best-effort: session stays unclaimed on the server, local log is saved
+    }
+  }
   router.replace({ name: 'records' })
 }
+
+onMounted(async () => {
+  if (!serverUrl.value) return
+  try {
+    const cur = await getCurrent(serverUrl.value)
+    if (!disposed && cur.state === 'running' && phase.value === 'before')
+      attachAvailable.value = true
+  } catch {
+    // probe is best-effort; start() reports connection errors
+  }
+})
 
 onUnmounted(() => {
   disposed = true
@@ -118,11 +171,22 @@ onUnmounted(() => {
         <AppIcon name="play" />
         {{ phase === 'starting' ? 'กำลังสั่งเครื่อง...' : 'สั่งเครื่องเริ่มทำงาน' }}
       </button>
+      <button
+        v-if="attachAvailable"
+        class="wide"
+        :disabled="painBefore === null || phase === 'starting'"
+        @click="attach"
+      >
+        <AppIcon name="play" /> เข้าร่วมเซสชันที่กำลังทำงานอยู่
+      </button>
     </template>
 
     <template v-else-if="phase === 'running'">
       <p class="clock">{{ clock }}</p>
-      <p class="hint">{{ connLost ? 'กำลังเชื่อมต่อ…' : 'เครื่องกำลังทำงาน บริหารเข่าตามจังหวะของอุปกรณ์' }}</p>
+      <p class="reps">จำนวนครั้ง: {{ reps }}</p>
+      <p class="hint">
+        {{ connLost ? 'กำลังเชื่อมต่อ…' : 'เครื่องกำลังทำงาน บริหารเข่าตามจังหวะของอุปกรณ์' }}
+      </p>
       <button class="primary wide" @click="stop"><AppIcon name="stop" /> สั่งเครื่องหยุด</button>
     </template>
 
@@ -144,6 +208,13 @@ onUnmounted(() => {
   text-align: center;
   font-variant-numeric: tabular-nums;
   margin: 2rem 0 0.5rem;
+}
+
+.reps {
+  font-size: 1.5rem;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  margin-bottom: 0.5rem;
 }
 
 .hint {

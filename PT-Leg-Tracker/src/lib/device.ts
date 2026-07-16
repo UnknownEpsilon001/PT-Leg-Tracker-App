@@ -1,4 +1,4 @@
-import type { CurrentSession, DeviceStatus } from '@/types'
+import type { CurrentSession } from '@/types'
 
 export type DeviceErrorKind = 'unreachable' | 'busy' | 'idle' | 'offline'
 
@@ -36,28 +36,6 @@ async function request(
   }
 }
 
-export async function startSession(deviceUrl: string): Promise<string> {
-  const data = (await request(`${base(deviceUrl)}/start`, 'busy', { method: 'POST' })) as {
-    sessionId?: unknown
-  }
-  if (typeof data.sessionId !== 'string' || data.sessionId === '') throw new DeviceError('unreachable')
-  return data.sessionId
-}
-
-export async function getStatus(deviceUrl: string): Promise<DeviceStatus> {
-  const d = (await request(`${base(deviceUrl)}/status`, 'unreachable')) as Record<string, unknown>
-  if (d.state !== 'idle' && d.state !== 'running') throw new DeviceError('unreachable')
-  return {
-    state: d.state,
-    elapsedSec: typeof d.elapsedSec === 'number' ? d.elapsedSec : 0,
-    sessionId: typeof d.sessionId === 'string' ? d.sessionId : null,
-  }
-}
-
-export async function stopSession(deviceUrl: string): Promise<void> {
-  await request(`${base(deviceUrl)}/stop`, 'idle', { method: 'POST' })
-}
-
 // --- v3 server-session client (spec: server-mediated device control) ---
 
 export async function queueStart(serverUrl: string): Promise<void> {
@@ -89,9 +67,13 @@ export async function claimSession(
   sessionId: string,
   patientCode: string,
 ): Promise<void> {
-  await request(`${base(serverUrl)}/api/sessions/${encodeURIComponent(sessionId)}/claim`, 'unreachable', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ patientCode }),
-  })
+  await request(
+    `${base(serverUrl)}/api/sessions/${encodeURIComponent(sessionId)}/claim`,
+    'unreachable',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ patientCode }),
+    },
+  )
 }
