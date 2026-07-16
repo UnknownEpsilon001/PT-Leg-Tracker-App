@@ -6,8 +6,11 @@ import { useProfileStore } from '@/stores/profile'
 
 interface RemoteSession {
   id: string
-  date: string
-  durationSec: number
+  startedAt: string
+  endedAt: string | null
+  durationSec: number | null
+  reps: number
+  patientCode: string | null
 }
 
 export async function fetchDeviceSessions(
@@ -15,13 +18,13 @@ export async function fetchDeviceSessions(
   patientCode: string,
 ): Promise<Session[]> {
   const base = serverUrl.replace(/\/+$/, '')
-  const res = await fetch(`${base}/api/patients/${encodeURIComponent(patientCode)}/sessions`)
+  const res = await fetch(`${base}/api/sessions?patientCode=${encodeURIComponent(patientCode)}`)
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   const list = (await res.json()) as RemoteSession[]
   return list.map((r) => ({
     id: r.id,
-    date: r.date,
-    durationSec: r.durationSec,
+    date: r.startedAt,
+    durationSec: r.durationSec ?? 0,
     source: 'device' as const,
   }))
 }
