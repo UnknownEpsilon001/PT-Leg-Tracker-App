@@ -24,7 +24,6 @@ export interface QuizResult {
 export interface Settings {
   fontLarge: boolean
   serverUrl: string
-  deviceUrl: string
   lastSync: string | null
   alarmEnabled: boolean
   alarmTime: string // "HH:mm"

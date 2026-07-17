@@ -19,7 +19,6 @@ const quiz = useQuizStore()
 const painLog = usePainLogStore()
 
 const serverUrl = ref(settings.settings.serverUrl)
-const deviceUrl = ref(settings.settings.deviceUrl)
 const alarmTime = ref(settings.settings.alarmTime)
 const syncing = ref(false)
 const syncMessage = ref('')
@@ -31,7 +30,7 @@ async function toggleFont() {
 }
 
 async function saveServer() {
-  await settings.update({ serverUrl: serverUrl.value.trim(), deviceUrl: deviceUrl.value.trim() })
+  await settings.update({ serverUrl: serverUrl.value.trim() })
   syncMessage.value = 'บันทึกแล้ว'
 }
 
@@ -122,9 +121,8 @@ function fmtSync(iso: string | null) {
     </div>
 
     <div class="card">
-      <h2>เซิร์ฟเวอร์และเครื่องบริหาร (สำหรับเจ้าหน้าที่)</h2>
+      <h2>เซิร์ฟเวอร์ (สำหรับเจ้าหน้าที่)</h2>
       <label>ที่อยู่เซิร์ฟเวอร์<input v-model="serverUrl" type="url" placeholder="http://..." /></label>
-      <label>ที่อยู่เครื่องบริหาร<input v-model="deviceUrl" type="url" placeholder="http://192.168.x.x" /></label>
       <button class="wide" @click="saveServer"><AppIcon name="save" /> บันทึก</button>
       <button class="wide" :disabled="syncing" @click="doSync">
         <AppIcon name="refresh" />
