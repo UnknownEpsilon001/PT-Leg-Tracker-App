@@ -171,7 +171,7 @@ onUnmounted(() => {
       <p class="card">สวมอุปกรณ์ให้เรียบร้อย (ดูวิธีใช้ได้ที่เมนู "วิธีใช้เครื่อง") แล้วกดเริ่ม</p>
       <p v-if="errorMsg" class="error">{{ errorMsg }}</p>
       <button
-        class="primary wide"
+        class="primary wide breathe"
         :disabled="painBefore === null || phase === 'starting'"
         @click="start"
       >
@@ -189,8 +189,15 @@ onUnmounted(() => {
     </template>
 
     <template v-else-if="phase === 'running'">
-      <p class="clock">{{ clock }}</p>
-      <p class="reps">จำนวนครั้ง: {{ reps }}</p>
+      <div class="clock-ring">
+        <p class="clock">{{ clock }}</p>
+      </div>
+      <p class="reps">
+        จำนวนครั้ง:
+        <Transition name="pop" mode="out-in">
+          <span :key="reps" class="reps-num">{{ reps }}</span>
+        </Transition>
+      </p>
       <p class="hint">
         {{ connLost ? 'กำลังเชื่อมต่อ…' : 'เครื่องกำลังทำงาน บริหารเข่าตามจังหวะของอุปกรณ์' }}
       </p>
@@ -215,6 +222,71 @@ onUnmounted(() => {
   text-align: center;
   font-variant-numeric: tabular-nums;
   margin: 2rem 0 0.5rem;
+}
+
+.clock-ring {
+  width: 14rem;
+  height: 14rem;
+  margin: 2rem auto 0.5rem;
+  border-radius: 50%;
+  border: 4px solid var(--c-primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.clock-ring .clock {
+  margin: 0;
+  font-size: 3rem;
+}
+
+.reps-num {
+  display: inline-block;
+  font-weight: 700;
+  color: var(--c-primary);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .clock-ring {
+    animation: ring-pulse 2s ease-in-out infinite;
+  }
+
+  @keyframes ring-pulse {
+    0%,
+    100% {
+      box-shadow: 0 0 0 0 rgb(36 57 94 / 0.35);
+    }
+    50% {
+      box-shadow: 0 0 0 14px rgb(36 57 94 / 0);
+    }
+  }
+
+  .pop-enter-active {
+    animation: rep-pop 0.3s ease-out;
+  }
+
+  @keyframes rep-pop {
+    0% {
+      transform: scale(1.6);
+    }
+    100% {
+      transform: scale(1);
+    }
+  }
+
+  .breathe {
+    animation: breathe 2.6s ease-in-out infinite;
+  }
+
+  @keyframes breathe {
+    0%,
+    100% {
+      transform: scale(1);
+    }
+    50% {
+      transform: scale(1.02);
+    }
+  }
 }
 
 .reps {
