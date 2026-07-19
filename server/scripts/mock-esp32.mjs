@@ -4,6 +4,10 @@
 // Press "b" to simulate the physical button, "q" to quit.
 const base = process.argv[2] || 'http://localhost:8000'
 
+// Real device motion cycle: lift (up) 10 s, then lower + rest 10 s = 1 rep / 20 s.
+// snapshot() floors repCounter, so the count ticks to 1 only after a full cycle.
+const REP_SECONDS = 20
+
 let running = false
 let startedAt = 0
 let repCounter = 0
@@ -48,7 +52,7 @@ setInterval(async () => {
 }, 1000)
 
 setInterval(async () => {
-  if (running) repCounter += 0.5 // ~1 simulated rep per 2s
+  if (running) repCounter += 1 / REP_SECONDS // 1 rep per full 20 s up+down cycle
   if (!running && Date.now() - lastIdleBeat < 5000) return
   lastIdleBeat = Date.now()
   try {
