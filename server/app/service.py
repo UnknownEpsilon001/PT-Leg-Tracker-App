@@ -4,6 +4,7 @@ import time
 from datetime import datetime, timezone
 
 from . import db
+from .db import DEFAULT_DEVICE_ID
 from .state import DeviceState
 
 AUTO_CLOSE_AFTER_SEC = 60
@@ -16,53 +17,76 @@ class ConflictError(Exception):
 class SessionService:
     def __init__(self, now=time.time):
         self._now = now
-        self.device = DeviceState(now=now)
+        self._devices: dict[str, DeviceState] = {}
+
+    def _device(self, device_id: str) -> DeviceState:
+        dev = self._devices.get(device_id)
+        if dev is None:
+            dev = DeviceState(now=self._now)
+            self._devices[device_id] = dev
+        return dev
+
+    @property
+    def device(self) -> DeviceState:
+        """Back-compat accessor for the default device."""
+        return self._device(DEFAULT_DEVICE_ID)
 
     def _iso_now(self) -> str:
         return datetime.fromtimestamp(self._now(), tz=timezone.utc).isoformat()
 
     # --- ESP32-facing ---
 
-    def fetch_command(self) -> str | None:
-        return self.device.fetch_command()
+    def fetch_command(self, device_id: str = DEFAULT_DEVICE_ID) -> str | None:
+        return self._device(device_id).fetch_command()
 
-    def handle_event(self, event_type: str, elapsed_sec: int, reps: int) -> str | None:
+    def handle_event(
+        self,
+        event_type: str,
+        elapsed_sec: int,
+        reps: int,
+        device_id: str = DEFAULT_DEVICE_ID,
+    ) -> str | None:
+        dev = self._device(device_id)
         if event_type == "started":
-            stale = db.get_open_session()
+            stale = db.get_open_session(device_id)
             if stale is not None:
                 # power-glitch recovery: close stale session with last-known numbers
                 db.close_session(
-                    stale["id"],
-                    self._iso_now(),
-                    self.device.live_elapsed_sec,
-                    self.device.live_reps,
+                    stale["id"], self._iso_now(), dev.live_elapsed_sec, dev.live_reps
                 )
-            origin = "app" if self.device.consume_start_origin() else "device"
+            origin = "app" if dev.consume_start_origin() else "device"
             # the start intent is satisfied; a still-queued "start" would otherwise
             # be fetched stale by the device's next poll
-            self.device.clear_pending_start()
-            session_id = db.create_session(self._iso_now(), origin)
+            dev.clear_pending_start()
+            session_id = db.create_session(self._iso_now(), origin, device_id)
             # an event is proof of life: refresh liveness so a fresh session isn't
             # immediately auto-closed by silence that preceded this event
-            self.device.heartbeat("running", elapsed_sec, reps)
+            dev.heartbeat("running", elapsed_sec, reps)
             return session_id
 
-        open_session = db.get_open_session()
-        self.device.heartbeat("idle", elapsed_sec, reps)
+        open_session = db.get_open_session(device_id)
+        dev.heartbeat("idle", elapsed_sec, reps)
         # a start cannot be in flight across a completed session
-        self.device.clear_start_in_flight()
+        dev.clear_start_in_flight()
         if open_session is None:
             return None
         db.close_session(open_session["id"], self._iso_now(), elapsed_sec, reps)
         return open_session["id"]
 
-    def handle_heartbeat(self, state: str, elapsed_sec: int, reps: int) -> None:
-        prev_elapsed = self.device.live_elapsed_sec
-        prev_reps = self.device.live_reps
-        self.device.heartbeat(state, elapsed_sec, reps)
+    def handle_heartbeat(
+        self,
+        state: str,
+        elapsed_sec: int,
+        reps: int,
+        device_id: str = DEFAULT_DEVICE_ID,
+    ) -> None:
+        dev = self._device(device_id)
+        prev_elapsed = dev.live_elapsed_sec
+        prev_reps = dev.live_reps
+        dev.heartbeat(state, elapsed_sec, reps)
         if state == "idle":
             # heal: device idle but a session is still open (lost 'stopped' event)
-            open_session = db.get_open_session()
+            open_session = db.get_open_session(device_id)
             if open_session is not None:
                 db.close_session(
                     open_session["id"], self._iso_now(), prev_elapsed, prev_reps
@@ -70,37 +94,39 @@ class SessionService:
 
     # --- app-facing ---
 
-    def queue_start(self) -> None:
-        self._auto_close_if_silent()
-        if db.get_open_session() is not None:
+    def queue_start(self, device_id: str = DEFAULT_DEVICE_ID) -> None:
+        self._auto_close_if_silent(device_id)
+        dev = self._device(device_id)
+        if db.get_open_session(device_id) is not None:
             raise ConflictError("session already running")
-        if self.device.pending_command() == "start":
+        if dev.pending_command() == "start":
             raise ConflictError("start already queued")
-        if self.device.start_in_flight():
+        if dev.start_in_flight():
             raise ConflictError("start in progress")
-        self.device.queue_command("start")
+        dev.queue_command("start")
 
-    def queue_stop(self) -> None:
-        self._auto_close_if_silent()
-        if db.get_open_session() is None:
+    def queue_stop(self, device_id: str = DEFAULT_DEVICE_ID) -> None:
+        self._auto_close_if_silent(device_id)
+        if db.get_open_session(device_id) is None:
             raise ConflictError("no session running")
-        self.device.queue_command("stop")
+        self._device(device_id).queue_command("stop")
 
-    def current(self) -> dict:
-        self._auto_close_if_silent()
-        online = self.device.device_online()
-        open_session = db.get_open_session()
+    def current(self, device_id: str = DEFAULT_DEVICE_ID) -> dict:
+        self._auto_close_if_silent(device_id)
+        dev = self._device(device_id)
+        online = dev.device_online()
+        open_session = db.get_open_session(device_id)
         if open_session is not None:
             return {
                 "sessionId": open_session["id"],
                 "state": "running",
-                "elapsedSec": self.device.live_elapsed_sec,
-                "reps": self.device.live_reps,
+                "elapsedSec": dev.live_elapsed_sec,
+                "reps": dev.live_reps,
                 "deviceOnline": online,
             }
         state = (
             "starting"
-            if self.device.pending_command() == "start" or self.device.start_in_flight()
+            if dev.pending_command() == "start" or dev.start_in_flight()
             else "idle"
         )
         return {
@@ -128,16 +154,14 @@ class SessionService:
             for row in db.list_sessions(patient_code)
         ]
 
-    def _auto_close_if_silent(self) -> None:
-        silent_for = self.device.seconds_since_heartbeat()
+    def _auto_close_if_silent(self, device_id: str = DEFAULT_DEVICE_ID) -> None:
+        dev = self._device(device_id)
+        silent_for = dev.seconds_since_heartbeat()
         if silent_for is None or silent_for <= AUTO_CLOSE_AFTER_SEC:
             return
-        open_session = db.get_open_session()
+        open_session = db.get_open_session(device_id)
         if open_session is not None:
             db.close_session(
-                open_session["id"],
-                self._iso_now(),
-                self.device.live_elapsed_sec,
-                self.device.live_reps,
+                open_session["id"], self._iso_now(), dev.live_elapsed_sec, dev.live_reps
             )
-            self.device.live_state = "idle"
+            dev.live_state = "idle"

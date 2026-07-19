@@ -212,3 +212,29 @@ def test_idle_heartbeat_closes_lost_session(clock):
     row = svc.list_for_patient("PT001")[0]
     assert row["durationSec"] == 45
     assert row["reps"] == 4
+
+
+from app.db import DEFAULT_DEVICE_ID
+
+
+def test_two_devices_have_isolated_queues_and_sessions(clock):
+    svc = SessionService(now=clock)
+    svc.queue_start("KNEE-01")
+    # only KNEE-01's queue has the command
+    assert svc.fetch_command("KNEE-02") is None
+    assert svc.fetch_command("KNEE-01") == "start"
+    # KNEE-01 starts; KNEE-02 stays idle
+    svc.handle_event("started", 0, 0, "KNEE-01")
+    assert svc.current("KNEE-01")["state"] == "running"
+    assert svc.current("KNEE-02")["state"] == "idle"
+    # stopping KNEE-01 does not touch KNEE-02
+    svc.handle_event("stopped", 40, 2, "KNEE-01")
+    assert svc.current("KNEE-01")["state"] == "idle"
+    assert svc.current("KNEE-02")["sessionId"] is None
+
+
+def test_default_device_backcompat(clock):
+    svc = SessionService(now=clock)
+    svc.queue_start()  # no device_id
+    assert svc.fetch_command() == "start"
+    assert svc.device is svc._device(DEFAULT_DEVICE_ID)
