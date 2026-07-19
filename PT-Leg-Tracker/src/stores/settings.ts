@@ -7,6 +7,7 @@ const KEY = 'settings'
 export const DEFAULTS: Settings = {
   fontLarge: false,
   serverUrl: '',
+  deviceCode: '',
   lastSync: null,
   alarmEnabled: false,
   alarmTime: '09:00',

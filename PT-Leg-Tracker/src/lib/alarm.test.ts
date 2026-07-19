@@ -51,6 +51,7 @@ describe('syncAlarmFromSettings', () => {
   const base = {
     fontLarge: false,
     serverUrl: '',
+    deviceCode: '',
     lastSync: null,
     alarmEnabled: true,
     alarmTime: '09:00',
