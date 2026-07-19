@@ -13,6 +13,18 @@ python -m venv .venv
 
 ## Run
 
+One-shot dev launcher (server in a new window + interactive mock ESP32 in this
+one; quitting the mock or Ctrl+C stops both). Prints the LAN URL to put in the
+phone's server setting:
+
+```powershell
+.\scripts\dev.ps1           # server + mock
+.\scripts\dev.ps1 -NoMock   # server only (real device instead)
+.\scripts\dev.ps1 -Port 9000
+```
+
+Manual equivalent:
+
 ```powershell
 .venv\Scripts\python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
