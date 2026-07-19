@@ -3,6 +3,7 @@ import BigButton from '@/components/BigButton.vue'
 import AppIcon from '@/components/AppIcon.vue'
 import { useProfileStore } from '@/stores/profile'
 import { useQuizStore } from '@/stores/quiz'
+import logoUrl from '@/assets/logo.png'
 
 const store = useProfileStore()
 const quizStore = useQuizStore()
@@ -10,6 +11,7 @@ const quizStore = useQuizStore()
 
 <template>
   <main class="page">
+    <img :src="logoUrl" alt="ตราวิทยาลัยการอาชีพฝาง" class="logo" />
     <h1>สวัสดี คุณ{{ store.profile?.name }}</h1>
     <p class="sub">แอปดูแลข้อเข่าเสื่อม Smart OA Knee</p>
     <div v-if="!quizStore.hasTaken('pre')" class="card banner">
@@ -29,6 +31,30 @@ const quizStore = useQuizStore()
 </template>
 
 <style scoped>
+.logo {
+  display: block;
+  width: 11rem;
+  max-width: 60%;
+  margin: 0 auto 0.75rem;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .logo {
+    animation: logo-rise 0.6s ease-out both;
+  }
+
+  @keyframes logo-rise {
+    from {
+      opacity: 0;
+      transform: translateY(0.75rem);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+}
+
 .sub {
   margin-bottom: 1.5rem;
   color: #57534e;
