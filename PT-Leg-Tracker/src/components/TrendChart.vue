@@ -24,7 +24,13 @@ const polyline = computed(() => coords.value.map((c) => `${c.x},${c.y}`).join(' 
 <template>
   <svg :viewBox="`0 0 ${W} ${H}`" class="chart" role="img">
     <line :x1="PAD" :y1="H - PAD" :x2="W - PAD" :y2="H - PAD" stroke="var(--c-border)" />
-    <polyline :points="polyline" fill="none" stroke="var(--c-primary)" stroke-width="3" />
+    <polyline
+      :points="polyline"
+      fill="none"
+      stroke="var(--c-primary)"
+      stroke-width="3"
+      class="line"
+    />
     <circle v-for="(c, i) in coords" :key="i" :cx="c.x" :cy="c.y" r="5" fill="var(--c-primary)" />
   </svg>
 </template>
@@ -33,5 +39,19 @@ const polyline = computed(() => coords.value.map((c) => `${c.x},${c.y}`).join(' 
 .chart {
   width: 100%;
   height: auto;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .line {
+    stroke-dasharray: 1000;
+    stroke-dashoffset: 1000;
+    animation: draw 1.1s ease-out forwards;
+  }
+
+  @keyframes draw {
+    to {
+      stroke-dashoffset: 0;
+    }
+  }
 }
 </style>

@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import AppIcon from '@/components/AppIcon.vue'
 import PainScale from '@/components/PainScale.vue'
+import ConfettiBurst from '@/components/ConfettiBurst.vue'
 import { DeviceError, claimSession, getCurrent, queueStart, queueStop } from '@/lib/device'
 import { usePainLogStore } from '@/stores/painlog'
 import { useProfileStore } from '@/stores/profile'
@@ -205,6 +206,7 @@ onUnmounted(() => {
     </template>
 
     <template v-else>
+      <ConfettiBurst />
       <div class="card">
         <h2>หลังออกกำลังกาย ปวดเข่าแค่ไหน?</h2>
         <PainScale v-model="painAfter" />
