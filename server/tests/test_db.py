@@ -57,3 +57,19 @@ def test_list_sessions_finished_only_for_patient():
     assert rows[0]["reps"] == 10
     assert rows[1]["duration_sec"] == 250
     assert rows[1]["reps"] == 15
+
+
+def test_open_sessions_are_isolated_per_device():
+    a = db.create_session("2026-07-13T10:00:00+00:00", "app", "KNEE-01")
+    b = db.create_session("2026-07-13T10:00:01+00:00", "device", "KNEE-02")
+    assert db.get_open_session("KNEE-01")["id"] == a
+    assert db.get_open_session("KNEE-02")["id"] == b
+    db.close_session(a, "2026-07-13T10:05:00+00:00", 300, 5)
+    assert db.get_open_session("KNEE-01") is None
+    assert db.get_open_session("KNEE-02")["id"] == b
+
+
+def test_create_session_defaults_to_default_device():
+    sid = db.create_session("2026-07-13T10:00:00+00:00", "app")
+    assert db.get_open_session()["id"] == sid
+    assert db.get_open_session("KNEE-99") is None

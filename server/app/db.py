@@ -7,7 +7,7 @@ from contextlib import contextmanager
 
 DB_PATH_ENV = "PTLT_DB"
 DEFAULT_DB_PATH = "ptlt.sqlite3"
-DEVICE_ID = "device-1"
+DEFAULT_DEVICE_ID = "default"
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (
@@ -35,12 +35,14 @@ def _db():
         conn.close()
 
 
-def create_session(started_at: str, origin: str) -> str:
+def create_session(
+    started_at: str, origin: str, device_id: str = DEFAULT_DEVICE_ID
+) -> str:
     session_id = str(uuid.uuid4())
     with _db() as conn:
         conn.execute(
             "INSERT INTO sessions (id, device_id, started_at, origin) VALUES (?, ?, ?, ?)",
-            (session_id, DEVICE_ID, started_at, origin),
+            (session_id, device_id, started_at, origin),
         )
     return session_id
 
@@ -53,10 +55,13 @@ def close_session(session_id: str, ended_at: str, duration_sec: int, reps: int) 
         )
 
 
-def get_open_session() -> sqlite3.Row | None:
+def get_open_session(device_id: str = DEFAULT_DEVICE_ID) -> sqlite3.Row | None:
     with _db() as conn:
         return conn.execute(
-            "SELECT * FROM sessions WHERE ended_at IS NULL ORDER BY started_at DESC LIMIT 1"
+            "SELECT * FROM sessions"
+            " WHERE ended_at IS NULL AND device_id = ?"
+            " ORDER BY started_at DESC LIMIT 1",
+            (device_id,),
         ).fetchone()
 
 
