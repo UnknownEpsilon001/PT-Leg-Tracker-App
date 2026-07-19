@@ -1,0 +1,338 @@
+{
+  "directed": false,
+  "multigraph": false,
+  "graph": {
+    "hyperedges": [
+      {
+        "id": "wireless_adb_attempt_flow",
+        "label": "Wireless adb debugging attempt flow",
+        "nodes": [
+          "docs_sessions_2026_07_18_remote_session_adb_mdns_discovery",
+          "docs_sessions_2026_07_18_remote_session_wireless_adb_debugging",
+          "docs_sessions_2026_07_18_remote_session_adb_pairing_protocol_fault",
+          "docs_sessions_2026_07_18_remote_session_android_smoke_test"
+        ],
+        "relation": "participate_in",
+        "confidence": "EXTRACTED",
+        "confidence_score": 1.0,
+        "source_file": "docs/sessions/2026-07-18-remote-session.md"
+      },
+      {
+        "id": "pre_contest_open_items",
+        "label": "Pre-contest open items",
+        "nodes": [
+          "docs_sessions_2026_07_18_remote_session_android_smoke_test",
+          "docs_sessions_2026_07_18_remote_session_merge_decision_hold",
+          "docs_sessions_2026_07_18_remote_session_wireless_adb_debugging"
+        ],
+        "relation": "form",
+        "confidence": "EXTRACTED",
+        "confidence_score": 1.0,
+        "source_file": "docs/sessions/2026-07-18-remote-session.md"
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "label": "Session 2026-07-18 \u2014 Remote control, wireless adb attempt, smoke test skipped",
+      "file_type": "document",
+      "source_file": "docs/sessions/2026-07-18-remote-session.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "id": "docs_sessions_2026_07_18_remote_session_session",
+      "community": 1,
+      "norm_label": "session 2026-07-18 \u2014 remote control, wireless adb attempt, smoke test skipped"
+    },
+    {
+      "label": "Remote-controlled Claude Code session (/remote-control)",
+      "file_type": "concept",
+      "source_file": "docs/sessions/2026-07-18-remote-session.md",
+      "source_location": "## Context",
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "id": "docs_sessions_2026_07_18_remote_session_remote_control_session",
+      "community": 1,
+      "norm_label": "remote-controlled claude code session (/remote-control)"
+    },
+    {
+      "label": "Android smoke test on physical phone",
+      "file_type": "concept",
+      "source_file": "docs/sessions/2026-07-18-remote-session.md",
+      "source_location": "## Actions taken / ## Decisions",
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "rationale": "Skipped for now by user decision after wireless adb pairing failed; e2e 13/13 stands as the verification baseline. Still pending before the contest.",
+      "id": "docs_sessions_2026_07_18_remote_session_android_smoke_test",
+      "community": 0,
+      "norm_label": "android smoke test on physical phone"
+    },
+    {
+      "label": "Wireless adb debugging attempt",
+      "file_type": "concept",
+      "source_file": "docs/sessions/2026-07-18-remote-session.md",
+      "source_location": "## Actions taken items 3-5",
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "rationale": "Chosen by user to unblock the Android smoke test when no USB devices or AVDs were available. Connect to 192.168.55.27:43519 timed out (Windows 10060) because the PC was not paired on this network; note the network differs from the earlier session (192.168.0.x).",
+      "id": "docs_sessions_2026_07_18_remote_session_wireless_adb_debugging",
+      "community": 0,
+      "norm_label": "wireless adb debugging attempt"
+    },
+    {
+      "label": "adb mdns service discovery (_adb-tls-connect / _adb-tls-pairing)",
+      "file_type": "concept",
+      "source_file": "docs/sessions/2026-07-18-remote-session.md",
+      "source_location": "## Actions taken items 3, 5",
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "rationale": "Used to find the phone's connect endpoint and later to diagnose pairing failure: absence of the _adb-tls-pairing service during retry suggested the phone's pairing dialog had closed.",
+      "id": "docs_sessions_2026_07_18_remote_session_adb_mdns_discovery",
+      "community": 0,
+      "norm_label": "adb mdns service discovery (_adb-tls-connect / _adb-tls-pairing)"
+    },
+    {
+      "label": "adb pair protocol fault (couldn't read status message)",
+      "file_type": "concept",
+      "source_file": "docs/sessions/2026-07-18-remote-session.md",
+      "source_location": "## Actions taken items 5-6",
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "rationale": "Failed twice with pairing code 954538 at 192.168.55.27:37067. Old platform-tools is a known cause of pairing protocol faults; next attempt should check adb version first and keep the phone's pairing dialog open so the _adb-tls-pairing mdns service stays advertised.",
+      "id": "docs_sessions_2026_07_18_remote_session_adb_pairing_protocol_fault",
+      "community": 0,
+      "norm_label": "adb pair protocol fault (couldn't read status message)"
+    },
+    {
+      "label": "e2e 13/13 Playwright verification baseline",
+      "file_type": "rationale",
+      "source_file": "docs/sessions/2026-07-18-remote-session.md",
+      "source_location": "## Context / ## Decisions",
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "rationale": "With the Android smoke test skipped, the automated e2e suite (13/13 via Playwright, plus 47 server pytest and 44 app vitest green) stands as the accepted verification baseline.",
+      "id": "docs_sessions_2026_07_18_remote_session_e2e_verification_baseline",
+      "community": 0,
+      "norm_label": "e2e 13/13 playwright verification baseline"
+    },
+    {
+      "label": "Merge decision on hold for feature/app-screens",
+      "file_type": "concept",
+      "source_file": "docs/sessions/2026-07-18-remote-session.md",
+      "source_location": "## Decisions",
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "rationale": "User chose to hold the merge/PR decision; branch feature/app-screens stays unmerged as-is at commit a86c60d with all implementation plans complete.",
+      "id": "docs_sessions_2026_07_18_remote_session_merge_decision_hold",
+      "community": 2,
+      "norm_label": "merge decision on hold for feature/app-screens"
+    },
+    {
+      "label": "Branch feature/app-screens @ a86c60d",
+      "file_type": "concept",
+      "source_file": "docs/sessions/2026-07-18-remote-session.md",
+      "source_location": "## Context",
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "id": "docs_sessions_2026_07_18_remote_session_feature_app_screens_branch",
+      "community": 2,
+      "norm_label": "branch feature/app-screens @ a86c60d"
+    },
+    {
+      "label": "Memory: session-state-2026-07-11.md",
+      "file_type": "document",
+      "source_file": "docs/sessions/2026-07-18-remote-session.md",
+      "source_location": "## Memory updates",
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "id": "memory_session_state_2026_07_11",
+      "community": 1,
+      "norm_label": "memory: session-state-2026-07-11.md"
+    },
+    {
+      "label": "Memory: MEMORY.md index",
+      "file_type": "document",
+      "source_file": "docs/sessions/2026-07-18-remote-session.md",
+      "source_location": "## Memory updates",
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "id": "memory_memory",
+      "community": 1,
+      "norm_label": "memory: memory.md index"
+    }
+  ],
+  "links": [
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "docs/sessions/2026-07-18-remote-session.md",
+      "source_location": "## Context",
+      "weight": 1.0,
+      "source": "docs_sessions_2026_07_18_remote_session_session",
+      "target": "docs_sessions_2026_07_18_remote_session_feature_app_screens_branch"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "docs/sessions/2026-07-18-remote-session.md",
+      "source_location": "## Context",
+      "weight": 1.0,
+      "source": "docs_sessions_2026_07_18_remote_session_session",
+      "target": "docs_sessions_2026_07_18_remote_session_remote_control_session"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "docs/sessions/2026-07-18-remote-session.md",
+      "source_location": "## Memory updates",
+      "weight": 1.0,
+      "source": "docs_sessions_2026_07_18_remote_session_session",
+      "target": "memory_memory"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "docs/sessions/2026-07-18-remote-session.md",
+      "source_location": "## Memory updates",
+      "weight": 1.0,
+      "source": "docs_sessions_2026_07_18_remote_session_session",
+      "target": "memory_session_state_2026_07_11"
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "INFERRED",
+      "confidence_score": 0.85,
+      "source_file": "docs/sessions/2026-07-18-remote-session.md",
+      "source_location": "## Actions taken / ## Decisions \u2014 pairing failure led to the skip decision",
+      "weight": 1.0,
+      "source": "docs_sessions_2026_07_18_remote_session_adb_pairing_protocol_fault",
+      "target": "docs_sessions_2026_07_18_remote_session_android_smoke_test"
+    },
+    {
+      "relation": "conceptually_related_to",
+      "confidence": "INFERRED",
+      "confidence_score": 0.75,
+      "source_file": "docs/sessions/2026-07-18-remote-session.md",
+      "source_location": "## Context / ## Decisions \u2014 both are the remaining pre-contest gates decided in the same exchange",
+      "weight": 1.0,
+      "source": "docs_sessions_2026_07_18_remote_session_android_smoke_test",
+      "target": "docs_sessions_2026_07_18_remote_session_merge_decision_hold"
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "docs/sessions/2026-07-18-remote-session.md",
+      "source_location": "## Decisions \u2014 smoke test skipped, e2e 13/13 stands as verification baseline",
+      "weight": 1.0,
+      "source": "docs_sessions_2026_07_18_remote_session_e2e_verification_baseline",
+      "target": "docs_sessions_2026_07_18_remote_session_android_smoke_test"
+    },
+    {
+      "relation": "conceptually_related_to",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "docs/sessions/2026-07-18-remote-session.md",
+      "source_location": "## Actions taken item 2 \u2014 wireless debugging chosen as the path to the smoke test",
+      "weight": 1.0,
+      "source": "docs_sessions_2026_07_18_remote_session_wireless_adb_debugging",
+      "target": "docs_sessions_2026_07_18_remote_session_android_smoke_test"
+    },
+    {
+      "relation": "conceptually_related_to",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "docs/sessions/2026-07-18-remote-session.md",
+      "source_location": "## Actions taken item 3",
+      "weight": 1.0,
+      "source": "docs_sessions_2026_07_18_remote_session_adb_mdns_discovery",
+      "target": "docs_sessions_2026_07_18_remote_session_wireless_adb_debugging"
+    },
+    {
+      "relation": "conceptually_related_to",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "docs/sessions/2026-07-18-remote-session.md",
+      "source_location": "## Actions taken item 5",
+      "weight": 1.0,
+      "source": "docs_sessions_2026_07_18_remote_session_adb_pairing_protocol_fault",
+      "target": "docs_sessions_2026_07_18_remote_session_wireless_adb_debugging"
+    },
+    {
+      "relation": "conceptually_related_to",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "docs/sessions/2026-07-18-remote-session.md",
+      "source_location": "## Actions taken item 5 \u2014 missing _adb-tls-pairing service used to explain the fault",
+      "weight": 1.0,
+      "source": "docs_sessions_2026_07_18_remote_session_adb_mdns_discovery",
+      "target": "docs_sessions_2026_07_18_remote_session_adb_pairing_protocol_fault"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "docs/sessions/2026-07-18-remote-session.md",
+      "source_location": "## Decisions",
+      "weight": 1.0,
+      "source": "docs_sessions_2026_07_18_remote_session_merge_decision_hold",
+      "target": "docs_sessions_2026_07_18_remote_session_feature_app_screens_branch"
+    }
+  ],
+  "hyperedges": [
+    {
+      "id": "wireless_adb_attempt_flow",
+      "label": "Wireless adb debugging attempt flow",
+      "nodes": [
+        "docs_sessions_2026_07_18_remote_session_adb_mdns_discovery",
+        "docs_sessions_2026_07_18_remote_session_wireless_adb_debugging",
+        "docs_sessions_2026_07_18_remote_session_adb_pairing_protocol_fault",
+        "docs_sessions_2026_07_18_remote_session_android_smoke_test"
+      ],
+      "relation": "participate_in",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "docs/sessions/2026-07-18-remote-session.md"
+    },
+    {
+      "id": "pre_contest_open_items",
+      "label": "Pre-contest open items",
+      "nodes": [
+        "docs_sessions_2026_07_18_remote_session_android_smoke_test",
+        "docs_sessions_2026_07_18_remote_session_merge_decision_hold",
+        "docs_sessions_2026_07_18_remote_session_wireless_adb_debugging"
+      ],
+      "relation": "form",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "docs/sessions/2026-07-18-remote-session.md"
+    }
+  ],
+  "built_at_commit": "a86c60d3cb46260f3425393db57edbd77c310095"
+}
