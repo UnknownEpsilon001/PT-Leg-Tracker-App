@@ -8,6 +8,26 @@
 
 **Tech Stack:** Arduino core for ESP32 (via arduino-cli for scripted builds; Arduino IDE opens the same sketch), lvgl 8.4.x, TFT_eSPI, XPT2046_Touchscreen, ArduinoJson 7.x.
 
+> **2026-07-19 ARCHITECTURE UPDATE — read before executing.** The real machine
+> uses **two ESP32s**: a **controller** (relays + motion + WiFi + server client
+> + NVS + device code) and the **CYD display** (LVGL touch UI only, over UART).
+> It also carries a **device code** for multi-machine pairing. See the
+> **Addendum (end of this file)** and the spec's matching addendum.
+>
+> Tasks 1–9 below were written for one combined CYD sketch. The module *code*
+> (config, settings, actuator, session, net, ui) is unchanged and still the
+> code of record — but when executing:
+> - **Task 1:** create BOTH sketch dirs (`firmware/pt-leg-controller/` and
+>   `firmware/pt-leg-display/`), not `pt-leg-device/`.
+> - Build each module from Tasks 2–8 into the board named in the Addendum's
+>   **module→board map** (controller: config/settings/actuator/session/net;
+>   display: ui). Compile that board's sketch in each task's compile step.
+> - **Ignore the single-sketch `.ino` wiring shown inline in Tasks 3–8** where
+>   it wires relays+UI+net together — the real per-board `.ino` wiring is in
+>   **Addendum Task 11**.
+> - Then do **Addendum Tasks 10–12** (UART link, per-board wiring, device code)
+>   and the revised hardware test (Addendum Task 13, replacing Task 9).
+
 ## Global Constraints
 
 - v3 server contract is FROZEN (`2026-07-13-server-mediated-device-control-design.md`): poll 1 s, heartbeat 1 s running / 5 s idle, event on every transition, consume-on-read commands.
@@ -1187,4 +1207,576 @@ Expected: all pass (contract parity).
 ```bash
 git add firmware
 git commit -m "fix(firmware): hardware integration fixups"
+```
+
+---
+
+## Addendum 2026-07-19 — two-MCU split, UART link, device-code pairing
+
+Spec: `2026-07-19-esp32-firmware-design.md` (Addendum). These tasks assume the
+module code from Tasks 2–8 exists, placed per the module→board map below.
+
+**Module → board map**
+
+| Module | Board / sketch |
+|---|---|
+| `config.h`, `settings.{h,cpp}` (+ `deviceCode`) | `firmware/pt-leg-controller/` |
+| `actuator.{h,cpp}`, `session.{h,cpp}`, `net.{h,cpp}` (+ `deviceId`) | `firmware/pt-leg-controller/` |
+| `link.{h,cpp}` (UART protocol) | copied into BOTH sketch dirs |
+| `ui.{h,cpp}` (+ device-code field), `lv_conf.h`, `TFT_eSPI_User_Setup.h` | `firmware/pt-leg-display/` |
+
+Controller UART: `Serial2` on GPIO 16 (RX) / 17 (TX). CYD UART: `Serial2` on
+two free CYD pins (GPIO 22 RX / 27 TX are FREE on the CYD since relays moved to
+the controller) — pin choice pinned in `firmware/pt-leg-display/README` after
+a bench check. Cross-wire RX↔TX, common GND. Both at 115200 8N1.
+
+Addendum compile checks build each board's sketch:
+`arduino-cli compile --fqbn esp32:esp32:esp32 firmware/pt-leg-controller` and
+`... firmware/pt-leg-display`.
+
+---
+
+### Task 10: UART link module (`link.{h,cpp}`, both ends)
+
+**Files:**
+- Create: `firmware/pt-leg-controller/link.h`, `firmware/pt-leg-controller/link.cpp`
+- Create: `firmware/link-protocol.md`
+- (Task 11 copies `link.*` into `pt-leg-display/`.)
+
+**Interfaces:**
+- Produces: `struct LinkState`, `struct LinkSettings`, `class Link` with
+  `begin(Stream*)`, `poll()`, senders `sendCmd/sendSettings/sendHello/sendState/sendPing`,
+  `uint32_t lastRxMs()`, and settable handlers `onCmd/onSettings/onHello/onState/onSettingsReply`.
+  Consumed by Task 11 (both `.ino`s) and Task 12.
+
+- [ ] **Step 1: `firmware/link-protocol.md`** — record the schema (copy the
+  spec Addendum "UART link" block verbatim: `cmd`, `settings`, `hello`, `ping`
+  display→controller; `state`, `settings` reply controller→display; `phase` =
+  `Phase` ordinal 0..5).
+
+- [ ] **Step 2: `firmware/pt-leg-controller/link.h`**
+
+```cpp
+#pragma once
+#include <Arduino.h>
+
+struct LinkState {
+  bool running;
+  int phase;
+  uint32_t elapsed;
+  uint16_t reps;
+  bool wifi;
+  bool server;
+};
+
+struct LinkSettings {
+  String ssid, pass, server, code;
+  uint16_t lift, hold, lower, rest;
+};
+
+class Link {
+ public:
+  void begin(Stream* io) { _io = io; }
+  void poll();
+  void sendCmd(const char* v);
+  void sendSettings(const LinkSettings& s);
+  void sendHello();
+  void sendState(const LinkState& st);
+  void sendPing();
+  uint32_t lastRxMs() const { return _lastRx; }
+
+  void (*onCmd)(const char* v) = nullptr;
+  void (*onSettings)(const LinkSettings&) = nullptr;   // controller side
+  void (*onHello)() = nullptr;                         // controller side
+  void (*onState)(const LinkState&) = nullptr;         // display side
+  void (*onSettingsReply)(const LinkSettings&) = nullptr; // display side
+
+ private:
+  void dispatch(const String& line);
+  Stream* _io = nullptr;
+  String _buf;
+  uint32_t _lastRx = 0;
+};
+```
+
+- [ ] **Step 3: `firmware/pt-leg-controller/link.cpp`**
+
+```cpp
+#include "link.h"
+#include <ArduinoJson.h>
+
+static void emit(Stream* io, JsonDocument& d) {
+  if (!io) return;
+  String s;
+  serializeJson(d, s);
+  io->println(s);
+}
+
+void Link::poll() {
+  if (!_io) return;
+  while (_io->available()) {
+    char c = _io->read();
+    if (c == '\n') {
+      if (_buf.length()) {
+        _lastRx = millis();
+        dispatch(_buf);
+        _buf = "";
+      }
+    } else if (c != '\r') {
+      _buf += c;
+      if (_buf.length() > 512) _buf = "";  // overflow guard
+    }
+  }
+}
+
+void Link::dispatch(const String& line) {
+  JsonDocument d;
+  if (deserializeJson(d, line)) return;  // malformed dropped
+  const char* t = d["t"] | "";
+  if (!strcmp(t, "cmd")) {
+    if (onCmd) onCmd(d["v"] | "");
+  } else if (!strcmp(t, "hello")) {
+    if (onHello) onHello();
+  } else if (!strcmp(t, "state")) {
+    if (onState) {
+      LinkState s{d["running"] | false, d["phase"] | 0, d["elapsed"] | 0u,
+                  (uint16_t)(d["reps"] | 0), d["wifi"] | false, d["server"] | false};
+      onState(s);
+    }
+  } else if (!strcmp(t, "settings")) {
+    LinkSettings s;
+    s.ssid = (const char*)(d["ssid"] | "");
+    s.pass = (const char*)(d["pass"] | "");
+    s.server = (const char*)(d["server"] | "");
+    s.code = (const char*)(d["code"] | "");
+    s.lift = d["lift"] | 0;
+    s.hold = d["hold"] | 0;
+    s.lower = d["lower"] | 0;
+    s.rest = d["rest"] | 0;
+    if (onSettings) onSettings(s);            // controller consumes a save
+    else if (onSettingsReply) onSettingsReply(s);  // display consumes a reply
+  }
+  // "ping": no handler; _lastRx already stamped in poll()
+}
+
+void Link::sendCmd(const char* v) {
+  JsonDocument d; d["t"] = "cmd"; d["v"] = v; emit(_io, d);
+}
+void Link::sendHello() {
+  JsonDocument d; d["t"] = "hello"; emit(_io, d);
+}
+void Link::sendPing() {
+  JsonDocument d; d["t"] = "ping"; emit(_io, d);
+}
+void Link::sendState(const LinkState& st) {
+  JsonDocument d;
+  d["t"] = "state"; d["running"] = st.running; d["phase"] = st.phase;
+  d["elapsed"] = st.elapsed; d["reps"] = st.reps; d["wifi"] = st.wifi;
+  d["server"] = st.server;
+  emit(_io, d);
+}
+void Link::sendSettings(const LinkSettings& s) {
+  JsonDocument d;
+  d["t"] = "settings"; d["ssid"] = s.ssid; d["pass"] = s.pass;
+  d["server"] = s.server; d["code"] = s.code; d["lift"] = s.lift;
+  d["hold"] = s.hold; d["lower"] = s.lower; d["rest"] = s.rest;
+  emit(_io, d);
+}
+```
+
+- [ ] **Step 4: Compile the controller sketch** — `arduino-cli compile --fqbn esp32:esp32:esp32 firmware/pt-leg-controller` → success (link.cpp builds; unused until Task 11 wires it).
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add firmware
+git commit -m "feat(firmware): UART link protocol module"
+```
+
+---
+
+### Task 11: Two-sketch wiring (controller `.ino` + display `.ino`)
+
+**Files:**
+- Create/Modify: `firmware/pt-leg-controller/pt-leg-controller.ino`
+- Create: `firmware/pt-leg-display/pt-leg-display.ino`, copy `link.{h,cpp}` into `pt-leg-display/`
+- Modify: `firmware/pt-leg-display/README` (UART pins)
+
+**Interfaces:**
+- Consumes: all controller modules + `Link` (Task 10); `ui.*` (Tasks 6–8).
+- Produces: two flashable sketches. Controller drives motion + server + UART;
+  display drives UI + UART. UART-loss safe-stop on the controller.
+
+- [ ] **Step 1: Controller `.ino`** — `firmware/pt-leg-controller/pt-leg-controller.ino` wires session/actuator/net + Link (no UI):
+
+```cpp
+#include "config.h"
+#include "settings.h"
+#include "actuator.h"
+#include "session.h"
+#include "net.h"
+#include "link.h"
+
+DeviceSettings gSettings;
+SessionSM gSession;
+Link gLink;
+
+static void applyActuator() {
+  switch (gSession.phase()) {
+    case Phase::Lift: actuatorUp(); break;
+    case Phase::Lower:
+    case Phase::SafeLower: actuatorDown(); break;
+    default: actuatorOff(); break;
+  }
+}
+
+static void onLinkCmd(const char* v) {
+  uint32_t now = millis();
+  if (!strcmp(v, "start")) gSession.start(now);
+  else if (!strcmp(v, "stop")) gSession.requestStop(now);
+}
+
+static void applySettings(const DeviceSettings& s) {
+  gSettings = s;
+  settingsSave(gSettings);
+  gSession.cfg = {gSettings.liftSec * 1000u, gSettings.holdSec * 1000u,
+                  gSettings.lowerSec * 1000u, gSettings.restSec * 1000u};
+  netBegin(gSettings);
+}
+
+static void onLinkSettings(const LinkSettings& s) {
+  DeviceSettings d;
+  d.wifiSsid = s.ssid; d.wifiPass = s.pass; d.serverUrl = s.server;
+  d.deviceCode = s.code;  // added in Task 12
+  d.liftSec = s.lift; d.holdSec = s.hold; d.lowerSec = s.lower; d.restSec = s.rest;
+  applySettings(d);
+}
+
+static LinkSettings currentAsLink() {
+  LinkSettings s;
+  s.ssid = gSettings.wifiSsid; s.pass = gSettings.wifiPass;
+  s.server = gSettings.serverUrl; s.code = gSettings.deviceCode;  // Task 12
+  s.lift = gSettings.liftSec; s.hold = gSettings.holdSec;
+  s.lower = gSettings.lowerSec; s.rest = gSettings.restSec;
+  return s;
+}
+
+static void onLinkHello() { gLink.sendSettings(currentAsLink()); }
+
+void setup() {
+  actuatorBegin();  // safety first
+  Serial.begin(115200);
+  Serial2.begin(115200, SERIAL_8N1, 16, 17);  // UART to CYD
+  settingsLoad(gSettings);
+  gSession.cfg = {gSettings.liftSec * 1000u, gSettings.holdSec * 1000u,
+                  gSettings.lowerSec * 1000u, gSettings.restSec * 1000u};
+  netBegin(gSettings);
+  gLink.begin(&Serial2);
+  gLink.onCmd = onLinkCmd;
+  gLink.onSettings = onLinkSettings;
+  gLink.onHello = onLinkHello;
+}
+
+void loop() {
+  uint32_t now = millis();
+  gSession.tick(now);
+  applyActuator();
+  netLoop(now);
+  gLink.poll();
+
+  // UART-loss safe-stop: screen may be dead, no touch-stop possible
+  if (gSession.running() && gLink.lastRxMs() != 0 && now - gLink.lastRxMs() > 2000)
+    gSession.requestStop(now);
+
+  static uint32_t lastPoll = 0, lastHb = 0, lastState = 0;
+  if (now - lastPoll >= 1000) {
+    lastPoll = now;
+    String cmd = netPollCommand();
+    if (cmd == "start") gSession.start(now);
+    else if (cmd == "stop") gSession.requestStop(now);
+  }
+  uint32_t hbInterval = gSession.running() ? 1000 : 5000;
+  if (now - lastHb >= hbInterval) {
+    lastHb = now;
+    netHeartbeat(gSession.running() ? "running" : "idle", gSession.elapsedSec(now),
+                 gSession.reps());
+  }
+  if (gSession.takeStartedEdge()) netQueueEvent("started", gSession.elapsedSec(now), gSession.reps());
+  if (gSession.takeStoppedEdge()) netQueueEvent("stopped", gSession.finalElapsedSec(), gSession.finalReps());
+
+  if (now - lastState >= 250) {
+    lastState = now;
+    LinkState st{gSession.running(), (int)gSession.phase(), gSession.elapsedSec(now),
+                 gSession.reps(), netWifiUp(), netServerUp()};
+    gLink.sendState(st);
+  }
+  delay(2);
+}
+```
+
+- [ ] **Step 2: Copy `link.*` into the display sketch**
+
+```bash
+cp firmware/pt-leg-controller/link.h firmware/pt-leg-display/link.h
+cp firmware/pt-leg-controller/link.cpp firmware/pt-leg-display/link.cpp
+```
+
+Also copy `session.h` into `pt-leg-display/` (the UI uses the `Phase` enum only — header, no `.cpp`): `cp firmware/pt-leg-controller/session.h firmware/pt-leg-display/session.h`.
+
+- [ ] **Step 3: Display `.ino`** — `firmware/pt-leg-display/pt-leg-display.ino` wires UI + Link (no WiFi/relays/session logic). Assumes `ui.*`, `lv_conf.h`, `TFT_eSPI_User_Setup.h` from Tasks 6–8 are present in this dir:
+
+```cpp
+#include "ui.h"
+#include "link.h"
+#include "session.h"  // Phase enum for uiUpdateMain
+
+Link gLink;
+static bool uiRunning = false;
+static Phase uiPhase = Phase::Idle;
+static uint32_t uiElapsed = 0;
+static uint16_t uiReps = 0;
+static bool uiWifi = false, uiServer = false;
+
+static void onTouchStart() { gLink.sendCmd("start"); }
+static void onTouchStop() { gLink.sendCmd("stop"); }
+static void onOpenSettings() { uiOpenSettings(gLastSettings()); }  // Task 12 provides gLastSettings
+
+static void onLinkState(const LinkState& s) {
+  uiRunning = s.running;
+  uiPhase = (Phase)s.phase;
+  uiElapsed = s.elapsed;
+  uiReps = s.reps;
+  uiWifi = s.wifi;
+  uiServer = s.server;
+}
+
+void setup() {
+  Serial.begin(115200);
+  Serial2.begin(115200, SERIAL_8N1, 22, 27);  // UART to controller (CYD free pins)
+  uiBegin();
+  uiSetCallbacks(onTouchStart, onTouchStop, onOpenSettings);
+  gLink.begin(&Serial2);
+  gLink.onState = onLinkState;
+  gLink.onSettingsReply = onLinkSettingsReply;  // Task 12
+  gLink.sendHello();  // ask controller for current settings + state
+}
+
+void loop() {
+  uint32_t now = millis();
+  uiLoop();
+  gLink.poll();
+
+  static uint32_t lastUi = 0, lastPing = 0;
+  if (now - lastUi >= 250) {
+    lastUi = now;
+    uiUpdateMain(uiRunning, uiPhase, uiElapsed, uiReps, uiWifi, uiServer);
+  }
+  if (now - lastPing >= 1000) {  // keep the controller's UART watchdog fed
+    lastPing = now;
+    gLink.sendPing();
+  }
+  delay(2);
+}
+```
+
+(`gLastSettings()`, `onLinkSettingsReply`, and the settings-save → `gLink.sendSettings` wiring are added in Task 12, which also adds the device-code field. Until Task 12, stub `onOpenSettings`/`onLinkSettingsReply` empty to compile, or do Task 12 immediately after.)
+
+- [ ] **Step 4: Compile both sketches**
+
+Run: `arduino-cli compile --fqbn esp32:esp32:esp32 firmware/pt-leg-controller`
+Run: `arduino-cli compile --fqbn esp32:esp32:esp32 firmware/pt-leg-display`
+Expected: both succeed. (Do Task 12 first if the display references its stubs.)
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add firmware
+git commit -m "feat(firmware): split into controller + display sketches over UART"
+```
+
+---
+
+### Task 12: Device-code pairing (NVS + net + CYD field + main-screen display)
+
+**Files:**
+- Modify: `firmware/pt-leg-controller/settings.h`, `settings.cpp` (add `deviceCode`)
+- Modify: `firmware/pt-leg-controller/net.cpp` (send `deviceId`)
+- Modify: `firmware/pt-leg-display/ui.h`, `ui.cpp` (device-code field + main-screen label)
+- Modify: `firmware/pt-leg-display/pt-leg-display.ino` (settings save + reply wiring)
+
+**Interfaces:**
+- Consumes: `Link`/`LinkSettings.code` (Task 10), server `?deviceId=` contract
+  (multi-device pairing plan Task 3).
+- Produces: `DeviceSettings.deviceCode`; net sends the code; CYD collects and
+  displays it. `gLastSettings()` and `onLinkSettingsReply` referenced by Task 11.
+
+- [ ] **Step 1: Add `deviceCode` to controller settings** — in `settings.h`
+  `DeviceSettings`, add after `serverUrl`:
+
+```cpp
+  String deviceCode;
+```
+
+In `settings.cpp` `settingsLoad`, after the `server` line:
+
+```cpp
+  s.deviceCode = p.getString("code", "");
+```
+
+In `settingsSave`, after the `server` put:
+
+```cpp
+  p.putString("code", s.deviceCode);
+```
+
+- [ ] **Step 2: Send `deviceId` from net** — in `net.cpp`, add a module-level
+  code and set it in `netBegin`:
+
+```cpp
+static String devCode;
+```
+
+In `netBegin`, after `baseUrl = s.serverUrl;`:
+
+```cpp
+  devCode = s.deviceCode;
+```
+
+In `netPollCommand`, change the URL:
+
+```cpp
+  String url = baseUrl + "/api/device/command";
+  if (devCode.length()) url += "?deviceId=" + devCode;
+  http.begin(url);
+```
+
+In `tryFlushEvent`, add the code to the JSON body:
+
+```cpp
+  String body = String("{\"type\":\"") + evType + "\",\"elapsedSec\":" + evElapsed +
+                ",\"reps\":" + evReps + ",\"deviceId\":\"" + devCode + "\"}";
+```
+
+In `netHeartbeat`, likewise:
+
+```cpp
+  String body = String("{\"state\":\"") + state + "\",\"elapsedSec\":" + elapsedSec +
+                ",\"reps\":" + reps + ",\"deviceId\":\"" + devCode + "\"}";
+```
+
+- [ ] **Step 3: CYD settings screen — device-code field** — in `ui.cpp`
+  `uiOpenSettings`, add a text area after `taServer` (needs a file-scope
+  `static lv_obj_t* taCode;` beside the other `ta*`):
+
+```cpp
+  taCode = makeTa(col, "Device code (KNEE-01)", false);
+  lv_textarea_set_text(taCode, cur.deviceCode.c_str());
+```
+
+In `saveClicked`, add:
+
+```cpp
+  s.deviceCode = lv_textarea_get_text(taCode);
+```
+
+This requires `uiOpenSettings`/`saveClicked` to use `DeviceSettings` (which now
+has `deviceCode`) — the CYD sketch includes `settings.h` (header only; copy it
+into `pt-leg-display/` alongside `session.h`). `saveClicked`'s `cbSave(s)` hands
+the full struct (incl. code) back to the sketch.
+
+- [ ] **Step 4: CYD main screen — show the code** — in `ui.cpp` add a
+  file-scope `static lv_obj_t* lblCode;`; in `buildMain()`:
+
+```cpp
+  lblCode = lv_label_create(scrMain);
+  lv_label_set_text(lblCode, "");
+  lv_obj_align(lblCode, LV_ALIGN_BOTTOM_MID, 0, -6);
+```
+
+Add a setter to `ui.h` / `ui.cpp`:
+
+```cpp
+// ui.h
+void uiSetDeviceCode(const char* code);
+// ui.cpp
+void uiSetDeviceCode(const char* code) {
+  lv_label_set_text_fmt(lblCode, "รหัส: %s", code);
+}
+```
+
+- [ ] **Step 5: Wire settings save + reply in the display `.ino`** — add to
+  `firmware/pt-leg-display/pt-leg-display.ino` (resolving Task 11's stubs).
+  Include `settings.h` and keep a cached copy:
+
+```cpp
+#include "settings.h"
+
+static DeviceSettings gLast;
+DeviceSettings gLastSettings() { return gLast; }
+
+static void onSaveFromUi(const DeviceSettings& s) {
+  gLast = s;
+  LinkSettings ls;
+  ls.ssid = s.wifiSsid; ls.pass = s.wifiPass; ls.server = s.serverUrl; ls.code = s.deviceCode;
+  ls.lift = s.liftSec; ls.hold = s.holdSec; ls.lower = s.lowerSec; ls.rest = s.restSec;
+  gLink.sendSettings(ls);
+  uiSetDeviceCode(s.deviceCode.c_str());
+}
+
+void onLinkSettingsReply(const LinkSettings& s) {
+  gLast.wifiSsid = s.ssid; gLast.wifiPass = s.pass; gLast.serverUrl = s.server;
+  gLast.deviceCode = s.code;
+  gLast.liftSec = s.lift; gLast.holdSec = s.hold; gLast.lowerSec = s.lower; gLast.restSec = s.rest;
+  uiSetDeviceCode(s.code.c_str());
+}
+```
+
+In `setup()`, register the UI save callback (from Task 8's `uiSetSettingsSaved`):
+
+```cpp
+  uiSetSettingsSaved(onSaveFromUi);
+```
+
+- [ ] **Step 6: Compile both sketches** — both `arduino-cli compile` commands succeed.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add firmware
+git commit -m "feat(firmware): device-code pairing across controller + CYD"
+```
+
+---
+
+### Task 13: Two-board hardware integration (replaces Task 9)
+
+**Files:** none (verification; fixups committed as found)
+
+Prereq: controller flashed (relays on GPIO 22/27, WiFi creds + server + code
+set), CYD flashed, UART cross-wired (controller 16/17 ↔ CYD 22/27, common GND),
+`server\scripts\dev.ps1 -NoMock` running, phone app on the LAN.
+
+- [ ] **Step 1: All of Task 9's checks** — safety (boot relays OFF, never both
+  ON, stop mid-LIFT/HOLD safe-lowers, power-pull safe), dual-control matrix,
+  offline matrix, server pytest green, touch calibration. Touch now originates
+  on the CYD and crosses the UART.
+
+- [ ] **Step 2: UART-loss safe-stop** — start a session, unplug the UART line:
+  controller safe-lowers and stops within ~2 s; CYD stops updating (stale/"no
+  link"). App-stop still works over WiFi with the UART unplugged.
+
+- [ ] **Step 3: Device-code isolation (two machines)** — set codes `KNEE-01`
+  and `KNEE-02` on two machines (CYD settings), two phones each with the
+  matching code. Start `KNEE-01` from phone 1: only machine 1 runs; machine 2
+  idle. Start `KNEE-02` concurrently: both run independently; stop one, the
+  other continues. Confirms end-to-end multi-device with real firmware.
+
+- [ ] **Step 4: Code display** — CYD main screen shows `รหัส: KNEE-01`; matches
+  what the operator entered in the phone.
+
+- [ ] **Step 5: Commit fixups**
+
+```bash
+git add firmware
+git commit -m "fix(firmware): two-board integration fixups"
 ```

@@ -142,4 +142,95 @@ integration against the real stack:
 
 - Stepper motor drive (abstraction ready; separate future plan).
 - HTTPS/cloud server phase (same accepted risk as v3: HTTP on trusted LAN).
-- OTA updates, multi-device support (v3 single-device assumption holds).
+- OTA updates. (Multi-device support is now IN scope — see Addendum below,
+  superseding the earlier single-device line.)
+
+---
+
+## Addendum 2026-07-19 — two-MCU split + device-code pairing
+
+Two corrections to the design above, from the user: the machine uses **two
+ESP32s**, and it must carry a **device code** for multi-machine pairing
+(`2026-07-19-multi-device-pairing-design.md`).
+
+### Revised hardware (supersedes the single-board "Hardware" + "Architecture" sections)
+
+Two ESP32 per machine, one UART between them:
+
+- **Controller ESP32** — the brain, and the WiFi owner. Drives the relays
+  (UP GPIO 22, DOWN GPIO 27), owns the motion + session state machine, the
+  WiFi + v3 server client, and NVS settings (wifi ssid/pass, server url,
+  **device code**, cycle durations). No display attached.
+- **Display ESP32 = CYD (ESP32-2432S028R)** — LVGL touch UI ONLY. No WiFi,
+  no relays, no session logic. Renders state received over UART; forwards
+  touch (start/stop, settings entry) over UART.
+
+The relay GPIOs and all logic that the single-board design placed on the CYD
+now live on the controller; the CYD is a pure terminal.
+
+### UART link (controller ↔ CYD)
+
+Newline-delimited JSON, one message per line, over a dedicated UART
+(controller `Serial2` ↔ a spare CYD UART; exact pins pinned in the display
+README). `println(json)` to send; reader accumulates to `\n` and parses with
+ArduinoJson; malformed lines dropped.
+
+Display → Controller:
+- `{"t":"cmd","v":"start"|"stop"}` — touch button press.
+- `{"t":"settings","ssid":..,"pass":..,"server":..,"code":..,"lift":..,"hold":..,"lower":..,"rest":..}` — save from the settings screen.
+- `{"t":"hello"}` — CYD boot; asks the controller for current settings + state.
+
+Controller → Display:
+- `{"t":"state","running":bool,"phase":int,"elapsed":int,"reps":int,"wifi":bool,"server":bool}` — ~4 Hz.
+- `{"t":"settings", ...current...}` — reply to `hello`, so the CYD settings
+  screen pre-fills and the main screen can show the device code.
+
+`phase` is the `Phase` enum ordinal (0=Idle … 5=SafeLower).
+
+### Safety under UART loss
+
+Touch lives on the CYD; control lives on the controller. If the UART goes
+silent for > 2 s **while running**, the controller **safe-lowers and stops**
+(the operator's screen may be dead and could not send stop). The app-stop
+path is unaffected — the controller has WiFi and still receives server stop
+commands directly. On boot the controller relays are OFF regardless of UART
+state (existing invariant).
+
+### Device code (multi-machine pairing)
+
+The controller stores `deviceCode` in NVS and sends it as `?deviceId=<code>`
+on `GET /api/device/command`, and as `"deviceId":<code>` in the `/event` and
+`/heartbeat` bodies. Blank code → the server's `"default"` device. The code is
+typed on the CYD settings screen (a new text field beside server URL), pushed
+to the controller over the UART `settings` message, and shown on the CYD main
+screen for the app operator to read and enter in the phone.
+
+### Module → board map
+
+| Module (from the single-board plan) | Board |
+|---|---|
+| `config.h`, `settings.{h,cpp}` (+ `deviceCode`) | Controller |
+| `actuator.{h,cpp}` | Controller |
+| `session.{h,cpp}` | Controller |
+| `net.{h,cpp}` (+ `deviceId` on requests) | Controller |
+| `link.{h,cpp}` — new UART protocol, both ends | Both |
+| `ui.{h,cpp}` (+ device-code field, now UART-driven, no WiFi/relays) | Display (CYD) |
+
+### Sketch layout (revised)
+
+```
+firmware/
+  pt-leg-controller/  — .ino + config/settings/actuator/session/net/link
+  pt-leg-display/     — .ino + ui + link + lv_conf.h + TFT_eSPI_User_Setup.h
+  link-protocol.md    — UART message schema (shared reference)
+```
+
+### Testing delta
+
+- UART link check: pull the UART mid-session → controller safe-lowers/stops
+  within ~2 s; CYD shows "no link"; app-stop still works over WiFi.
+- Device-code check: two machines with codes `KNEE-01`/`KNEE-02`, two phones,
+  concurrent sessions stay isolated end-to-end (mirrors the multi-device
+  pairing plan's e2e gate, now with real firmware).
+- Dual-control and offline matrices from the single-board plan are unchanged
+  in intent; "touch" now originates on the CYD and crosses the UART.
