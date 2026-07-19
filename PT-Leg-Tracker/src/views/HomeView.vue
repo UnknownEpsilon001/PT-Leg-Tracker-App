@@ -20,10 +20,10 @@ const quizStore = useQuizStore()
         <AppIcon name="clipboard" /> ทำแบบทดสอบก่อนใช้งาน
       </button>
     </div>
-    <BigButton icon="book-open" label="ความรู้เรื่องข้อเข่าเสื่อม" to="knowledge" />
-    <BigButton icon="wrench" label="วิธีใช้เครื่องบริหารเข่า" to="guide" />
-    <BigButton icon="activity" label="เริ่มออกกำลังกาย" to="session" />
-    <BigButton icon="bar-chart" label="บันทึกของฉัน" to="records" />
+    <BigButton class="stagger" style="--i: 0" icon="book-open" label="ความรู้เรื่องข้อเข่าเสื่อม" to="knowledge" />
+    <BigButton class="stagger" style="--i: 1" icon="wrench" label="วิธีใช้เครื่องบริหารเข่า" to="guide" />
+    <BigButton class="stagger" style="--i: 2" icon="activity" label="เริ่มออกกำลังกาย" to="session" />
+    <BigButton class="stagger" style="--i: 3" icon="bar-chart" label="บันทึกของฉัน" to="records" />
     <button class="settings-link" @click="$router.push({ name: 'settings' })">
       <AppIcon name="settings" /> ตั้งค่า
     </button>

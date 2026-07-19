@@ -21,7 +21,11 @@ watchEffect(() => {
       </button>
       <h1>{{ route.meta.title ?? '' }}</h1>
     </header>
-    <RouterView />
+    <RouterView v-slot="{ Component }">
+      <Transition name="page" mode="out-in">
+        <component :is="Component" />
+      </Transition>
+    </RouterView>
   </div>
 </template>
 

@@ -105,3 +105,48 @@ select {
   padding: 1rem;
   margin-bottom: 0.75rem;
 }
+
+@media (prefers-reduced-motion: no-preference) {
+  .page-enter-active,
+  .page-leave-active {
+    transition:
+      opacity 0.18s ease,
+      transform 0.18s ease;
+  }
+
+  .page-enter-from {
+    opacity: 0;
+    transform: translateX(0.75rem);
+  }
+
+  .page-leave-to {
+    opacity: 0;
+    transform: translateX(-0.75rem);
+  }
+
+  button,
+  .card {
+    transition: transform 0.12s ease;
+  }
+
+  button:active,
+  .card:active {
+    transform: scale(0.97);
+  }
+
+  .stagger {
+    animation: fade-in-up 0.45s ease-out both;
+    animation-delay: calc(var(--i, 0) * 70ms);
+  }
+
+  @keyframes fade-in-up {
+    from {
+      opacity: 0;
+      transform: translateY(0.6rem);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+}

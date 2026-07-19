@@ -52,7 +52,12 @@ function mins(sec: number) {
 
     <h2>ประวัติการออกกำลังกาย</h2>
     <p v-if="sorted.length === 0" class="card">ยังไม่มีบันทึก เริ่มออกกำลังกายครั้งแรกได้เลย</p>
-    <div v-for="r in sorted" :key="r.id" class="card row">
+    <div
+      v-for="(r, i) in sorted"
+      :key="r.id"
+      class="card row stagger"
+      :style="{ '--i': Math.min(i, 8) }"
+    >
       <span>{{ fmt(r.date) }}</span>
       <span>{{ r.durationSec !== null ? mins(r.durationSec) + ' นาที' : 'บันทึกอาการ' }}</span>
       <span v-if="r.painAfter !== undefined">ปวด {{ r.painAfter }}/10</span>
