@@ -1,6 +1,6 @@
 import type { CurrentSession } from '@/types'
 
-export type DeviceErrorKind = 'unreachable' | 'busy' | 'idle' | 'offline'
+export type DeviceErrorKind = 'unreachable' | 'busy' | 'idle' | 'offline' | 'no-device'
 
 export class DeviceError extends Error {
   kind: DeviceErrorKind
@@ -38,16 +38,30 @@ async function request(
 
 // --- v3 server-session client (spec: server-mediated device control) ---
 
-export async function queueStart(serverUrl: string): Promise<void> {
-  await request(`${base(serverUrl)}/api/sessions/start`, 'busy', { method: 'POST' })
+function control(
+  serverUrl: string,
+  deviceCode: string,
+  path: string,
+  conflictKind: DeviceErrorKind,
+  init?: RequestInit,
+): Promise<unknown> {
+  const code = deviceCode.trim()
+  if (!code) throw new DeviceError('no-device')
+  const sep = path.includes('?') ? '&' : '?'
+  const url = `${base(serverUrl)}${path}${sep}deviceId=${encodeURIComponent(code)}`
+  return request(url, conflictKind, init)
 }
 
-export async function queueStop(serverUrl: string): Promise<void> {
-  await request(`${base(serverUrl)}/api/sessions/stop`, 'idle', { method: 'POST' })
+export async function queueStart(serverUrl: string, deviceCode: string): Promise<void> {
+  await control(serverUrl, deviceCode, '/api/sessions/start', 'busy', { method: 'POST' })
 }
 
-export async function getCurrent(serverUrl: string): Promise<CurrentSession> {
-  const d = (await request(`${base(serverUrl)}/api/sessions/current`, 'unreachable')) as Record<
+export async function queueStop(serverUrl: string, deviceCode: string): Promise<void> {
+  await control(serverUrl, deviceCode, '/api/sessions/stop', 'idle', { method: 'POST' })
+}
+
+export async function getCurrent(serverUrl: string, deviceCode: string): Promise<CurrentSession> {
+  const d = (await control(serverUrl, deviceCode, '/api/sessions/current', 'unreachable')) as Record<
     string,
     unknown
   >

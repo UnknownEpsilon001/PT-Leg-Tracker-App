@@ -29,6 +29,7 @@ let ticker: ReturnType<typeof setInterval> | null = null
 let disposed = false
 
 const serverUrl = computed(() => settings.settings.serverUrl.trim())
+const deviceCode = computed(() => settings.settings.deviceCode.trim())
 
 const clock = computed(() => {
   if (elapsedSec.value === null) return '--:--'
@@ -55,7 +56,7 @@ function startPolling() {
 
 async function poll() {
   try {
-    const cur = await getCurrent(serverUrl.value)
+    const cur = await getCurrent(serverUrl.value, deviceCode.value)
     if (disposed) return
     connLost.value = false
     if (cur.state === 'running') {
@@ -90,10 +91,14 @@ async function start() {
     errorMsg.value = 'ยังไม่ได้ตั้งค่าที่อยู่เซิร์ฟเวอร์ (ให้เจ้าหน้าที่ตั้งค่าในเมนูตั้งค่า)'
     return
   }
+  if (!deviceCode.value) {
+    errorMsg.value = 'ยังไม่ได้ตั้งรหัสเครื่อง (ให้เจ้าหน้าที่ตั้งค่าในเมนูตั้งค่า)'
+    return
+  }
   phase.value = 'starting'
   attachAvailable.value = false
   try {
-    await queueStart(serverUrl.value)
+    await queueStart(serverUrl.value, deviceCode.value)
     if (disposed) return
     startPolling()
   } catch (e) {
@@ -102,6 +107,8 @@ async function start() {
     if (e instanceof DeviceError && e.kind === 'busy') {
       errorMsg.value = 'เครื่องกำลังทำงานอยู่แล้ว'
       attachAvailable.value = true
+    } else if (e instanceof DeviceError && e.kind === 'no-device') {
+      errorMsg.value = 'ยังไม่ได้ตั้งรหัสเครื่อง (ให้เจ้าหน้าที่ตั้งค่าในเมนูตั้งค่า)'
     } else {
       errorMsg.value = 'เชื่อมต่อไม่สำเร็จ ลองใหม่ภายหลัง'
     }
@@ -118,7 +125,7 @@ function attach() {
 
 async function stop() {
   try {
-    await queueStop(serverUrl.value)
+    await queueStop(serverUrl.value, deviceCode.value)
   } catch {
     // session already over or server unreachable — flow advances regardless
   }
@@ -146,9 +153,9 @@ async function save() {
 }
 
 onMounted(async () => {
-  if (!serverUrl.value) return
+  if (!serverUrl.value || !deviceCode.value) return
   try {
-    const cur = await getCurrent(serverUrl.value)
+    const cur = await getCurrent(serverUrl.value, deviceCode.value)
     if (!disposed && cur.state === 'running' && phase.value === 'before')
       attachAvailable.value = true
   } catch {

@@ -28,12 +28,12 @@ describe('request timeout', () => {
       })
       vi.stubGlobal('fetch', fn)
 
-      const result = getCurrent('http://dev')
+      const result = getCurrent('http://dev', 'D1')
       const assertion = expect(result).rejects.toMatchObject({ kind: 'unreachable' })
       await vi.advanceTimersByTimeAsync(5000)
       await assertion
       expect(fn).toHaveBeenCalledWith(
-        'http://dev/api/sessions/current',
+        'http://dev/api/sessions/current?deviceId=D1',
         expect.objectContaining({ signal: expect.any(AbortSignal) }),
       )
     } finally {
@@ -53,34 +53,34 @@ describe('DeviceError', () => {
 describe('queueStart', () => {
   it('POSTs to /api/sessions/start and resolves on 202', async () => {
     const fn = mockFetchOnce(jsonRes(202, { queued: true }))
-    await expect(queueStart('http://srv/')).resolves.toBeUndefined()
+    await expect(queueStart('http://srv/', 'D1')).resolves.toBeUndefined()
     expect(fn).toHaveBeenCalledWith(
-      'http://srv/api/sessions/start',
+      'http://srv/api/sessions/start?deviceId=D1',
       expect.objectContaining({ method: 'POST' }),
     )
   })
   it('throws busy on 409', async () => {
     mockFetchOnce(jsonRes(409, { detail: 'session already running' }))
-    await expect(queueStart('http://srv')).rejects.toMatchObject({ kind: 'busy' })
+    await expect(queueStart('http://srv', 'D1')).rejects.toMatchObject({ kind: 'busy' })
   })
   it('throws unreachable on network error', async () => {
     mockFetchOnce(new TypeError('failed'))
-    await expect(queueStart('http://srv')).rejects.toMatchObject({ kind: 'unreachable' })
+    await expect(queueStart('http://srv', 'D1')).rejects.toMatchObject({ kind: 'unreachable' })
   })
 })
 
 describe('queueStop', () => {
   it('POSTs to /api/sessions/stop and resolves on 202', async () => {
     const fn = mockFetchOnce(jsonRes(202, { queued: true }))
-    await expect(queueStop('http://srv/')).resolves.toBeUndefined()
+    await expect(queueStop('http://srv/', 'D1')).resolves.toBeUndefined()
     expect(fn).toHaveBeenCalledWith(
-      'http://srv/api/sessions/stop',
+      'http://srv/api/sessions/stop?deviceId=D1',
       expect.objectContaining({ method: 'POST' }),
     )
   })
   it('throws idle on 409', async () => {
     mockFetchOnce(jsonRes(409, { detail: 'no session running' }))
-    await expect(queueStop('http://srv')).rejects.toMatchObject({ kind: 'idle' })
+    await expect(queueStop('http://srv', 'D1')).rejects.toMatchObject({ kind: 'idle' })
   })
 })
 
@@ -95,7 +95,7 @@ describe('getCurrent', () => {
         deviceOnline: true,
       }),
     )
-    await expect(getCurrent('http://srv')).resolves.toEqual({
+    await expect(getCurrent('http://srv', 'D1')).resolves.toEqual({
       sessionId: 's1',
       state: 'running',
       elapsedSec: 42,
@@ -113,7 +113,7 @@ describe('getCurrent', () => {
         deviceOnline: false,
       }),
     )
-    await expect(getCurrent('http://srv')).resolves.toEqual({
+    await expect(getCurrent('http://srv', 'D1')).resolves.toEqual({
       sessionId: null,
       state: 'starting',
       elapsedSec: 0,
@@ -123,7 +123,7 @@ describe('getCurrent', () => {
   })
   it('throws unreachable on malformed state', async () => {
     mockFetchOnce(jsonRes(200, { state: 'weird' }))
-    await expect(getCurrent('http://srv')).rejects.toMatchObject({ kind: 'unreachable' })
+    await expect(getCurrent('http://srv', 'D1')).rejects.toMatchObject({ kind: 'unreachable' })
   })
 })
 
@@ -151,5 +151,24 @@ describe('claimSession', () => {
 describe('DeviceError offline kind', () => {
   it('accepts the offline kind', () => {
     expect(new DeviceError('offline').kind).toBe('offline')
+  })
+})
+
+describe('deviceId scoping', () => {
+  it('appends deviceId to control requests', async () => {
+    const calls: string[] = []
+    vi.stubGlobal('fetch', (url: string) => {
+      calls.push(url)
+      return Promise.resolve(new Response(JSON.stringify({ queued: true }), { status: 202 }))
+    })
+    await queueStart('http://s', 'KNEE-01')
+    expect(calls[0]).toContain('/api/sessions/start?deviceId=KNEE-01')
+  })
+
+  it('throws no-device when device code is blank', async () => {
+    const fetchSpy = vi.fn()
+    vi.stubGlobal('fetch', fetchSpy)
+    await expect(queueStart('http://s', '  ')).rejects.toMatchObject({ kind: 'no-device' })
+    expect(fetchSpy).not.toHaveBeenCalled()
   })
 })
