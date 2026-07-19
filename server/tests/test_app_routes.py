@@ -82,3 +82,15 @@ def test_claim_unknown_session_404(clock):
 def test_list_requires_patient_code(clock):
     client = make_client(clock)
     assert client.get("/api/sessions").status_code == 422
+
+
+def test_sessions_isolated_by_device_id(clock):
+    client = make_client(clock)
+    client.post("/api/sessions/start", params={"deviceId": "KNEE-01"})
+    # KNEE-02 sees no running/queued state
+    assert client.get(
+        "/api/sessions/current", params={"deviceId": "KNEE-02"}
+    ).json()["state"] == "idle"
+    assert client.get(
+        "/api/sessions/current", params={"deviceId": "KNEE-01"}
+    ).json()["state"] == "starting"
