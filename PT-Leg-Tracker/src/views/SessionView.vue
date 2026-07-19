@@ -194,7 +194,7 @@ onUnmounted(() => {
       <p class="hint">
         {{ connLost ? 'กำลังเชื่อมต่อ…' : 'เครื่องกำลังทำงาน บริหารเข่าตามจังหวะของอุปกรณ์' }}
       </p>
-      <button class="primary wide" @click="stop"><AppIcon name="stop" /> สั่งเครื่องหยุด</button>
+      <button class="accent wide" @click="stop"><AppIcon name="stop" /> สั่งเครื่องหยุด</button>
     </template>
 
     <template v-else>

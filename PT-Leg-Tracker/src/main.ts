@@ -1,3 +1,6 @@
+import '@fontsource/kanit/400.css'
+import '@fontsource/kanit/600.css'
+import '@fontsource/kanit/700.css'
 import './assets/main.css'
 
 import { createApp } from 'vue'

@@ -1,14 +1,16 @@
 :root {
   --c-bg: #f7f5f0;
-  --c-text: #1f2937;
-  --c-primary: #0e7490;
-  --c-primary-dark: #155e75;
+  --c-text: #1c2534;
+  --c-primary: #24395e;
+  --c-primary-dark: #1a2b47;
+  --c-accent: #8c2f39;
+  --c-accent-dark: #6e232c;
   --c-card: #ffffff;
-  --c-border: #d6d3cd;
-  --c-muted: #57534e;
+  --c-border: #c6ccd6;
+  --c-muted: #56607a;
   --radius-card: 1rem;
   --radius-btn: 0.75rem;
-  --shadow-card: 0 1px 3px rgb(0 0 0 / 0.07), 0 1px 2px rgb(0 0 0 / 0.05);
+  --shadow-card: 0 1px 3px rgb(28 37 52 / 0.08), 0 1px 2px rgb(28 37 52 / 0.05);
 }
 
 * {
@@ -27,7 +29,7 @@ html.font-large {
 body {
   background: var(--c-bg);
   color: var(--c-text);
-  font-family: 'Sarabun', 'Noto Sans Thai', system-ui, sans-serif;
+  font-family: 'Kanit', 'Sarabun', 'Noto Sans Thai', system-ui, sans-serif;
   line-height: 1.6;
   -webkit-tap-highlight-color: transparent;
 }
@@ -67,6 +69,12 @@ button.secondary {
   background: var(--c-card);
   border-color: var(--c-primary);
   color: var(--c-primary-dark);
+}
+
+button.accent {
+  background: var(--c-accent);
+  border-color: var(--c-accent-dark);
+  color: #fff;
 }
 
 input,
