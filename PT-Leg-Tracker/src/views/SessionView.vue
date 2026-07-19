@@ -24,6 +24,7 @@ const connLost = ref(false)
 const errorMsg = ref('')
 
 let poller: ReturnType<typeof setInterval> | null = null
+let ticker: ReturnType<typeof setInterval> | null = null
 let disposed = false
 
 const serverUrl = computed(() => settings.settings.serverUrl.trim())
@@ -38,11 +39,17 @@ const clock = computed(() => {
 function stopPolling() {
   if (poller) clearInterval(poller)
   poller = null
+  if (ticker) clearInterval(ticker)
+  ticker = null
 }
 
 function startPolling() {
   stopPolling()
   poller = setInterval(poll, 2000)
+  // smooth 1 s clock between polls; each poll overwrites with the server value
+  ticker = setInterval(() => {
+    if (phase.value === 'running' && elapsedSec.value !== null) elapsedSec.value++
+  }, 1000)
 }
 
 async function poll() {
