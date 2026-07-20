@@ -234,3 +234,110 @@ firmware/
   pairing plan's e2e gate, now with real firmware).
 - Dual-control and offline matrices from the single-board plan are unchanged
   in intent; "touch" now originates on the CYD and crosses the UART.
+
+---
+
+## Addendum 2026-07-20 — limit-switch travel + safety nets
+
+From the user: the fixed `liftSec`/`lowerSec` timers guess the stroke length —
+3 s may be too short (leg not fully extended) or too long (motor drives past
+the end → injury). Replace them with **two limit switches** that report the
+real end-of-travel, plus layered safety so a broken switch can't drive the
+motor forever.
+
+### Revised motion cycle (supersedes the "Motion state machine" section above)
+
+Two limit switches on the **controller** ESP32:
+- `TOP` switch — closes when the leg is fully up.
+- `BOTTOM` switch — closes when the leg is fully down.
+
+`LIFT` and `LOWER` become **switch-terminated** instead of timed; `HOLD` and
+`REST` stay timed:
+
+```
+LIFT   UP relay ON    until TOP switch pressed     (safety cap maxTravelSec)
+HOLD   all OFF         holdSec   (default 10 s)
+LOWER  DOWN relay ON   until BOTTOM switch pressed  (safety cap maxTravelSec)
+REST   all OFF         restSec   (default 10 s)  → reps++ → LIFT ...
+```
+
+- `liftSec` / `lowerSec` settings are **removed**; replaced by one
+  `maxTravelSec` setting (NVS, default 8 s) — the per-stroke safety ceiling,
+  not the normal stroke time. `holdSec` / `restSec` unchanged.
+- Rep still increments at end of REST. `elapsedSec` semantics unchanged.
+- HOLD/REST still = both valves closed (traps pressure → holds position).
+
+### New `FAULT` phase
+
+The `Phase` enum gains **`Fault`** (append after `SafeLower`; the UART
+`phase` ordinal note "0=Idle … 5=SafeLower" becomes "… 5=SafeLower, 6=Fault").
+`FAULT` is a **latched** stop: relays OFF, session ended, no motion until the
+session is restarted (touch/app start). The CYD renders a red fault screen
+("ตรวจสอบสวิตช์ / switch fault"); the controller sends the v3 `stopped` event
+with final elapsed/reps.
+
+### Safety nets
+
+1. **Max-travel timeout** — if a switch is not reached within `maxTravelSec`
+   of energizing its relay → **FAULT** (abort, do not proceed). This is the
+   backstop for a stuck, broken, or miswired switch.
+2. **Both switches pressed simultaneously** — physically impossible (can't be
+   fully up and fully down at once) → **FAULT** (short / wiring error).
+3. **Switch type is configurable** — `#define SWITCH_NC` in `config.h`
+   selects normally-closed vs normally-open, decided at wiring time:
+   - **NC (recommended if available):** switch wired so *pressed = open*; a
+     cut/broken wire reads the same as pressed → the relay stops rather than
+     driving blind. Fail-safe on wire break.
+   - **NO (plain 2-pin button):** switch to GND, `INPUT_PULLUP`; not-pressed =
+     HIGH, pressed = LOW. A broken wire reads "not pressed" → the max-travel
+     timeout (net 1) still catches it and FAULTs. One fewer layer, still safe.
+   - `SWITCH_NC` only flips the read polarity of the debounced input; all
+     state-machine logic is written against a logical `pressed` boolean.
+4. **Debounce** — each switch must read stable for `SWITCH_DEBOUNCE_MS`
+   (default 25 ms) before a change counts, so electrical noise can't false-fire
+   a phase transition or a spurious FAULT.
+5. **Fault latches** — FAULT never auto-clears into motion; only a fresh
+   start clears it.
+6. **UART-loss safe-stop** — unchanged (controller safe-lowers/stops if the
+   CYD is silent > 2 s while running).
+7. **Relays OFF at boot** — unchanged, before anything else in `setup()`.
+8. **Actuator-layer relay-on cap** — `actuator` enforces that no single relay
+   stays energized longer than `maxTravelSec`, independent of the session
+   state machine. Redundant with net 1 by design: if the state-machine logic
+   has a bug and never commands OFF, the actuator still cuts power. On hitting
+   this cap the actuator turns the relay OFF and signals the session layer,
+   which enters FAULT.
+
+### Stop semantics (clarifies the "safe-lower" rule above)
+
+- **Clean stop** (app command or touch) mid-stroke → **safe-lower**: if the leg
+  is up (LIFT/HOLD), energize DOWN until BOTTOM switch (or `maxTravelSec` cap),
+  then relays OFF → IDLE; `stopped` sent after lowering. If already
+  LOWER/REST, finish lowering / go straight to OFF.
+- **FAULT** → **hard halt**: relays OFF immediately, no safe-lower — a
+  suspected-broken switch can't be trusted to terminate a lowering stroke; the
+  actuator relay-on cap is the only thing allowed to bound motion at that point,
+  and the leg is left where it is with power cut. Distinct from a clean stop.
+
+### Pins & config (controller)
+
+- `TOP` and `BOTTOM` on two free controller GPIOs, `INPUT_PULLUP`, defined in
+  `config.h` beside the relay pins (exact GPIOs pinned in the controller
+  README at wiring time).
+- New `config.h` symbols: `PIN_SWITCH_TOP`, `PIN_SWITCH_BOTTOM`, `SWITCH_NC`
+  (define = NC, undef = NO), `SWITCH_DEBOUNCE_MS` (25).
+- New setting: `maxTravelSec` (replaces `liftSec`/`lowerSec`); the settings
+  screen's four cycle fields become three (maxTravel / hold / rest), and the
+  UART `settings` message swaps `lift`/`lower` for `maxTravel`.
+
+### Testing delta
+
+- **Switch termination:** LIFT ends the instant TOP closes (not at a fixed
+  time); LOWER ends on BOTTOM. Verify with the switch pressed early and late.
+- **Broken-switch → FAULT:** disconnect TOP mid-LIFT → relay cuts at
+  `maxTravelSec`, FAULT screen, `stopped` sent. Repeat for BOTTOM.
+- **Both-pressed → FAULT:** jumper both switches closed → immediate FAULT.
+- **NC vs NO:** build with and without `SWITCH_NC`; confirm logical `pressed`
+  reads correctly and a pulled wire is safe under NC.
+- Supersedes the old single-board "Safety: power-pull mid-LIFT" item; that
+  check now also confirms FAULT latches (no motion until restart).
