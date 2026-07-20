@@ -93,9 +93,10 @@ datetime,patientCode,patientName,durationSec,reps,fault
   selected.
 - `fault` — `1` if the session ended in the FAULT phase (limit-switch safety),
   else `0`. Faulted sessions are still logged.
-- Names may contain Thai; CSV values with a comma or quote are wrapped per RFC
-  4180 (double-quote, doubled internal quotes). Thai commas are not ASCII `,`
-  so ordinary Thai names need no quoting, but the writer quotes defensively.
+- Names may contain Thai. To keep the embedded reader/writer trivial, the CYD
+  **rejects ASCII commas and newlines on the add-patient form** (Thai text uses
+  no ASCII `,`), so no field ever needs quote-escaping and a simple positional
+  split (first comma / last comma) parses every line. No RFC-4180 quoting.
 
 ## Time (DS3231 on the controller)
 
