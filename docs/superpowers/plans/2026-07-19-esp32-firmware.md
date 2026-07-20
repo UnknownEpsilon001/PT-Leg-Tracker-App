@@ -28,6 +28,17 @@
 > - Then do **Addendum Tasks 10–12** (UART link, per-board wiring, device code)
 >   and the revised hardware test (Addendum Task 13, replacing Task 9).
 
+> **2026-07-20 SAFETY UPDATE — also read before executing.** Timed `LIFT`/`LOWER`
+> are replaced by **two limit switches** (TOP/BOTTOM) that report real
+> end-of-travel, plus a `FAULT` phase and layered safety so a broken switch
+> can't drive the motor forever. See **Addendum 2026-07-20 (end of this file)**
+> and the spec's matching addendum. It **overrides** parts of Tasks 2, 3, 4, 7,
+> 8, 10, 11 and adds a new **switches** module + expanded hardware checks —
+> apply each override when you reach the task it names. Net effect: the
+> `liftSec`/`lowerSec` settings are gone (replaced by one `maxTravelSec` safety
+> cap); `CycleCfg` and `SessionSM::tick` change signature; `Phase` gains
+> `Fault`.
+
 ## Global Constraints
 
 - v3 server contract is FROZEN (`2026-07-13-server-mediated-device-control-design.md`): poll 1 s, heartbeat 1 s running / 5 s idle, event on every transition, consume-on-read commands.
@@ -1780,3 +1791,533 @@ set), CYD flashed, UART cross-wired (controller 16/17 ↔ CYD 22/27, common GND)
 git add firmware
 git commit -m "fix(firmware): two-board integration fixups"
 ```
+
+---
+
+## Addendum 2026-07-20 — limit-switch travel + FAULT + safety nets
+
+Spec: `2026-07-19-esp32-firmware-design.md` (Addendum 2026-07-20). Replaces the
+fixed `liftSec`/`lowerSec` timers with two limit switches, adds a latched
+`FAULT` phase, and layers 8 safety nets. All new hardware and logic live on the
+**controller** (relays board); the CYD (display) changes are only the settings
+field count and the FAULT rendering.
+
+**Apply each override below when you reach the original task it names.** The two
+brand-new modules (`switches.{h,cpp}`) and the fully-rewritten `session.{h,cpp}`
+are given in full; everything else is a targeted diff against the code already
+in this plan.
+
+**Updated safety-invariant list (extends Global Constraints):**
+- UP+DOWN relays never both energized; all relays OFF at boot before anything
+  else (unchanged).
+- Clean stop = safe-lower first (now switch-terminated); **FAULT = hard halt,
+  no safe-lower** — a suspected-broken switch is not trusted to terminate a
+  stroke.
+- No single relay stays energized longer than `maxTravelSec` — enforced twice:
+  by the session SM's switch-timeout, and independently by the actuator cap.
+
+---
+
+### Override 2A (Task 2 `config.h`) — switch pins + travel cap, drop lift/lower defaults
+
+In `config.h`, **remove** `DEFAULT_LIFT_SEC` and `DEFAULT_LOWER_SEC`, and add
+after the relay pins / `RELAY_ACTIVE_LOW` line:
+
+```cpp
+// limit switches (controller GPIOs that support INPUT_PULLUP — NOT 34/35/36/39)
+#define PIN_SWITCH_TOP 32     // closes when leg fully up
+#define PIN_SWITCH_BOTTOM 33  // closes when leg fully down
+// #define SWITCH_NC          // define if switches are normally-closed (fail-safe on wire break)
+#define SWITCH_DEBOUNCE_MS 25
+
+// safety cap: max time a stroke (LIFT/LOWER/SAFE-LOWER) may drive before FAULT
+#define DEFAULT_MAX_TRAVEL_SEC 8
+```
+
+The kept cycle defaults become just `DEFAULT_HOLD_SEC 10` and
+`DEFAULT_REST_SEC 10`.
+
+---
+
+### Override 2B (Task 2 `settings.*`) — `maxTravelSec` replaces `liftSec`/`lowerSec`
+
+In `settings.h`, change the `DeviceSettings` cycle fields:
+
+```cpp
+  uint16_t maxTravelSec, holdSec, restSec;   // was: liftSec, holdSec, lowerSec, restSec
+```
+
+In `settings.cpp` `settingsLoad`, replace the `lift`/`lower` reads:
+
+```cpp
+  s.maxTravelSec = p.getUShort("maxtravel", DEFAULT_MAX_TRAVEL_SEC);
+  s.holdSec = p.getUShort("hold", DEFAULT_HOLD_SEC);
+  s.restSec = p.getUShort("rest", DEFAULT_REST_SEC);
+```
+
+In `settingsSave`, replace the `lift`/`lower` puts:
+
+```cpp
+  p.putUShort("maxtravel", s.maxTravelSec);
+  p.putUShort("hold", s.holdSec);
+  p.putUShort("rest", s.restSec);
+```
+
+In the Task 2 `.ino` log line, drop the four-cycle print; use
+`cycle max/hold/rest=%u/%u/%u` with `maxTravelSec, holdSec, restSec`.
+(Task 12's separate `deviceCode` additions to `settings.*` are unaffected.)
+
+- [ ] After 2A+2B: `arduino-cli compile --fqbn esp32:esp32:esp32 firmware/pt-leg-controller` → success. Commit `feat(firmware): limit-switch pins + maxTravel setting`.
+
+---
+
+### New module (build with Task 2, before Task 4) — `switches.{h,cpp}` (controller)
+
+Debounced, polarity-configurable read of the two limit switches. Logical
+`pressed` hides the NC/NO difference from the state machine.
+
+**`firmware/pt-leg-controller/switches.h`**
+
+```cpp
+#pragma once
+#include <stdint.h>
+
+// Reads PIN_SWITCH_TOP / PIN_SWITCH_BOTTOM (INPUT_PULLUP), debounced.
+// SWITCH_NC flips read polarity: NC pressed == open == HIGH; NO pressed == LOW.
+void switchesBegin();
+void switchesPoll(uint32_t nowMs);  // call every loop before SessionSM::tick
+bool switchTop();                   // debounced logical "pressed"
+bool switchBottom();
+```
+
+**`firmware/pt-leg-controller/switches.cpp`**
+
+```cpp
+#include "switches.h"
+#include <Arduino.h>
+#include "config.h"
+
+struct Deb {
+  uint8_t pin;
+  bool stable;      // debounced logical pressed
+  bool lastRaw;     // last raw logical read
+  uint32_t changed; // ms of last raw change
+};
+
+static Deb top{PIN_SWITCH_TOP, false, false, 0};
+static Deb bot{PIN_SWITCH_BOTTOM, false, false, 0};
+
+static bool rawPressed(uint8_t pin) {
+  int level = digitalRead(pin);
+#ifdef SWITCH_NC
+  return level == HIGH;  // normally-closed: pressed (or broken wire) reads open/HIGH
+#else
+  return level == LOW;   // normally-open to GND with pullup: pressed reads LOW
+#endif
+}
+
+static void poll(Deb& d, uint32_t nowMs) {
+  bool raw = rawPressed(d.pin);
+  if (raw != d.lastRaw) {
+    d.lastRaw = raw;
+    d.changed = nowMs;
+  } else if (nowMs - d.changed >= SWITCH_DEBOUNCE_MS) {
+    d.stable = raw;
+  }
+}
+
+void switchesBegin() {
+  pinMode(PIN_SWITCH_TOP, INPUT_PULLUP);
+  pinMode(PIN_SWITCH_BOTTOM, INPUT_PULLUP);
+}
+
+void switchesPoll(uint32_t nowMs) {
+  poll(top, nowMs);
+  poll(bot, nowMs);
+}
+
+bool switchTop() { return top.stable; }
+bool switchBottom() { return bot.stable; }
+```
+
+- [ ] Compile controller → success. Commit `feat(firmware): debounced limit-switch reader (NC/NO configurable)`.
+
+---
+
+### Override 3 (Task 3 `actuator.*`) — relay-on cap backstop (safety net 8)
+
+Add to `actuator.h` after the existing declarations:
+
+```cpp
+void actuatorSetCap(uint32_t capMs);  // max continuous energize before forced off; 0 = disabled
+void actuatorTick(uint32_t nowMs);    // enforces the cap; call every loop
+bool actuatorCapTripped();            // latched true after a cap trip until next up()/down()
+```
+
+In `actuator.cpp`, add module state near `static ActState state = ACT_OFF;`:
+
+```cpp
+static uint32_t capMs = 0, energizeStart = 0;
+static bool capTripped = false;
+```
+
+In `actuatorUp()` and `actuatorDown()`, after setting `state`, add:
+
+```cpp
+  energizeStart = millis();
+  capTripped = false;
+```
+
+Append these functions:
+
+```cpp
+void actuatorSetCap(uint32_t ms) { capMs = ms; }
+
+void actuatorTick(uint32_t nowMs) {
+  if (state == ACT_OFF || capMs == 0) return;
+  if (nowMs - energizeStart >= capMs) {
+    write(OFF, OFF);  // OFF here is the file-scope relay-off level, not ACT_OFF
+    state = ACT_OFF;
+    capTripped = true;
+  }
+}
+
+bool actuatorCapTripped() { return capTripped; }
+```
+
+The cap is set slightly **above** `maxTravelSec` (see Override 11) so the session
+SM's own switch-timeout normally fires first; the actuator cap only catches a
+state-machine bug that fails to command OFF.
+
+- [ ] Compile controller → success. Commit `feat(firmware): actuator relay-on cap backstop`.
+
+---
+
+### Override 4 (Task 4 `session.*`) — FULL REPLACEMENT: switch-terminated cycle + FAULT
+
+Replace `session.h` and `session.cpp` entirely with the code below. `Phase`
+gains `Fault`; `CycleCfg` drops `liftMs`/`lowerMs` for one `maxTravelMs`;
+`tick` now takes the two debounced switch booleans; `forceFault` lets the
+actuator cap trip the SM.
+
+**`firmware/pt-leg-controller/session.h`**
+
+```cpp
+#pragma once
+#include <stdint.h>
+
+enum class Phase { Idle, Lift, Hold, Lower, Rest, SafeLower, Fault };
+
+struct CycleCfg {
+  uint32_t maxTravelMs;  // LIFT/LOWER/SafeLower safety cap
+  uint32_t holdMs;
+  uint32_t restMs;
+};
+
+class SessionSM {
+ public:
+  CycleCfg cfg{8000, 10000, 10000};
+  void start(uint32_t nowMs);        // Idle/Fault -> Lift (start also clears a latched Fault)
+  void requestStop(uint32_t nowMs);  // clean stop -> SafeLower (or straight off from Rest)
+  void forceFault(uint32_t nowMs);   // external safety trip (actuator cap)
+  void tick(uint32_t nowMs, bool topPressed, bool bottomPressed);
+  bool running() const { return ph != Phase::Idle && ph != Phase::Fault; }
+  bool faulted() const { return ph == Phase::Fault; }
+  Phase phase() const { return ph; }
+  uint32_t elapsedSec(uint32_t nowMs) const;
+  uint16_t reps() const { return repCount; }
+  bool takeStartedEdge();
+  bool takeStoppedEdge();  // fires after safe-lower AND on entering FAULT
+  uint32_t finalElapsedSec() const { return finalElapsed; }
+  uint16_t finalReps() const { return finalRepCount; }
+
+ private:
+  void enter(Phase p, uint32_t nowMs);
+  void finish(uint32_t nowMs, Phase to);  // record final elapsed/reps, raise stoppedEdge, go to `to`
+  Phase ph = Phase::Idle;
+  uint32_t phaseStart = 0, sessionStart = 0;
+  uint16_t repCount = 0;
+  uint32_t finalElapsed = 0;
+  uint16_t finalRepCount = 0;
+  bool startedEdge = false, stoppedEdge = false;
+};
+```
+
+**`firmware/pt-leg-controller/session.cpp`**
+
+```cpp
+#include "session.h"
+
+void SessionSM::enter(Phase p, uint32_t nowMs) {
+  ph = p;
+  phaseStart = nowMs;
+}
+
+void SessionSM::finish(uint32_t nowMs, Phase to) {
+  finalElapsed = (ph == Phase::Idle) ? 0 : (nowMs - sessionStart) / 1000;
+  finalRepCount = repCount;
+  stoppedEdge = true;
+  enter(to, nowMs);
+}
+
+void SessionSM::start(uint32_t nowMs) {
+  if (running()) return;  // ignore if already running; allowed from Idle or Fault
+  sessionStart = nowMs;
+  repCount = 0;
+  startedEdge = true;
+  enter(Phase::Lift, nowMs);
+}
+
+void SessionSM::requestStop(uint32_t nowMs) {
+  switch (ph) {
+    case Phase::Idle:
+    case Phase::Fault:
+      return;  // nothing to stop; a latched Fault clears only via start()
+    case Phase::Lift:
+    case Phase::Hold:
+    case Phase::Lower:
+      enter(Phase::SafeLower, nowMs);  // bring the leg down, then stop
+      return;
+    case Phase::Rest:
+      finish(nowMs, Phase::Idle);  // already down
+      return;
+    case Phase::SafeLower:
+      return;  // already lowering to a clean stop
+  }
+}
+
+void SessionSM::forceFault(uint32_t nowMs) {
+  if (ph == Phase::Idle || ph == Phase::Fault) return;
+  finish(nowMs, Phase::Fault);
+}
+
+void SessionSM::tick(uint32_t nowMs, bool topPressed, bool bottomPressed) {
+  // net 2: both switches pressed at once is physically impossible -> wiring fault
+  if (running() && topPressed && bottomPressed) {
+    finish(nowMs, Phase::Fault);
+    return;
+  }
+  uint32_t dt = nowMs - phaseStart;
+  switch (ph) {
+    case Phase::Idle:
+    case Phase::Fault:
+      return;
+    case Phase::Lift:
+      if (topPressed) enter(Phase::Hold, nowMs);            // fully up
+      else if (dt >= cfg.maxTravelMs) finish(nowMs, Phase::Fault);  // net 1
+      return;
+    case Phase::Hold:
+      if (dt >= cfg.holdMs) enter(Phase::Lower, nowMs);
+      return;
+    case Phase::Lower:
+      if (bottomPressed) enter(Phase::Rest, nowMs);         // fully down
+      else if (dt >= cfg.maxTravelMs) finish(nowMs, Phase::Fault);  // net 1
+      return;
+    case Phase::Rest:
+      if (dt >= cfg.restMs) {
+        repCount++;
+        enter(Phase::Lift, nowMs);
+      }
+      return;
+    case Phase::SafeLower:
+      // clean stop: lower until bottom switch OR the cap, then Idle (NOT Fault)
+      if (bottomPressed || dt >= cfg.maxTravelMs) finish(nowMs, Phase::Idle);
+      return;
+  }
+}
+
+uint32_t SessionSM::elapsedSec(uint32_t nowMs) const {
+  if (ph == Phase::Idle) return 0;
+  if (ph == Phase::Fault) return finalElapsed;  // frozen at fault time
+  return (nowMs - sessionStart) / 1000;
+}
+
+bool SessionSM::takeStartedEdge() {
+  bool v = startedEdge;
+  startedEdge = false;
+  return v;
+}
+
+bool SessionSM::takeStoppedEdge() {
+  bool v = stoppedEdge;
+  stoppedEdge = false;
+  return v;
+}
+```
+
+**Task 4 `.ino` wiring:** `applyActuator()` is unchanged (Fault falls through to
+the `default: actuatorOff()` case — relays off while faulted). Update the Task 4
+temporary control loop's `tick` call to pass switch state. In the single-board
+Task 4 `.ino`, add `#include "switches.h"`, call `switchesBegin()` in `setup()`
+and, in `loop()`, `switchesPoll(now);` then
+`gSession.tick(now, switchTop(), switchBottom());`. Set
+`gSession.cfg = {gSettings.maxTravelSec * 1000u, gSettings.holdSec * 1000u, gSettings.restSec * 1000u};`.
+(The real controller wiring is Override 11; this keeps Task 4's bench build
+compiling.)
+
+- [ ] Compile → success. Commit `feat(firmware): switch-terminated motion cycle with latched FAULT`.
+
+---
+
+### Override 7 & 8 (Task 7/8 `ui.*`) — FAULT rendering + settings has 3 cycle fields
+
+**`phaseName` (Task 7 English, then Task 8 Thai)** — add a `Fault` case:
+
+```cpp
+    case Phase::Fault: return "SWITCH FAULT";   // Task 7 (English)
+    case Phase::Fault: return "สวิตช์ผิดพลาด";   // Task 8 (Thai) — replaces the English line
+```
+
+**`uiUpdateMain` (Task 7)** — handle the fault look. Replace the button
+label/color lines with:
+
+```cpp
+  bool fault = (phase == Phase::Fault);
+  lv_label_set_text(lblGo, fault ? "เริ่มใหม่" : (running ? "STOP" : "START"));  // Task 8 swaps STOP/START to หยุด/เริ่ม
+  uint32_t goCol = fault ? 0xb00020 : (running ? 0x8c2f39 : 0x2e7d32);
+  lv_obj_set_style_bg_color(btnGo, lv_color_hex(goCol), 0);
+  lv_obj_set_style_text_color(lblPhase, lv_color_hex(fault ? 0xb00020 : 0x000000), 0);
+```
+
+Because `running()` is false in Fault, `goClicked` routes the "เริ่มใหม่"
+(restart) press to `cbStart` → `SessionSM::start`, which clears the latched
+fault. No new callback needed.
+
+**Settings screen (Task 8)** — the four cycle spinboxes become **three**
+(maxTravel / hold / rest). In `uiOpenSettings`, drop `spinLift` and `spinLower`,
+rename the remaining two around one new `spinMax`:
+
+```cpp
+static lv_obj_t *spinMax, *spinHold, *spinRest;   // was spinLift/spinHold/spinLower/spinRest
+...
+  spinMax = makeSpin(row, cur.maxTravelSec);
+  spinHold = makeSpin(row, cur.holdSec);
+  spinRest = makeSpin(row, cur.restSec);
+```
+
+Widen the `makeSpin` range for the travel cap: `lv_spinbox_set_range(sp, 1, 60);`
+already covers 8. In `saveClicked`:
+
+```cpp
+  s.maxTravelSec = (uint16_t)lv_spinbox_get_value(spinMax);
+  s.holdSec = (uint16_t)lv_spinbox_get_value(spinHold);
+  s.restSec = (uint16_t)lv_spinbox_get_value(spinRest);
+```
+
+- [ ] Compile display → success. Commit folds into the Task 7/8 commits (no extra commit).
+
+---
+
+### Override 10 (Task 10 `link.*` + `link-protocol.md`) — settings carries `maxtravel`; phase 0..6
+
+In `LinkSettings` (both the struct and its uses), replace `lift`/`lower`:
+
+```cpp
+  uint16_t maxTravel, hold, rest;   // was lift, hold, lower, rest
+```
+
+In `Link::sendSettings`, replace the `lift`/`lower` keys:
+
+```cpp
+  d["maxtravel"] = s.maxTravel; d["hold"] = s.hold; d["rest"] = s.rest;
+```
+
+In `Link::dispatch`'s `settings` branch, replace the `lift`/`lower` reads:
+
+```cpp
+    s.maxTravel = d["maxtravel"] | 0;
+    s.hold = d["hold"] | 0;
+    s.rest = d["rest"] | 0;
+```
+
+In `link-protocol.md`, update the `settings` message schema (`maxtravel` in
+place of `lift`/`lower`) and note **`phase` = `Phase` ordinal 0..6** (…5=SafeLower,
+6=Fault).
+
+- [ ] Compile controller → success. Commit `feat(firmware): UART settings carries maxTravel; FAULT phase ordinal`.
+
+---
+
+### Override 11 (Task 11 controller `.ino`) — wire switches, tick signature, actuator cap
+
+In `firmware/pt-leg-controller/pt-leg-controller.ino`:
+
+Add the include: `#include "switches.h"`.
+
+In `setup()`, after `actuatorBegin();`:
+
+```cpp
+  switchesBegin();
+```
+
+Set cfg and the actuator cap (cap = maxTravel + 500 ms so the SM wins normally):
+
+```cpp
+  gSession.cfg = {gSettings.maxTravelSec * 1000u, gSettings.holdSec * 1000u,
+                  gSettings.restSec * 1000u};
+  actuatorSetCap(gSettings.maxTravelSec * 1000u + 500u);
+```
+
+In `loop()`, replace `gSession.tick(now);` with the switch-fed poll+tick, and
+add the actuator cap enforcement right after `applyActuator();`:
+
+```cpp
+  switchesPoll(now);
+  gSession.tick(now, switchTop(), switchBottom());
+  applyActuator();
+  actuatorTick(now);
+  if (actuatorCapTripped()) gSession.forceFault(now);  // backstop: SM never commanded OFF
+```
+
+Update `applySettings`, `onLinkSettings`, and `currentAsLink` to use
+`maxTravelSec` in place of `liftSec`/`lowerSec`:
+
+```cpp
+  // applySettings():
+  gSession.cfg = {gSettings.maxTravelSec * 1000u, gSettings.holdSec * 1000u,
+                  gSettings.restSec * 1000u};
+  actuatorSetCap(gSettings.maxTravelSec * 1000u + 500u);
+  // onLinkSettings():  d.maxTravelSec = s.maxTravel; d.holdSec = s.hold; d.restSec = s.rest;
+  // currentAsLink():   s.maxTravel = gSettings.maxTravelSec; s.hold = gSettings.holdSec; s.rest = gSettings.restSec;
+```
+
+(The UART-loss safe-stop, poll/heartbeat/event, and `sendState` blocks are
+unchanged — `sendState` already sends `(int)gSession.phase()`, which now yields
+6 for Fault.)
+
+The display `.ino` (Task 11 Step 3) needs no motion change; it just renders the
+`Fault` phase it receives. In Task 12, **both** the display-side mappers change
+their cycle fields from the four old ones to the three new ones:
+
+```cpp
+  // onSaveFromUi():        ls.maxTravel = s.maxTravelSec; ls.hold = s.holdSec; ls.rest = s.restSec;
+  // onLinkSettingsReply(): gLast.maxTravelSec = s.maxTravel; gLast.holdSec = s.hold; gLast.restSec = s.rest;
+```
+
+- [ ] Compile both sketches → success. Commit `feat(firmware): controller wires limit switches + actuator cap into motion`.
+
+---
+
+### Override 13 (Task 13 hardware matrix) — switch + FAULT checks
+
+Add these steps to the two-board integration test:
+
+- [ ] **Switch termination:** LIFT ends the instant TOP closes (press it early,
+  then late — HOLD begins on contact, not at a fixed time); LOWER ends on BOTTOM.
+- [ ] **Broken-switch → FAULT (net 1):** disconnect TOP mid-LIFT → UP relay cuts
+  at `maxTravelSec`, CYD shows the red fault screen, server receives `stopped`
+  with final elapsed/reps. Repeat for BOTTOM mid-LOWER. Confirm FAULT **latches**
+  (no motion until "เริ่มใหม่"/start).
+- [ ] **Both-pressed → FAULT (net 2):** jumper both switch inputs to their
+  pressed level while running → immediate FAULT, relays off.
+- [ ] **Actuator cap (net 8):** temporarily comment out the switch-timeout FAULT
+  in `session.cpp` (or hold a switch un-pressed past the cap) → the actuator cap
+  forces the relay off ~500 ms after `maxTravelSec` and `forceFault` latches.
+  Restore the code after.
+- [ ] **NC vs NO:** build and flash once with `SWITCH_NC` defined and once
+  undefined; confirm logical `pressed` reads correctly for the switch type on
+  the bench, and (NC) that unplugging a switch reads as pressed → safe stop.
+- [ ] **Clean stop still safe-lowers:** stop mid-LIFT/HOLD → DOWN drives until
+  BOTTOM switch (or cap), then OFF → Idle; distinct from a FAULT hard-halt.
+
+- [ ] Commit fixups `fix(firmware): limit-switch + fault integration fixups`.
