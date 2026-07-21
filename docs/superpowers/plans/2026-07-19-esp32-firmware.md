@@ -39,6 +39,27 @@
 > cap); `CycleCfg` and `SessionSM::tick` change signature; `Phase` gains
 > `Fault`.
 
+## Execution status — 2026-07-21 (branch `feature/esp32-firmware`)
+
+DONE (every software task; both sketches compile clean):
+Tasks 1–8, 10–12 plus Overrides 2A/2B, 3, 4, 7/8, 10, 11 and the new
+`switches.{h,cpp}` module. Task 9 was superseded by Task 13 and skipped.
+
+NOT DONE — needs the physical boards on the bench:
+**Task 13** (two-board hardware integration + Override 13's switch/FAULT
+matrix), and every "on-device check" step inside Tasks 3–8 that the plan
+already allowed deferring to it.
+
+Deviations from the plan as written, all recorded in `firmware/README.md`:
+- Builds pin `PartitionScheme=huge_app`. The display sketch is 1.28 MB and the
+  default OTA layout caps the app at 1.31 MB (97% full, no room for the SD
+  logging plan). `huge_app` gives 3 MB; this design never uses OTA.
+- `session.h` and `settings.h` were copied into `pt-leg-display/` at Tasks 7/8
+  rather than Task 11 — the UI needs `Phase` and `DeviceSettings` that early.
+- Fonts: `font_thai.c` generated from Kanit Regular at size 24, bpp 2.
+- lvgl was 9.5.0 in the shared Arduino libraries dir and got downgraded to the
+  pinned 8.4.0. TFT_eSPI's stock `User_Setup.h` is backed up as `User_Setup.h.orig`.
+
 ## Global Constraints
 
 - v3 server contract is FROZEN (`2026-07-13-server-mediated-device-control-design.md`): poll 1 s, heartbeat 1 s running / 5 s idle, event on every transition, consume-on-read commands.
