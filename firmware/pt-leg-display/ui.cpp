@@ -4,8 +4,6 @@
 #include <XPT2046_Touchscreen.h>
 #include <WiFi.h>  // settings screen scans for SSIDs
 
-LV_FONT_DECLARE(font_thai)
-
 // CYD touch pins (separate SPI bus)
 #define XPT2046_IRQ 36
 #define XPT2046_MOSI 32
@@ -13,12 +11,24 @@ LV_FONT_DECLARE(font_thai)
 #define XPT2046_CLK 25
 #define XPT2046_CS 33
 
+// App palette (matches the phone app's v4 rebrand)
+#define COL_BG 0x1a2b47      // navy-dark  — screen background
+#define COL_SURFACE 0x24395e // navy       — cards, inputs
+#define COL_TEXT 0xf2f5f9    // near-white — primary text
+#define COL_MUTED 0xc6ccd6   // silver     — secondary text
+#define COL_STOP 0x8c2f39    // maroon     — stop
+#define COL_FAULT 0xb00020   // red        — fault
+
 static TFT_eSPI tft;
 static SPIClass touchSpi(VSPI);
 static XPT2046_Touchscreen touch(XPT2046_CS, XPT2046_IRQ);
 
 static lv_disp_draw_buf_t drawBuf;
-static lv_color_t buf[240 * 40];
+// A taller buffer means far fewer flush round-trips per frame, which is most of
+// the sluggishness on this panel. 240x100x2B = 48 KB — too big to sit in static
+// DRAM next to LVGL's own 48 KB pool, so it comes off the heap in uiBegin().
+#define DRAW_BUF_LINES 100
+static lv_color_t* buf = nullptr;
 
 static void buildMain();
 
@@ -26,7 +36,10 @@ static void flushCb(lv_disp_drv_t* disp, const lv_area_t* area, lv_color_t* pixe
   uint32_t w = area->x2 - area->x1 + 1, h = area->y2 - area->y1 + 1;
   tft.startWrite();
   tft.setAddrWindow(area->x1, area->y1, w, h);
-  tft.pushColors((uint16_t*)&pixels->full, w * h, true);
+  // swap=false: lv_conf.h sets LV_COLOR_16_SWAP 1, so LVGL already hands us
+  // byte-swapped pixels. Swapping again here mangles every colour and shows up
+  // as fringed outlines around anti-aliased text.
+  tft.pushColors((uint16_t*)&pixels->full, w * h, false);
   tft.endWrite();
   lv_disp_flush_ready(disp);
 }
@@ -43,6 +56,29 @@ static void touchCb(lv_indev_drv_t*, lv_indev_data_t* data) {
   }
 }
 
+// ------------------------------------------------------------------- helpers
+
+static void styleScreen(lv_obj_t* scr) {
+  lv_obj_set_style_bg_color(scr, lv_color_hex(COL_BG), 0);
+  lv_obj_set_style_text_color(scr, lv_color_hex(COL_TEXT), 0);
+  lv_obj_set_style_border_width(scr, 0, 0);
+  lv_obj_set_style_pad_all(scr, 0, 0);
+}
+
+static lv_obj_t* makeBtn(lv_obj_t* parent, const char* text, uint32_t colour,
+                         const lv_font_t* font, lv_event_cb_t cb) {
+  lv_obj_t* b = lv_btn_create(parent);
+  lv_obj_set_style_bg_color(b, lv_color_hex(colour), 0);
+  lv_obj_set_style_radius(b, 8, 0);
+  lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, nullptr);
+  lv_obj_t* l = lv_label_create(b);
+  lv_obj_set_style_text_font(l, font, 0);
+  lv_obj_set_style_text_color(l, lv_color_hex(COL_TEXT), 0);
+  lv_label_set_text(l, text);
+  lv_obj_center(l);
+  return b;
+}
+
 void uiBegin() {
   tft.init();
   tft.setRotation(1); // landscape 320x240
@@ -51,7 +87,15 @@ void uiBegin() {
   touch.setRotation(1);
 
   lv_init();
-  lv_disp_draw_buf_init(&drawBuf, buf, nullptr, 240 * 40);
+  uint32_t lines = DRAW_BUF_LINES;
+  buf = (lv_color_t*)heap_caps_malloc(240 * lines * sizeof(lv_color_t), MALLOC_CAP_DMA);
+  while (!buf && lines > 10) {  // degrade rather than boot-loop on a tight heap
+    lines /= 2;
+    buf = (lv_color_t*)heap_caps_malloc(240 * lines * sizeof(lv_color_t), MALLOC_CAP_DMA);
+  }
+  Serial.printf("lvgl draw buffer: %lu lines, free heap %lu\n", (unsigned long)lines,
+                (unsigned long)ESP.getFreeHeap());
+  lv_disp_draw_buf_init(&drawBuf, buf, nullptr, 240 * lines);
 
   static lv_disp_drv_t dispDrv;
   lv_disp_drv_init(&dispDrv);
@@ -99,44 +143,42 @@ static void gearClicked(lv_event_t*) {
 
 static void buildMain() {
   scrMain = lv_obj_create(nullptr);
+  styleScreen(scrMain);
+
+  lblStatus = lv_label_create(scrMain);
+  lv_obj_set_style_text_color(lblStatus, lv_color_hex(COL_MUTED), 0);
+  lv_label_set_text(lblStatus, "");
+  lv_obj_align(lblStatus, LV_ALIGN_TOP_LEFT, 8, 10);
+
+  lv_obj_t* gear = makeBtn(scrMain, LV_SYMBOL_SETTINGS, COL_SURFACE,
+                           &lv_font_montserrat_20, gearClicked);
+  lv_obj_set_size(gear, 48, 40);
+  lv_obj_align(gear, LV_ALIGN_TOP_RIGHT, -8, 4);
 
   lblClock = lv_label_create(scrMain);
   lv_obj_set_style_text_font(lblClock, &lv_font_montserrat_48, 0);
   lv_label_set_text(lblClock, "00:00");
-  lv_obj_align(lblClock, LV_ALIGN_TOP_MID, 0, 18);
+  lv_obj_align(lblClock, LV_ALIGN_TOP_MID, 0, 44);
 
   lblReps = lv_label_create(scrMain);
   lv_obj_set_style_text_font(lblReps, &lv_font_montserrat_28, 0);
-  lv_label_set_text(lblReps, "0");
-  lv_obj_align(lblReps, LV_ALIGN_TOP_MID, 0, 74);
+  lv_obj_set_style_text_color(lblReps, lv_color_hex(COL_MUTED), 0);
+  lv_label_set_text(lblReps, "0 REPS");
+  lv_obj_align(lblReps, LV_ALIGN_TOP_MID, 0, 100);
 
   lblPhase = lv_label_create(scrMain);
-  lv_obj_set_style_text_font(lblPhase, &font_thai, 0);
-  lv_label_set_text(lblPhase, "");
-  lv_obj_align(lblPhase, LV_ALIGN_TOP_MID, 0, 108);
+  lv_obj_set_style_text_font(lblPhase, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_color(lblPhase, lv_color_hex(COL_MUTED), 0);
+  lv_label_set_text(lblPhase, "READY");
+  lv_obj_align(lblPhase, LV_ALIGN_TOP_MID, 0, 134);
 
-  btnGo = lv_btn_create(scrMain);
-  lv_obj_set_size(btnGo, 200, 70);
-  lv_obj_align(btnGo, LV_ALIGN_BOTTOM_MID, 0, -34);
-  lv_obj_add_event_cb(btnGo, goClicked, LV_EVENT_CLICKED, nullptr);
-  lblGo = lv_label_create(btnGo);
-  lv_obj_set_style_text_font(lblGo, &font_thai, 0);
-  lv_obj_center(lblGo);
-
-  lv_obj_t* gear = lv_btn_create(scrMain);
-  lv_obj_set_size(gear, 44, 44);
-  lv_obj_align(gear, LV_ALIGN_TOP_RIGHT, -6, 6);
-  lv_obj_add_event_cb(gear, gearClicked, LV_EVENT_CLICKED, nullptr);
-  lv_obj_t* gl = lv_label_create(gear);
-  lv_label_set_text(gl, LV_SYMBOL_SETTINGS);
-  lv_obj_center(gl);
-
-  lblStatus = lv_label_create(scrMain);
-  lv_label_set_text(lblStatus, "");
-  lv_obj_align(lblStatus, LV_ALIGN_TOP_LEFT, 6, 6);
+  btnGo = makeBtn(scrMain, "START", COL_SURFACE, &lv_font_montserrat_28, goClicked);
+  lv_obj_set_size(btnGo, 260, 56);
+  lv_obj_align(btnGo, LV_ALIGN_BOTTOM_MID, 0, -24);
+  lblGo = lv_obj_get_child(btnGo, 0);
 
   lblCode = lv_label_create(scrMain);
-  lv_obj_set_style_text_font(lblCode, &font_thai, 0);
+  lv_obj_set_style_text_color(lblCode, lv_color_hex(COL_MUTED), 0);
   lv_label_set_text(lblCode, "");
   lv_obj_align(lblCode, LV_ALIGN_BOTTOM_MID, 0, -6);
 
@@ -144,18 +186,18 @@ static void buildMain() {
 }
 
 void uiSetDeviceCode(const char* code) {
-  lv_label_set_text_fmt(lblCode, "รหัส: %s", code);
+  lv_label_set_text_fmt(lblCode, "CODE: %s", code);
 }
 
 static const char* phaseName(Phase p) {
   switch (p) {
-    case Phase::Lift: return "ยกขา";
-    case Phase::Hold: return "ค้างไว้";
-    case Phase::Lower: return "ลดขา";
-    case Phase::Rest: return "พัก";
-    case Phase::SafeLower: return "กำลังหยุด";
-    case Phase::Fault: return "สวิตช์ผิดพลาด";
-    default: return "";
+    case Phase::Lift: return "LIFTING";
+    case Phase::Hold: return "HOLD";
+    case Phase::Lower: return "LOWERING";
+    case Phase::Rest: return "REST";
+    case Phase::SafeLower: return "STOPPING";
+    case Phase::Fault: return "SWITCH FAULT";
+    default: return "READY";
   }
 }
 
@@ -164,14 +206,15 @@ void uiUpdateMain(bool running, Phase phase, uint32_t elapsedSec, uint16_t reps,
   uiRunning = running;
   lv_label_set_text_fmt(lblClock, "%02lu:%02lu", (unsigned long)(elapsedSec / 60),
                         (unsigned long)(elapsedSec % 60));
-  lv_label_set_text_fmt(lblReps, "x %u", reps);
+  lv_label_set_text_fmt(lblReps, "%u REPS", reps);
   lv_label_set_text(lblPhase, phaseName(phase));
 
   bool fault = (phase == Phase::Fault);
-  lv_label_set_text(lblGo, fault ? "เริ่มใหม่" : (running ? "หยุด" : "เริ่ม"));
-  uint32_t goCol = fault ? 0xb00020 : (running ? 0x8c2f39 : 0x2e7d32);
+  lv_label_set_text(lblGo, fault ? "RESTART" : (running ? "STOP" : "START"));
+  uint32_t goCol = fault ? COL_FAULT : (running ? COL_STOP : COL_SURFACE);
   lv_obj_set_style_bg_color(btnGo, lv_color_hex(goCol), 0);
-  lv_obj_set_style_text_color(lblPhase, lv_color_hex(fault ? 0xb00020 : 0x000000), 0);
+  lv_obj_set_style_text_color(lblPhase,
+                              lv_color_hex(fault ? COL_FAULT : COL_MUTED), 0);
 
   lv_label_set_text_fmt(lblStatus, "%s %s", wifiUp ? LV_SYMBOL_WIFI : "--",
                         serverUp ? LV_SYMBOL_OK : LV_SYMBOL_CLOSE);
@@ -179,16 +222,27 @@ void uiUpdateMain(bool running, Phase phase, uint32_t elapsedSec, uint16_t reps,
 
 // ------------------------------------------------------------ settings screen
 
-static lv_obj_t *scrSettings, *taSsid, *taPass, *taServer, *taCode, *kb;
+static lv_obj_t *scrSettings, *taSsid, *taPass, *taServer, *taCode, *kb, *ddScan;
 static lv_obj_t *spinMax, *spinHold, *spinRest;
 static void (*cbSave)(const DeviceSettings&) = nullptr;
 
 void uiSetSettingsSaved(void (*onSave)(const DeviceSettings&)) { cbSave = onSave; }
 
-static void taFocused(lv_event_t* e) {
-  lv_keyboard_set_textarea(kb, (lv_obj_t*)lv_event_get_target(e));
-  lv_obj_clear_flag(kb, LV_OBJ_FLAG_HIDDEN);
+static void hideKeyboard() {
+  lv_obj_add_flag(kb, LV_OBJ_FLAG_HIDDEN);
+  lv_keyboard_set_textarea(kb, nullptr);
 }
+
+static void taFocused(lv_event_t* e) {
+  lv_obj_t* ta = (lv_obj_t*)lv_event_get_target(e);
+  lv_keyboard_set_textarea(kb, ta);
+  lv_obj_clear_flag(kb, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_scroll_to_view(ta, LV_ANIM_ON);  // keep the focused field above the keys
+}
+
+// The keyboard's own OK / X keys fire these; without handling them the keyboard
+// covers the bottom half of the screen forever and the screen cannot be left.
+static void kbDone(lv_event_t*) { hideKeyboard(); }
 
 static void saveClicked(lv_event_t*) {
   DeviceSettings s;
@@ -200,76 +254,141 @@ static void saveClicked(lv_event_t*) {
   s.holdSec = (uint16_t)lv_spinbox_get_value(spinHold);
   s.restSec = (uint16_t)lv_spinbox_get_value(spinRest);
   if (cbSave) cbSave(s);
+  hideKeyboard();
   lv_scr_load(scrMain);
 }
 
-static lv_obj_t* makeTa(lv_obj_t* parent, const char* placeholder, bool password) {
+static void backClicked(lv_event_t*) {
+  hideKeyboard();
+  lv_scr_load(scrMain);  // discard edits
+}
+
+// Scanning blocks for ~2 s, so it is a button rather than something that runs
+// every time the screen opens.
+static void scanClicked(lv_event_t*) {
+  int n = WiFi.scanNetworks();
+  String opts = "(pick network)";
+  for (int i = 0; i < n && i < 12; i++) opts += String("\n") + WiFi.SSID(i);
+  lv_dropdown_set_options(ddScan, opts.c_str());
+  lv_obj_clear_flag(ddScan, LV_OBJ_FLAG_HIDDEN);
+}
+
+static lv_obj_t* makeField(lv_obj_t* parent, const char* label, const char* placeholder,
+                           bool password, lv_obj_t** out) {
+  lv_obj_t* l = lv_label_create(parent);
+  lv_obj_set_style_text_color(l, lv_color_hex(COL_MUTED), 0);
+  lv_label_set_text(l, label);
+
   lv_obj_t* ta = lv_textarea_create(parent);
   lv_textarea_set_one_line(ta, true);
   lv_textarea_set_placeholder_text(ta, placeholder);
   lv_textarea_set_password_mode(ta, password);
   lv_obj_set_width(ta, lv_pct(100));
+  lv_obj_set_style_bg_color(ta, lv_color_hex(COL_SURFACE), 0);
+  lv_obj_set_style_text_color(ta, lv_color_hex(COL_TEXT), 0);
+  lv_obj_set_style_border_width(ta, 0, 0);
   lv_obj_add_event_cb(ta, taFocused, LV_EVENT_FOCUSED, nullptr);
+  *out = ta;
   return ta;
 }
 
-static lv_obj_t* makeSpin(lv_obj_t* parent, int val) {
-  lv_obj_t* sp = lv_spinbox_create(parent);
+static lv_obj_t* makeSpin(lv_obj_t* parent, const char* label, int val) {
+  lv_obj_t* box = lv_obj_create(parent);
+  lv_obj_set_size(box, 96, LV_SIZE_CONTENT);
+  lv_obj_set_flex_flow(box, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_style_bg_opa(box, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(box, 0, 0);
+  lv_obj_set_style_pad_all(box, 2, 0);
+
+  lv_obj_t* l = lv_label_create(box);
+  lv_obj_set_style_text_color(l, lv_color_hex(COL_MUTED), 0);
+  lv_label_set_text(l, label);
+
+  lv_obj_t* sp = lv_spinbox_create(box);
   lv_spinbox_set_range(sp, 1, 60);
   lv_spinbox_set_value(sp, val);
-  lv_obj_set_width(sp, 90);
+  lv_obj_set_width(sp, 88);
+  lv_obj_set_style_bg_color(sp, lv_color_hex(COL_SURFACE), 0);
+  lv_obj_set_style_text_color(sp, lv_color_hex(COL_TEXT), 0);
+  lv_obj_set_style_border_width(sp, 0, 0);
   return sp;
 }
 
 void uiOpenSettings(const DeviceSettings& cur) {
   scrSettings = lv_obj_create(nullptr);
+  styleScreen(scrSettings);
+
+  // top bar stays put; only the field list scrolls
+  lv_obj_t* bar = lv_obj_create(scrSettings);
+  lv_obj_set_size(bar, lv_pct(100), 44);
+  lv_obj_align(bar, LV_ALIGN_TOP_MID, 0, 0);
+  lv_obj_set_style_bg_color(bar, lv_color_hex(COL_SURFACE), 0);
+  lv_obj_set_style_border_width(bar, 0, 0);
+  lv_obj_set_style_radius(bar, 0, 0);
+  lv_obj_clear_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
+
+  lv_obj_t* back = makeBtn(bar, LV_SYMBOL_LEFT " BACK", COL_BG,
+                           &lv_font_montserrat_20, backClicked);
+  lv_obj_set_size(back, 110, 34);
+  lv_obj_align(back, LV_ALIGN_LEFT_MID, -8, 0);
+
+  lv_obj_t* save = makeBtn(bar, "SAVE", COL_BG, &lv_font_montserrat_20, saveClicked);
+  lv_obj_set_size(save, 90, 34);
+  lv_obj_align(save, LV_ALIGN_RIGHT_MID, 8, 0);
+
   lv_obj_t* col = lv_obj_create(scrSettings);
-  lv_obj_set_size(col, lv_pct(100), lv_pct(100));
+  lv_obj_set_size(col, lv_pct(100), 196);
+  lv_obj_align(col, LV_ALIGN_BOTTOM_MID, 0, 0);
   lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
   lv_obj_set_style_pad_all(col, 8, 0);
+  lv_obj_set_style_pad_row(col, 4, 0);
+  lv_obj_set_style_bg_opa(col, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(col, 0, 0);
 
-  // Wi-Fi scan list: dropdown of visible networks fills the SSID field
-  lv_obj_t* dd = lv_dropdown_create(col);
-  lv_obj_set_width(dd, lv_pct(100));
-  {
-    int n = WiFi.scanNetworks(); // blocking ~2 s, acceptable on settings entry
-    String opts = "(scan)";
-    for (int i = 0; i < n && i < 12; i++) opts += String("\n") + WiFi.SSID(i);
-    lv_dropdown_set_options(dd, opts.c_str());
-  }
+  lv_obj_t* scan = makeBtn(col, LV_SYMBOL_WIFI " SCAN NETWORKS", COL_SURFACE,
+                           &lv_font_montserrat_20, scanClicked);
+  lv_obj_set_size(scan, lv_pct(100), 38);
+
+  ddScan = lv_dropdown_create(col);
+  lv_obj_set_width(ddScan, lv_pct(100));
+  lv_dropdown_set_options(ddScan, "(pick network)");
+  lv_obj_set_style_bg_color(ddScan, lv_color_hex(COL_SURFACE), 0);
+  lv_obj_set_style_text_color(ddScan, lv_color_hex(COL_TEXT), 0);
+  lv_obj_set_style_border_width(ddScan, 0, 0);
+  lv_obj_add_flag(ddScan, LV_OBJ_FLAG_HIDDEN);
   lv_obj_add_event_cb(
-      dd,
+      ddScan,
       [](lv_event_t* e) {
         char sel[64];
         lv_dropdown_get_selected_str((lv_obj_t*)lv_event_get_target(e), sel, sizeof(sel));
-        if (strcmp(sel, "(scan)") != 0) lv_textarea_set_text(taSsid, sel);
+        if (strcmp(sel, "(pick network)") != 0) lv_textarea_set_text(taSsid, sel);
       },
       LV_EVENT_VALUE_CHANGED, nullptr);
 
-  taSsid = makeTa(col, "WiFi SSID", false);
+  makeField(col, "WiFi network", "SSID", false, &taSsid);
   lv_textarea_set_text(taSsid, cur.wifiSsid.c_str());
-  taPass = makeTa(col, "WiFi password", true);
+  makeField(col, "WiFi password", "password", true, &taPass);
   lv_textarea_set_text(taPass, cur.wifiPass.c_str());
-  taServer = makeTa(col, "http://server:8000", false);
+  makeField(col, "Server", "http://192.168.0.12:8000", false, &taServer);
   lv_textarea_set_text(taServer, cur.serverUrl.c_str());
-  taCode = makeTa(col, "Device code (KNEE-01)", false);
+  makeField(col, "Device code", "KNEE-01", false, &taCode);
   lv_textarea_set_text(taCode, cur.deviceCode.c_str());
 
   lv_obj_t* row = lv_obj_create(col);
   lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
   lv_obj_set_size(row, lv_pct(100), LV_SIZE_CONTENT);
-  spinMax = makeSpin(row, cur.maxTravelSec);
-  spinHold = makeSpin(row, cur.holdSec);
-  spinRest = makeSpin(row, cur.restSec);
-
-  lv_obj_t* btnSave = lv_btn_create(col);
-  lv_obj_add_event_cb(btnSave, saveClicked, LV_EVENT_CLICKED, nullptr);
-  lv_obj_t* sl = lv_label_create(btnSave);
-  lv_obj_set_style_text_font(sl, &font_thai, 0);
-  lv_label_set_text(sl, "บันทึก");
-  lv_obj_center(sl);
+  lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(row, 0, 0);
+  lv_obj_set_style_pad_all(row, 0, 0);
+  spinMax = makeSpin(row, "MAX TRAVEL", cur.maxTravelSec);
+  spinHold = makeSpin(row, "HOLD", cur.holdSec);
+  spinRest = makeSpin(row, "REST", cur.restSec);
 
   kb = lv_keyboard_create(scrSettings);
+  lv_obj_set_size(kb, lv_pct(100), 120);
+  lv_obj_align(kb, LV_ALIGN_BOTTOM_MID, 0, 0);
+  lv_obj_add_event_cb(kb, kbDone, LV_EVENT_READY, nullptr);   // OK key
+  lv_obj_add_event_cb(kb, kbDone, LV_EVENT_CANCEL, nullptr);  // X key
   lv_obj_add_flag(kb, LV_OBJ_FLAG_HIDDEN);
 
   lv_scr_load(scrSettings);
