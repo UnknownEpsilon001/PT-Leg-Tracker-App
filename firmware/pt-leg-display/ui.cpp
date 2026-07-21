@@ -124,7 +124,9 @@ void uiBegin() {
 // ---------------------------------------------------------------- main screen
 
 static lv_obj_t *scrMain, *lblClock, *lblReps, *lblPhase, *lblStatus, *btnGo, *lblGo;
-static lv_obj_t *lblCode, *btnGear;
+static lv_obj_t *lblCode, *btnGear, *imgLogo;
+
+LV_IMG_DECLARE(logo_img)  // firmware/pt-leg-display/logo_img.c
 static void (*cbStart)() = nullptr;
 static void (*cbStop)() = nullptr;
 static void (*cbSettings)() = nullptr;
@@ -162,6 +164,12 @@ static void buildMain() {
                     &lv_font_montserrat_20, gearClicked);
   lv_obj_set_size(btnGear, 48, 40);
   lv_obj_align(btnGear, LV_ALIGN_TOP_RIGHT, -8, 4);
+
+  // Idle branding. Lives in flash, so it costs no RAM; it is swapped out for the
+  // session stats the moment the machine starts moving.
+  imgLogo = lv_img_create(scrMain);
+  lv_img_set_src(imgLogo, &logo_img);
+  lv_obj_align(imgLogo, LV_ALIGN_TOP_MID, 0, 42);  // 200x109, clears the START button at y=160
 
   lblClock = lv_label_create(scrMain);
   lv_obj_set_style_text_font(lblClock, &lv_font_montserrat_48, 0);
@@ -231,6 +239,22 @@ void uiUpdateMain(bool running, Phase phase, uint32_t elapsedSec, uint16_t reps,
   lv_label_set_text_fmt(lblReps, "%u REPS", reps);
 
   bool fault = (phase == Phase::Fault);
+
+  // Logo on the idle screen only. A fault or a dead link needs its status text
+  // read, so those count as "not idle" even though nothing is moving.
+  bool showLogo = !running && !fault && linkUp;
+  if (showLogo) {
+    lv_obj_clear_flag(imgLogo, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_fade_in(imgLogo, 200, 0);
+    lv_obj_add_flag(lblClock, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(lblReps, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(lblPhase, LV_OBJ_FLAG_HIDDEN);  // "READY" adds nothing next to the logo
+  } else {
+    lv_obj_add_flag(imgLogo, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(lblClock, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(lblReps, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(lblPhase, LV_OBJ_FLAG_HIDDEN);
+  }
   // With the link down the cached state is stale and the buttons do nothing,
   // so say so rather than presenting a frozen timer as if it were live.
   lv_label_set_text(lblPhase, linkUp ? phaseName(phase) : "NO LINK");
