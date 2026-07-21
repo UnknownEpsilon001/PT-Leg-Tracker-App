@@ -167,9 +167,12 @@ static void buildMain() {
 
   // Idle branding. Lives in flash, so it costs no RAM; it is swapped out for the
   // session stats the moment the machine starts moving.
+  // No card behind it: logo_img.c is generated with -Tint f2f5f9, so the artwork
+  // is already near-white and reads directly on the navy background. The source
+  // PNG is dark navy (~#002040) and would otherwise vanish into it.
   imgLogo = lv_img_create(scrMain);
   lv_img_set_src(imgLogo, &logo_img);
-  lv_obj_align(imgLogo, LV_ALIGN_TOP_MID, 0, 42);
+  lv_obj_align(imgLogo, LV_ALIGN_TOP_MID, 0, 46);  // clears the START button at y=160
 
   lblClock = lv_label_create(scrMain);
   lv_obj_set_style_text_font(lblClock, &lv_font_montserrat_48, 0);
@@ -240,9 +243,11 @@ void uiUpdateMain(bool running, Phase phase, uint32_t elapsedSec, uint16_t reps,
 
   bool fault = (phase == Phase::Fault);
 
-  // Logo on the idle screen only. A fault or a dead link needs its status text
-  // read, so those count as "not idle" even though nothing is moving.
-  bool showLogo = !running && !fault && linkUp;
+  // Logo whenever the machine is idle. Link state deliberately does NOT gate it:
+  // a display with no controller attached is the most common idle case, and
+  // hiding the branding there left no state that ever showed it. Link trouble is
+  // reported in the status corner instead.
+  bool showLogo = !running && !fault;
   if (showLogo) {
     lv_obj_clear_flag(imgLogo, LV_OBJ_FLAG_HIDDEN);
     lv_obj_fade_in(imgLogo, 200, 0);
@@ -258,6 +263,7 @@ void uiUpdateMain(bool running, Phase phase, uint32_t elapsedSec, uint16_t reps,
   // With the link down the cached state is stale and the buttons do nothing,
   // so say so rather than presenting a frozen timer as if it were live.
   lv_label_set_text(lblPhase, linkUp ? phaseName(phase) : "NO LINK");
+  lv_obj_set_style_text_color(lblStatus, lv_color_hex(linkUp ? COL_MUTED : COL_FAULT), 0);
   lv_obj_set_style_text_color(
       lblPhase, lv_color_hex((fault || !linkUp) ? COL_FAULT : COL_MUTED), 0);
   lv_obj_set_style_text_opa(lblClock, linkUp ? LV_OPA_COVER : LV_OPA_50, 0);
@@ -275,8 +281,12 @@ void uiUpdateMain(bool running, Phase phase, uint32_t elapsedSec, uint16_t reps,
   if (running) lv_obj_add_state(btnGear, LV_STATE_DISABLED);
   else lv_obj_clear_state(btnGear, LV_STATE_DISABLED);
 
-  lv_label_set_text_fmt(lblStatus, "%s %s", wifiUp ? LV_SYMBOL_WIFI : "--",
-                        serverUp ? LV_SYMBOL_OK : LV_SYMBOL_CLOSE);
+  if (linkUp) {
+    lv_label_set_text_fmt(lblStatus, "%s %s", wifiUp ? LV_SYMBOL_WIFI : "--",
+                          serverUp ? LV_SYMBOL_OK : LV_SYMBOL_CLOSE);
+  } else {
+    lv_label_set_text(lblStatus, LV_SYMBOL_WARNING " NO LINK");
+  }
 }
 
 // ------------------------------------------------------------ settings screen
@@ -519,5 +529,7 @@ void uiOpenSettings(const DeviceSettings& cur) {
 }
 
 void uiLoop() { lv_timer_handler(); }
+
+
 
 
