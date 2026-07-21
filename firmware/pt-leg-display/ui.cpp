@@ -314,7 +314,11 @@ static lv_obj_t* makeSpin(lv_obj_t* parent, const char* label, int val) {
   return sp;
 }
 
-void uiOpenSettings(const DeviceSettings& cur) {
+// Built exactly once. Rebuilding it per open leaked ~8.9 KB of LVGL's 48 KB
+// pool every time (screens are not freed when another is loaded), and the fifth
+// open hit LV_ASSERT_MALLOC, whose handler is `while(1)` — a silent hard freeze
+// with a dead touchscreen and no reboot.
+static void buildSettings() {
   scrSettings = lv_obj_create(nullptr);
   styleScreen(scrSettings);
 
@@ -366,13 +370,9 @@ void uiOpenSettings(const DeviceSettings& cur) {
       LV_EVENT_VALUE_CHANGED, nullptr);
 
   makeField(col, "WiFi network", "SSID", false, &taSsid);
-  lv_textarea_set_text(taSsid, cur.wifiSsid.c_str());
   makeField(col, "WiFi password", "password", true, &taPass);
-  lv_textarea_set_text(taPass, cur.wifiPass.c_str());
   makeField(col, "Server", "http://192.168.0.12:8000", false, &taServer);
-  lv_textarea_set_text(taServer, cur.serverUrl.c_str());
   makeField(col, "Device code", "KNEE-01", false, &taCode);
-  lv_textarea_set_text(taCode, cur.deviceCode.c_str());
 
   lv_obj_t* row = lv_obj_create(col);
   lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
@@ -380,9 +380,9 @@ void uiOpenSettings(const DeviceSettings& cur) {
   lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
   lv_obj_set_style_border_width(row, 0, 0);
   lv_obj_set_style_pad_all(row, 0, 0);
-  spinMax = makeSpin(row, "MAX TRAVEL", cur.maxTravelSec);
-  spinHold = makeSpin(row, "HOLD", cur.holdSec);
-  spinRest = makeSpin(row, "REST", cur.restSec);
+  spinMax = makeSpin(row, "MAX TRAVEL", 8);
+  spinHold = makeSpin(row, "HOLD", 10);
+  spinRest = makeSpin(row, "REST", 10);
 
   kb = lv_keyboard_create(scrSettings);
   lv_obj_set_size(kb, lv_pct(100), 120);
@@ -390,6 +390,22 @@ void uiOpenSettings(const DeviceSettings& cur) {
   lv_obj_add_event_cb(kb, kbDone, LV_EVENT_READY, nullptr);   // OK key
   lv_obj_add_event_cb(kb, kbDone, LV_EVENT_CANCEL, nullptr);  // X key
   lv_obj_add_flag(kb, LV_OBJ_FLAG_HIDDEN);
+}
+
+void uiOpenSettings(const DeviceSettings& cur) {
+  if (!scrSettings) buildSettings();
+
+  lv_textarea_set_text(taSsid, cur.wifiSsid.c_str());
+  lv_textarea_set_text(taPass, cur.wifiPass.c_str());
+  lv_textarea_set_text(taServer, cur.serverUrl.c_str());
+  lv_textarea_set_text(taCode, cur.deviceCode.c_str());
+  lv_spinbox_set_value(spinMax, cur.maxTravelSec);
+  lv_spinbox_set_value(spinHold, cur.holdSec);
+  lv_spinbox_set_value(spinRest, cur.restSec);
+
+  hideKeyboard();
+  lv_obj_add_flag(ddScan, LV_OBJ_FLAG_HIDDEN);  // stale scan results
+  lv_obj_scroll_to_y(lv_obj_get_parent(taSsid), 0, LV_ANIM_OFF);
 
   lv_scr_load(scrSettings);
 }
