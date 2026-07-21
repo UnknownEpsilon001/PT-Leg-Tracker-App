@@ -1,3 +1,12 @@
+// Bench aid: route the controller link over the USB serial port so a PC can
+// impersonate the controller and drive the whole UI with no second board
+// attached. Off for real hardware; enable per-build, never commit it on:
+//   flip this to 1, then erase_flash before reflashing (see firmware/README.md)
+// Drive it with firmware/tools/fake-controller.ps1.
+#ifndef LINK_OVER_USB
+#define LINK_OVER_USB 0
+#endif
+
 #include "ui.h"
 #include "link.h"
 #include "session.h"   // Phase enum for uiUpdateMain
@@ -59,7 +68,12 @@ void setup() {
   uiBegin();
   uiSetCallbacks(onTouchStart, onTouchStop, onOpenSettings);
   uiSetSettingsSaved(onSaveFromUi);
+  Serial.printf("controller link on %s\n", LINK_OVER_USB ? "USB (bench)" : "Serial2");
+#if LINK_OVER_USB
+  gLink.begin(&Serial);
+#else
   gLink.begin(&Serial2);
+#endif
   gLink.onState = onLinkState;
   gLink.onSettingsReply = onLinkSettingsReply;
   gLink.sendHello();  // ask controller for current settings + state
@@ -93,3 +107,5 @@ void loop() {
   }
   delay(2);
 }
+
+

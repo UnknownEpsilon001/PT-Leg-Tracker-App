@@ -91,6 +91,49 @@ arduino-cli upload -p COMx --fqbn "esp32:esp32:esp32:PartitionScheme=huge_app" f
 arduino-cli upload -p COMy --fqbn "esp32:esp32:esp32:PartitionScheme=huge_app" firmware/pt-leg-display
 ```
 
+## Erase the flash when the partition scheme changes
+
+If a board boot-loops with `No bootable app partitions in the partition table`,
+or a freshly flashed sketch prints its first line and then goes quiet, the flash
+holds a partition table and OTA data from a different scheme. Uploading a new app
+does not fix it, because the stale OTA record at `0xe000` still points at a slot
+the new table does not have:
+
+```powershell
+$esptool = "$env:LOCALAPPDATA\Arduino15\packages\esp32\tools\esptool_py\4.5.1\esptool.exe"
+& $esptool --chip esp32 --port COM4 --baud 921600 erase_flash
+```
+
+Then flash normally. This costs the NVS settings too, which on the controller
+means Wi-Fi credentials and the device code.
+
+## Running the display without a controller
+
+`pt-leg-display.ino` has a `LINK_OVER_USB` switch. Set it to `1` and the
+controller link moves from `Serial2` to the USB port, so a PC can impersonate the
+controller and drive the whole UI with one board on the desk:
+
+```powershell
+# flip LINK_OVER_USB to 1 in pt-leg-display.ino, then
+arduino-cli compile --fqbn "esp32:esp32:esp32:PartitionScheme=huge_app" --upload -p COM4 firmware/pt-leg-display
+.\firmware\tools\fake-controller.ps1 -Port COM4 -AutoStart
+```
+
+The script answers `hello`, reacts to START/STOP touches, and runs a compressed
+LIFT/HOLD/LOWER/REST cycle so the phases visibly move. Stop it and the display
+falls back to `NO LINK` after ~2.5 s. **Set the switch back to `0` before
+flashing a real machine** — do not use `--build-property` to set it, as flag
+changes against cached objects have produced broken images.
+
+## LVGL logging and asserts
+
+`lv_conf.h` enables `LV_USE_LOG` at WARN with `LV_LOG_PRINTF`, and sets
+`LV_ASSERT_HANDLER` to `esp_restart()`. The stock handler is `while(1)`, which
+turns an LVGL out-of-memory into a frozen screen with a dead touchscreen, no
+reboot and nothing on serial — a failure mode that cost real debugging time on
+2026-07-21. A reboot with a printed reason is far easier to diagnose, and on a
+patient-facing machine it recovers instead of appearing bricked.
+
 ## Wiring
 
 - Controller relays: UP GPIO 22, DOWN GPIO 27. Limit switches: TOP GPIO 32,

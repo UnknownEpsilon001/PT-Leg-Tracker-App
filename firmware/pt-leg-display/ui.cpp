@@ -12,12 +12,12 @@
 #define XPT2046_CS 33
 
 // App palette (matches the phone app's v4 rebrand)
-#define COL_BG 0x1a2b47      // navy-dark  — screen background
-#define COL_SURFACE 0x24395e // navy       — cards, inputs
-#define COL_TEXT 0xf2f5f9    // near-white — primary text
-#define COL_MUTED 0xc6ccd6   // silver     — secondary text
-#define COL_STOP 0x8c2f39    // maroon     — stop
-#define COL_FAULT 0xb00020   // red        — fault
+#define COL_BG 0x1a2b47      // navy-dark  - screen background
+#define COL_SURFACE 0x24395e // navy       - cards, inputs
+#define COL_TEXT 0xf2f5f9    // near-white - primary text
+#define COL_MUTED 0xc6ccd6   // silver     - secondary text
+#define COL_STOP 0x8c2f39    // maroon     - stop
+#define COL_FAULT 0xb00020   // red        - fault
 
 static TFT_eSPI tft;
 static SPIClass touchSpi(VSPI);
@@ -25,7 +25,7 @@ static XPT2046_Touchscreen touch(XPT2046_CS, XPT2046_IRQ);
 
 static lv_disp_draw_buf_t drawBuf;
 // A taller buffer means far fewer flush round-trips per frame, which is most of
-// the sluggishness on this panel. 240x100x2B = 48 KB — too big to sit in static
+// the sluggishness on this panel. 240x100x2B = 48 KB - too big to sit in static
 // DRAM next to LVGL's own 48 KB pool, so it comes off the heap in uiBegin().
 #define DRAW_BUF_LINES 100
 static lv_color_t* buf = nullptr;
@@ -95,7 +95,7 @@ void uiBegin() {
   }
   if (!buf) {
     // Handing LVGL a null buffer trips LV_ASSERT_MALLOC, whose handler is
-    // while(1) — a silent freeze. A reboot is far easier to diagnose.
+    // while(1) - a silent freeze. A reboot is far easier to diagnose.
     Serial.println("FATAL: no DMA memory for the draw buffer, restarting");
     Serial.flush();
     esp_restart();
@@ -169,7 +169,7 @@ static void buildMain() {
   // session stats the moment the machine starts moving.
   imgLogo = lv_img_create(scrMain);
   lv_img_set_src(imgLogo, &logo_img);
-  lv_obj_align(imgLogo, LV_ALIGN_TOP_MID, 0, 42);  // 200x109, clears the START button at y=160
+  lv_obj_align(imgLogo, LV_ALIGN_TOP_MID, 0, 42);
 
   lblClock = lv_label_create(scrMain);
   lv_obj_set_style_text_font(lblClock, &lv_font_montserrat_48, 0);
@@ -269,7 +269,7 @@ void uiUpdateMain(bool running, Phase phase, uint32_t elapsedSec, uint16_t reps,
   if (linkUp) lv_obj_clear_state(btnGo, LV_STATE_DISABLED);
   else lv_obj_add_state(btnGo, LV_STATE_DISABLED);
 
-  // While a session runs, STOP must stay one tap away — the settings screen has
+  // While a session runs, STOP must stay one tap away - the settings screen has
   // no stop control, and the controller's UART watchdog will not help because
   // the display keeps pinging from in there.
   if (running) lv_obj_add_state(btnGear, LV_STATE_DISABLED);
@@ -383,7 +383,7 @@ static void spinUp(lv_event_t* e) {
   lv_spinbox_increment((lv_obj_t*)lv_event_get_user_data(e));
 }
 
-// A bare lv_spinbox cannot be changed by touch at all — LVGL only moves its
+// A bare lv_spinbox cannot be changed by touch at all - LVGL only moves its
 // value through lv_spinbox_increment/decrement, so it needs its own -/+ keys.
 // One row per setting keeps the touch targets big enough to hit on a resistive
 // panel.
@@ -426,7 +426,7 @@ static lv_obj_t* makeSpinRow(lv_obj_t* parent, const char* label, int val,
 
 // Built exactly once. Rebuilding it per open leaked ~8.9 KB of LVGL's 48 KB
 // pool every time (screens are not freed when another is loaded), and the fifth
-// open hit LV_ASSERT_MALLOC, whose handler is `while(1)` — a silent hard freeze
+// open hit LV_ASSERT_MALLOC, whose handler is `while(1)` - a silent hard freeze
 // with a dead touchscreen and no reboot.
 static void buildSettings() {
   scrSettings = lv_obj_create(nullptr);
@@ -519,3 +519,5 @@ void uiOpenSettings(const DeviceSettings& cur) {
 }
 
 void uiLoop() { lv_timer_handler(); }
+
+
