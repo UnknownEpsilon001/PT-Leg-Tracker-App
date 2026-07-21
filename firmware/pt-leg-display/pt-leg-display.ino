@@ -13,9 +13,9 @@ static bool uiWifi = false, uiServer = false;
 // last settings the controller told us about; the settings screen pre-fills from this
 static DeviceSettings gLast;
 
-static void onTouchStart() { gLink.sendCmd("start"); }
-static void onTouchStop() { gLink.sendCmd("stop"); }
-static void onOpenSettings() { uiOpenSettings(gLast); }
+static void onTouchStart() { Serial.println("touch: start"); gLink.sendCmd("start"); }
+static void onTouchStop() { Serial.println("touch: stop"); gLink.sendCmd("stop"); }
+static void onOpenSettings() { Serial.println("touch: settings"); uiOpenSettings(gLast); }
 
 static void onSaveFromUi(const DeviceSettings& s) {
   gLast = s;
@@ -44,6 +44,8 @@ static void onLinkState(const LinkState& s) {
 
 void setup() {
   Serial.begin(115200);
+  delay(200);  // UART0 settles after begin(); without this the first line is lost
+  Serial.println("pt-leg-display boot");
   Serial2.begin(115200, SERIAL_8N1, 22, 27);  // UART to controller (CYD free pins)
   uiBegin();
   uiSetCallbacks(onTouchStart, onTouchStop, onOpenSettings);

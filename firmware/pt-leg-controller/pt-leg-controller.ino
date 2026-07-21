@@ -57,6 +57,7 @@ void setup() {
   actuatorBegin();  // safety first
   switchesBegin();
   Serial.begin(115200);
+  delay(200);  // let UART0 settle so the boot banner is not clipped
   Serial2.begin(115200, SERIAL_8N1, 16, 17);  // UART to CYD
   settingsLoad(gSettings);
   gSession.cfg = {gSettings.maxTravelSec * 1000u, gSettings.holdSec * 1000u,
