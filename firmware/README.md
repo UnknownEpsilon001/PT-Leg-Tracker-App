@@ -27,6 +27,25 @@ arduino-cli lib install "lvgl@8.4.0" "TFT_eSPI@2.5.43" "XPT2046_Touchscreen@1.4"
 Core: `arduino-cli core install esp32:esp32` (board manager URL
 `https://espressif.github.io/arduino-esp32/package_esp32_index.json`).
 
+## One-time library config (both files live in this repo, copied into the libraries dir)
+
+Arduino IDE / arduino-cli has no per-sketch config for these two libraries, so
+they are configured globally. The repo copies are the source of truth — re-copy
+after any library reinstall.
+
+```powershell
+$lib = "$env:USERPROFILE\Documents\Arduino\libraries"
+# TFT_eSPI panel config for the CYD (keep a .orig backup of the stock file)
+Copy-Item firmware/TFT_eSPI_User_Setup.h "$lib\TFT_eSPI\User_Setup.h" -Force
+# lv_conf.h must sit NEXT TO the lvgl folder, not inside it
+Copy-Item firmware/lv_conf.h "$lib\lv_conf.h" -Force
+```
+
+`firmware/lv_conf.h` is lvgl 8.4.0's `lv_conf_template.h` with only these
+changed: enable block `#if 1`, `LV_COLOR_16_SWAP 1`, `LV_TICK_CUSTOM 1`
+(millis()), Montserrat 20/28/48 fonts on. `LV_COLOR_DEPTH 16` and
+`LV_MEM_SIZE 48K` are already the template defaults.
+
 ## Build
 
 ```powershell
