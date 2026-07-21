@@ -73,6 +73,7 @@ void uiBegin() {
 // ---------------------------------------------------------------- main screen
 
 static lv_obj_t *scrMain, *lblClock, *lblReps, *lblPhase, *lblStatus, *btnGo, *lblGo;
+static lv_obj_t* lblCode;
 static void (*cbStart)() = nullptr;
 static void (*cbStop)() = nullptr;
 static void (*cbSettings)() = nullptr;
@@ -134,7 +135,16 @@ static void buildMain() {
   lv_label_set_text(lblStatus, "");
   lv_obj_align(lblStatus, LV_ALIGN_TOP_LEFT, 6, 6);
 
+  lblCode = lv_label_create(scrMain);
+  lv_obj_set_style_text_font(lblCode, &font_thai, 0);
+  lv_label_set_text(lblCode, "");
+  lv_obj_align(lblCode, LV_ALIGN_BOTTOM_MID, 0, -6);
+
   lv_scr_load(scrMain);
+}
+
+void uiSetDeviceCode(const char* code) {
+  lv_label_set_text_fmt(lblCode, "รหัส: %s", code);
 }
 
 static const char* phaseName(Phase p) {
@@ -169,7 +179,7 @@ void uiUpdateMain(bool running, Phase phase, uint32_t elapsedSec, uint16_t reps,
 
 // ------------------------------------------------------------ settings screen
 
-static lv_obj_t *scrSettings, *taSsid, *taPass, *taServer, *kb;
+static lv_obj_t *scrSettings, *taSsid, *taPass, *taServer, *taCode, *kb;
 static lv_obj_t *spinMax, *spinHold, *spinRest;
 static void (*cbSave)(const DeviceSettings&) = nullptr;
 
@@ -185,6 +195,7 @@ static void saveClicked(lv_event_t*) {
   s.wifiSsid = lv_textarea_get_text(taSsid);
   s.wifiPass = lv_textarea_get_text(taPass);
   s.serverUrl = lv_textarea_get_text(taServer);
+  s.deviceCode = lv_textarea_get_text(taCode);
   s.maxTravelSec = (uint16_t)lv_spinbox_get_value(spinMax);
   s.holdSec = (uint16_t)lv_spinbox_get_value(spinHold);
   s.restSec = (uint16_t)lv_spinbox_get_value(spinRest);
@@ -241,6 +252,8 @@ void uiOpenSettings(const DeviceSettings& cur) {
   lv_textarea_set_text(taPass, cur.wifiPass.c_str());
   taServer = makeTa(col, "http://server:8000", false);
   lv_textarea_set_text(taServer, cur.serverUrl.c_str());
+  taCode = makeTa(col, "Device code (KNEE-01)", false);
+  lv_textarea_set_text(taCode, cur.deviceCode.c_str());
 
   lv_obj_t* row = lv_obj_create(col);
   lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);

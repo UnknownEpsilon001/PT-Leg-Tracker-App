@@ -8,5 +8,6 @@ void uiLoop();
 void uiSetCallbacks(void (*onStart)(), void (*onStop)(), void (*onOpenSettings)());
 void uiUpdateMain(bool running, Phase phase, uint32_t elapsedSec, uint16_t reps,
                   bool wifiUp, bool serverUp);
+void uiSetDeviceCode(const char* code);
 void uiOpenSettings(const DeviceSettings& current);
 void uiSetSettingsSaved(void (*onSave)(const DeviceSettings&));

@@ -62,12 +62,26 @@ Exposes the symbol `font_thai`; `ui.cpp` picks it up via `LV_FONT_DECLARE(font_t
 ## Build
 
 ```powershell
-arduino-cli compile --fqbn esp32:esp32:esp32 firmware/pt-leg-controller
-arduino-cli compile --fqbn esp32:esp32:esp32 firmware/pt-leg-display
+arduino-cli compile --fqbn "esp32:esp32:esp32:PartitionScheme=huge_app" firmware/pt-leg-controller
+arduino-cli compile --fqbn "esp32:esp32:esp32:PartitionScheme=huge_app" firmware/pt-leg-display
 ```
+
+**`PartitionScheme=huge_app` is required, not optional.** The default scheme
+reserves half of the 4 MB flash for OTA and leaves 1.31 MB for the app; the
+display sketch (LVGL + Thai font + the Wi-Fi stack the settings-screen SSID scan
+pulls in) lands at 97% of that. `huge_app` gives 3 MB and drops OTA, which this
+design never uses — both boards are flashed over USB.
 
 ## Flash
 
 ```powershell
-arduino-cli upload -p COMx --fqbn esp32:esp32:esp32 firmware/pt-leg-controller
+arduino-cli upload -p COMx --fqbn "esp32:esp32:esp32:PartitionScheme=huge_app" firmware/pt-leg-controller
+arduino-cli upload -p COMy --fqbn "esp32:esp32:esp32:PartitionScheme=huge_app" firmware/pt-leg-display
 ```
+
+## Wiring
+
+- Controller relays: UP GPIO 22, DOWN GPIO 27. Limit switches: TOP GPIO 32,
+  BOTTOM GPIO 33 (INPUT_PULLUP, `SWITCH_NC` in `config.h` if normally-closed).
+- UART: controller GPIO 16 (RX) / 17 (TX) ↔ CYD GPIO 22 (RX) / 27 (TX),
+  cross-wired, common GND. 115200 8N1. Pins to be confirmed on the bench.
