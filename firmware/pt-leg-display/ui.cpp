@@ -70,7 +70,7 @@ static lv_obj_t* makeBtn(lv_obj_t* parent, const char* text, uint32_t colour,
   lv_obj_t* b = lv_btn_create(parent);
   lv_obj_set_style_bg_color(b, lv_color_hex(colour), 0);
   lv_obj_set_style_radius(b, 8, 0);
-  lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, nullptr);
+  if (cb) lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, nullptr);
   lv_obj_t* l = lv_label_create(b);
   lv_obj_set_style_text_font(l, font, 0);
   lv_obj_set_style_text_color(l, lv_color_hex(COL_TEXT), 0);
@@ -92,6 +92,13 @@ void uiBegin() {
   while (!buf && lines > 10) {  // degrade rather than boot-loop on a tight heap
     lines /= 2;
     buf = (lv_color_t*)heap_caps_malloc(240 * lines * sizeof(lv_color_t), MALLOC_CAP_DMA);
+  }
+  if (!buf) {
+    // Handing LVGL a null buffer trips LV_ASSERT_MALLOC, whose handler is
+    // while(1) — a silent freeze. A reboot is far easier to diagnose.
+    Serial.println("FATAL: no DMA memory for the draw buffer, restarting");
+    Serial.flush();
+    esp_restart();
   }
   Serial.printf("lvgl draw buffer: %lu lines, free heap %lu\n", (unsigned long)lines,
                 (unsigned long)ESP.getFreeHeap());
@@ -117,7 +124,7 @@ void uiBegin() {
 // ---------------------------------------------------------------- main screen
 
 static lv_obj_t *scrMain, *lblClock, *lblReps, *lblPhase, *lblStatus, *btnGo, *lblGo;
-static lv_obj_t* lblCode;
+static lv_obj_t *lblCode, *btnGear;
 static void (*cbStart)() = nullptr;
 static void (*cbStop)() = nullptr;
 static void (*cbSettings)() = nullptr;
@@ -138,6 +145,7 @@ static void goClicked(lv_event_t*) {
 }
 
 static void gearClicked(lv_event_t*) {
+  if (uiRunning) return;  // STOP must stay reachable during a session
   if (cbSettings) cbSettings();
 }
 
@@ -150,10 +158,10 @@ static void buildMain() {
   lv_label_set_text(lblStatus, "");
   lv_obj_align(lblStatus, LV_ALIGN_TOP_LEFT, 8, 10);
 
-  lv_obj_t* gear = makeBtn(scrMain, LV_SYMBOL_SETTINGS, COL_SURFACE,
-                           &lv_font_montserrat_20, gearClicked);
-  lv_obj_set_size(gear, 48, 40);
-  lv_obj_align(gear, LV_ALIGN_TOP_RIGHT, -8, 4);
+  btnGear = makeBtn(scrMain, LV_SYMBOL_SETTINGS, COL_SURFACE,
+                    &lv_font_montserrat_20, gearClicked);
+  lv_obj_set_size(btnGear, 48, 40);
+  lv_obj_align(btnGear, LV_ALIGN_TOP_RIGHT, -8, 4);
 
   lblClock = lv_label_create(scrMain);
   lv_obj_set_style_text_font(lblClock, &lv_font_montserrat_48, 0);
@@ -202,19 +210,46 @@ static const char* phaseName(Phase p) {
 }
 
 void uiUpdateMain(bool running, Phase phase, uint32_t elapsedSec, uint16_t reps,
-                  bool wifiUp, bool serverUp) {
-  uiRunning = running;
+                  bool wifiUp, bool serverUp, bool linkUp) {
+  // Repainting identical text still copies the string and invalidates the area,
+  // so an idle screen would redraw four times a second for nothing.
+  static bool first = true;
+  static bool pRunning, pWifi, pServer, pLink;
+  static Phase pPhase;
+  static uint32_t pElapsed;
+  static uint16_t pReps;
+  if (!first && running == pRunning && phase == pPhase && elapsedSec == pElapsed &&
+      reps == pReps && wifiUp == pWifi && serverUp == pServer && linkUp == pLink)
+    return;
+  first = false;
+  pRunning = running; pPhase = phase; pElapsed = elapsedSec; pReps = reps;
+  pWifi = wifiUp; pServer = serverUp; pLink = linkUp;
+
+  uiRunning = running && linkUp;
   lv_label_set_text_fmt(lblClock, "%02lu:%02lu", (unsigned long)(elapsedSec / 60),
                         (unsigned long)(elapsedSec % 60));
   lv_label_set_text_fmt(lblReps, "%u REPS", reps);
-  lv_label_set_text(lblPhase, phaseName(phase));
 
   bool fault = (phase == Phase::Fault);
+  // With the link down the cached state is stale and the buttons do nothing,
+  // so say so rather than presenting a frozen timer as if it were live.
+  lv_label_set_text(lblPhase, linkUp ? phaseName(phase) : "NO LINK");
+  lv_obj_set_style_text_color(
+      lblPhase, lv_color_hex((fault || !linkUp) ? COL_FAULT : COL_MUTED), 0);
+  lv_obj_set_style_text_opa(lblClock, linkUp ? LV_OPA_COVER : LV_OPA_50, 0);
+  lv_obj_set_style_text_opa(lblReps, linkUp ? LV_OPA_COVER : LV_OPA_50, 0);
+
   lv_label_set_text(lblGo, fault ? "RESTART" : (running ? "STOP" : "START"));
   uint32_t goCol = fault ? COL_FAULT : (running ? COL_STOP : COL_SURFACE);
   lv_obj_set_style_bg_color(btnGo, lv_color_hex(goCol), 0);
-  lv_obj_set_style_text_color(lblPhase,
-                              lv_color_hex(fault ? COL_FAULT : COL_MUTED), 0);
+  if (linkUp) lv_obj_clear_state(btnGo, LV_STATE_DISABLED);
+  else lv_obj_add_state(btnGo, LV_STATE_DISABLED);
+
+  // While a session runs, STOP must stay one tap away — the settings screen has
+  // no stop control, and the controller's UART watchdog will not help because
+  // the display keeps pinging from in there.
+  if (running) lv_obj_add_state(btnGear, LV_STATE_DISABLED);
+  else lv_obj_clear_state(btnGear, LV_STATE_DISABLED);
 
   lv_label_set_text_fmt(lblStatus, "%s %s", wifiUp ? LV_SYMBOL_WIFI : "--",
                         serverUp ? LV_SYMBOL_OK : LV_SYMBOL_CLOSE);
@@ -223,12 +258,30 @@ void uiUpdateMain(bool running, Phase phase, uint32_t elapsedSec, uint16_t reps,
 // ------------------------------------------------------------ settings screen
 
 static lv_obj_t *scrSettings, *taSsid, *taPass, *taServer, *taCode, *kb, *ddScan;
-static lv_obj_t *spinMax, *spinHold, *spinRest;
+static lv_obj_t *spinMax, *spinHold, *spinRest, *btnSave;
 static void (*cbSave)(const DeviceSettings&) = nullptr;
+static bool settingsKnown = false;  // has the controller ever sent its settings?
 
 void uiSetSettingsSaved(void (*onSave)(const DeviceSettings&)) { cbSave = onSave; }
 
+static void applySaveEnabled() {
+  if (!btnSave) return;
+  if (settingsKnown) {
+    lv_obj_clear_state(btnSave, LV_STATE_DISABLED);
+    lv_obj_set_style_bg_color(btnSave, lv_color_hex(COL_BG), 0);
+  } else {
+    lv_obj_add_state(btnSave, LV_STATE_DISABLED);
+    lv_obj_set_style_bg_color(btnSave, lv_color_hex(COL_MUTED), LV_STATE_DISABLED);
+  }
+}
+
+void uiSetSettingsKnown(bool known) {
+  settingsKnown = known;
+  applySaveEnabled();
+}
+
 static void hideKeyboard() {
+  if (!kb) return;
   lv_obj_add_flag(kb, LV_OBJ_FLAG_HIDDEN);
   lv_keyboard_set_textarea(kb, nullptr);
 }
@@ -245,6 +298,9 @@ static void taFocused(lv_event_t* e) {
 static void kbDone(lv_event_t*) { hideKeyboard(); }
 
 static void saveClicked(lv_event_t*) {
+  // Belt and braces: the button is disabled in this state, but never push a
+  // screen full of placeholders over the controller's real NVS settings.
+  if (!settingsKnown) return;
   DeviceSettings s;
   s.wifiSsid = lv_textarea_get_text(taSsid);
   s.wifiPass = lv_textarea_get_text(taPass);
@@ -267,10 +323,14 @@ static void backClicked(lv_event_t*) {
 // every time the screen opens.
 static void scanClicked(lv_event_t*) {
   int n = WiFi.scanNetworks();
-  String opts = "(pick network)";
+  String opts = (n > 0) ? "(pick network)" : "(none found - retry)";
   for (int i = 0; i < n && i < 12; i++) opts += String("\n") + WiFi.SSID(i);
   lv_dropdown_set_options(ddScan, opts.c_str());
   lv_obj_clear_flag(ddScan, LV_OBJ_FLAG_HIDDEN);
+  // The controller owns networking; the display only borrows the radio to read
+  // SSIDs. Leaving STA up here costs RAM and power for nothing.
+  WiFi.scanDelete();
+  WiFi.mode(WIFI_OFF);
 }
 
 static lv_obj_t* makeField(lv_obj_t* parent, const char* label, const char* placeholder,
@@ -292,25 +352,51 @@ static lv_obj_t* makeField(lv_obj_t* parent, const char* label, const char* plac
   return ta;
 }
 
-static lv_obj_t* makeSpin(lv_obj_t* parent, const char* label, int val) {
-  lv_obj_t* box = lv_obj_create(parent);
-  lv_obj_set_size(box, 96, LV_SIZE_CONTENT);
-  lv_obj_set_flex_flow(box, LV_FLEX_FLOW_COLUMN);
-  lv_obj_set_style_bg_opa(box, LV_OPA_TRANSP, 0);
-  lv_obj_set_style_border_width(box, 0, 0);
-  lv_obj_set_style_pad_all(box, 2, 0);
+static void spinDown(lv_event_t* e) {
+  lv_spinbox_decrement((lv_obj_t*)lv_event_get_user_data(e));
+}
+static void spinUp(lv_event_t* e) {
+  lv_spinbox_increment((lv_obj_t*)lv_event_get_user_data(e));
+}
 
-  lv_obj_t* l = lv_label_create(box);
+// A bare lv_spinbox cannot be changed by touch at all — LVGL only moves its
+// value through lv_spinbox_increment/decrement, so it needs its own -/+ keys.
+// One row per setting keeps the touch targets big enough to hit on a resistive
+// panel.
+static lv_obj_t* makeSpinRow(lv_obj_t* parent, const char* label, int val,
+                             int lo, int hi) {
+  lv_obj_t* row = lv_obj_create(parent);
+  lv_obj_set_size(row, lv_pct(100), 42);
+  lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(row, 0, 0);
+  lv_obj_set_style_pad_all(row, 0, 0);
+  lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+
+  lv_obj_t* l = lv_label_create(row);
   lv_obj_set_style_text_color(l, lv_color_hex(COL_MUTED), 0);
   lv_label_set_text(l, label);
+  lv_obj_align(l, LV_ALIGN_LEFT_MID, 0, 0);
 
-  lv_obj_t* sp = lv_spinbox_create(box);
-  lv_spinbox_set_range(sp, 1, 60);
+  lv_obj_t* sp = lv_spinbox_create(row);
+  lv_spinbox_set_range(sp, lo, hi);
+  lv_spinbox_set_digit_format(sp, 2, 0);
   lv_spinbox_set_value(sp, val);
-  lv_obj_set_width(sp, 88);
+  lv_obj_set_size(sp, 46, 34);
   lv_obj_set_style_bg_color(sp, lv_color_hex(COL_SURFACE), 0);
   lv_obj_set_style_text_color(sp, lv_color_hex(COL_TEXT), 0);
   lv_obj_set_style_border_width(sp, 0, 0);
+  lv_obj_set_style_pad_all(sp, 2, 0);
+  lv_obj_align(sp, LV_ALIGN_RIGHT_MID, -44, 0);
+
+  lv_obj_t* minus = makeBtn(row, "-", COL_SURFACE, &lv_font_montserrat_20, nullptr);
+  lv_obj_set_size(minus, 38, 34);
+  lv_obj_align(minus, LV_ALIGN_RIGHT_MID, -92, 0);
+  lv_obj_add_event_cb(minus, spinDown, LV_EVENT_CLICKED, sp);
+
+  lv_obj_t* plus = makeBtn(row, "+", COL_SURFACE, &lv_font_montserrat_20, nullptr);
+  lv_obj_set_size(plus, 38, 34);
+  lv_obj_align(plus, LV_ALIGN_RIGHT_MID, 0, 0);
+  lv_obj_add_event_cb(plus, spinUp, LV_EVENT_CLICKED, sp);
   return sp;
 }
 
@@ -336,9 +422,10 @@ static void buildSettings() {
   lv_obj_set_size(back, 110, 34);
   lv_obj_align(back, LV_ALIGN_LEFT_MID, -8, 0);
 
-  lv_obj_t* save = makeBtn(bar, "SAVE", COL_BG, &lv_font_montserrat_20, saveClicked);
-  lv_obj_set_size(save, 90, 34);
-  lv_obj_align(save, LV_ALIGN_RIGHT_MID, 8, 0);
+  btnSave = makeBtn(bar, "SAVE", COL_BG, &lv_font_montserrat_20, saveClicked);
+  lv_obj_set_size(btnSave, 90, 34);
+  lv_obj_align(btnSave, LV_ALIGN_RIGHT_MID, 8, 0);
+  applySaveEnabled();
 
   lv_obj_t* col = lv_obj_create(scrSettings);
   lv_obj_set_size(col, lv_pct(100), 196);
@@ -374,15 +461,12 @@ static void buildSettings() {
   makeField(col, "Server", "http://192.168.0.12:8000", false, &taServer);
   makeField(col, "Device code", "KNEE-01", false, &taCode);
 
-  lv_obj_t* row = lv_obj_create(col);
-  lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
-  lv_obj_set_size(row, lv_pct(100), LV_SIZE_CONTENT);
-  lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
-  lv_obj_set_style_border_width(row, 0, 0);
-  lv_obj_set_style_pad_all(row, 0, 0);
-  spinMax = makeSpin(row, "MAX TRAVEL", 8);
-  spinHold = makeSpin(row, "HOLD", 10);
-  spinRest = makeSpin(row, "REST", 10);
+  // MAX TRAVEL is the safety cap the whole switch-timeout story rests on: it is
+  // how long a relay may stay energized with no end-of-travel switch closing.
+  // Its ceiling is deliberately far lower than HOLD/REST.
+  spinMax = makeSpinRow(col, "MAX TRAVEL s", 8, 1, 20);
+  spinHold = makeSpinRow(col, "HOLD s", 10, 1, 60);
+  spinRest = makeSpinRow(col, "REST s", 10, 1, 60);
 
   kb = lv_keyboard_create(scrSettings);
   lv_obj_set_size(kb, lv_pct(100), 120);

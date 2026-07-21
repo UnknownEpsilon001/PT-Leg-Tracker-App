@@ -56,6 +56,21 @@ a shaping engine, which is out of proportion for a screen showing six words.
 Short English words (`START`, `HOLD`, `SWITCH FAULT`) use the built-in Montserrat
 fonts and stay legible at 20–48 px.
 
+## Shared files between the two sketches
+
+`link.h`, `link.cpp`, `session.h` and `settings.h` exist in **both** sketch
+directories because an Arduino sketch cannot include sources from outside its own
+folder. The copies in `pt-leg-controller/` are the source of truth.
+
+```powershell
+.\firmware\sync-shared.ps1          # copy controller -> display
+.\firmware\sync-shared.ps1 -Check   # report drift only, exit 1 if any
+```
+
+Run the `-Check` form before flashing a release. Undetected drift means the UART
+`settings` message silently loses a field and the boards disagree about the
+machine's configuration.
+
 ## Build
 
 ```powershell
