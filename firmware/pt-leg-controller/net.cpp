@@ -4,6 +4,7 @@
 #include <ArduinoJson.h>
 
 static String baseUrl;
+static String devCode;
 static bool serverOk = false;
 static uint32_t lastReconnect = 0;
 
@@ -15,6 +16,7 @@ static uint16_t evReps = 0;
 
 void netBegin(const DeviceSettings& s) {
   baseUrl = s.serverUrl;
+  devCode = s.deviceCode;
   if (s.wifiSsid.length()) {
     WiFi.mode(WIFI_STA);
     WiFi.begin(s.wifiSsid.c_str(), s.wifiPass.c_str());
@@ -42,7 +44,9 @@ String netPollCommand() {
   HTTPClient http;
   http.setConnectTimeout(800);
   http.setTimeout(800);
-  http.begin(baseUrl + "/api/device/command");
+  String url = baseUrl + "/api/device/command";
+  if (devCode.length()) url += "?deviceId=" + devCode;
+  http.begin(url);
   int code = http.GET();
   String cmd = "";
   if (code == 200) {
@@ -66,13 +70,13 @@ void netQueueEvent(const char* type, uint32_t elapsedSec, uint16_t reps) {
 static void tryFlushEvent() {
   if (!evPending) return;
   String body = String("{\"type\":\"") + evType + "\",\"elapsedSec\":" + evElapsed +
-                ",\"reps\":" + evReps + "}";
+                ",\"reps\":" + evReps + ",\"deviceId\":\"" + devCode + "\"}";
   if (post("/api/device/event", body)) evPending = false;
 }
 
 void netHeartbeat(const char* state, uint32_t elapsedSec, uint16_t reps) {
   String body = String("{\"state\":\"") + state + "\",\"elapsedSec\":" + elapsedSec +
-                ",\"reps\":" + reps + "}";
+                ",\"reps\":" + reps + ",\"deviceId\":\"" + devCode + "\"}";
   post("/api/device/heartbeat", body);
 }
 

@@ -10,6 +10,7 @@ void settingsLoad(DeviceSettings& s) {
   s.wifiSsid = p.getString("ssid", "");
   s.wifiPass = p.getString("pass", "");
   s.serverUrl = p.getString("server", "");
+  s.deviceCode = p.getString("code", "");
   s.maxTravelSec = p.getUShort("maxtravel", DEFAULT_MAX_TRAVEL_SEC);
   s.holdSec = p.getUShort("hold", DEFAULT_HOLD_SEC);
   s.restSec = p.getUShort("rest", DEFAULT_REST_SEC);
@@ -22,6 +23,7 @@ void settingsSave(const DeviceSettings& s) {
   p.putString("ssid", s.wifiSsid);
   p.putString("pass", s.wifiPass);
   p.putString("server", s.serverUrl);
+  p.putString("code", s.deviceCode);
   p.putUShort("maxtravel", s.maxTravelSec);
   p.putUShort("hold", s.holdSec);
   p.putUShort("rest", s.restSec);
