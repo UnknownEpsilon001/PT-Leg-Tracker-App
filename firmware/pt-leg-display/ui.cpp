@@ -2,6 +2,9 @@
 #include <lvgl.h>
 #include <TFT_eSPI.h>
 #include <XPT2046_Touchscreen.h>
+#include <WiFi.h>  // settings screen scans for SSIDs
+
+LV_FONT_DECLARE(font_thai)
 
 // CYD touch pins (separate SPI bus)
 #define XPT2046_IRQ 36
@@ -107,7 +110,7 @@ static void buildMain() {
   lv_obj_align(lblReps, LV_ALIGN_TOP_MID, 0, 74);
 
   lblPhase = lv_label_create(scrMain);
-  lv_obj_set_style_text_font(lblPhase, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_font(lblPhase, &font_thai, 0);
   lv_label_set_text(lblPhase, "");
   lv_obj_align(lblPhase, LV_ALIGN_TOP_MID, 0, 108);
 
@@ -116,7 +119,7 @@ static void buildMain() {
   lv_obj_align(btnGo, LV_ALIGN_BOTTOM_MID, 0, -34);
   lv_obj_add_event_cb(btnGo, goClicked, LV_EVENT_CLICKED, nullptr);
   lblGo = lv_label_create(btnGo);
-  lv_obj_set_style_text_font(lblGo, &lv_font_montserrat_28, 0);
+  lv_obj_set_style_text_font(lblGo, &font_thai, 0);
   lv_obj_center(lblGo);
 
   lv_obj_t* gear = lv_btn_create(scrMain);
@@ -136,12 +139,12 @@ static void buildMain() {
 
 static const char* phaseName(Phase p) {
   switch (p) {
-    case Phase::Lift: return "UP";
-    case Phase::Hold: return "HOLD";
-    case Phase::Lower: return "DOWN";
-    case Phase::Rest: return "REST";
-    case Phase::SafeLower: return "STOPPING";
-    case Phase::Fault: return "SWITCH FAULT";
+    case Phase::Lift: return "ยกขา";
+    case Phase::Hold: return "ค้างไว้";
+    case Phase::Lower: return "ลดขา";
+    case Phase::Rest: return "พัก";
+    case Phase::SafeLower: return "กำลังหยุด";
+    case Phase::Fault: return "สวิตช์ผิดพลาด";
     default: return "";
   }
 }
@@ -155,13 +158,108 @@ void uiUpdateMain(bool running, Phase phase, uint32_t elapsedSec, uint16_t reps,
   lv_label_set_text(lblPhase, phaseName(phase));
 
   bool fault = (phase == Phase::Fault);
-  lv_label_set_text(lblGo, fault ? "RESTART" : (running ? "STOP" : "START"));
+  lv_label_set_text(lblGo, fault ? "เริ่มใหม่" : (running ? "หยุด" : "เริ่ม"));
   uint32_t goCol = fault ? 0xb00020 : (running ? 0x8c2f39 : 0x2e7d32);
   lv_obj_set_style_bg_color(btnGo, lv_color_hex(goCol), 0);
   lv_obj_set_style_text_color(lblPhase, lv_color_hex(fault ? 0xb00020 : 0x000000), 0);
 
   lv_label_set_text_fmt(lblStatus, "%s %s", wifiUp ? LV_SYMBOL_WIFI : "--",
                         serverUp ? LV_SYMBOL_OK : LV_SYMBOL_CLOSE);
+}
+
+// ------------------------------------------------------------ settings screen
+
+static lv_obj_t *scrSettings, *taSsid, *taPass, *taServer, *kb;
+static lv_obj_t *spinMax, *spinHold, *spinRest;
+static void (*cbSave)(const DeviceSettings&) = nullptr;
+
+void uiSetSettingsSaved(void (*onSave)(const DeviceSettings&)) { cbSave = onSave; }
+
+static void taFocused(lv_event_t* e) {
+  lv_keyboard_set_textarea(kb, (lv_obj_t*)lv_event_get_target(e));
+  lv_obj_clear_flag(kb, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void saveClicked(lv_event_t*) {
+  DeviceSettings s;
+  s.wifiSsid = lv_textarea_get_text(taSsid);
+  s.wifiPass = lv_textarea_get_text(taPass);
+  s.serverUrl = lv_textarea_get_text(taServer);
+  s.maxTravelSec = (uint16_t)lv_spinbox_get_value(spinMax);
+  s.holdSec = (uint16_t)lv_spinbox_get_value(spinHold);
+  s.restSec = (uint16_t)lv_spinbox_get_value(spinRest);
+  if (cbSave) cbSave(s);
+  lv_scr_load(scrMain);
+}
+
+static lv_obj_t* makeTa(lv_obj_t* parent, const char* placeholder, bool password) {
+  lv_obj_t* ta = lv_textarea_create(parent);
+  lv_textarea_set_one_line(ta, true);
+  lv_textarea_set_placeholder_text(ta, placeholder);
+  lv_textarea_set_password_mode(ta, password);
+  lv_obj_set_width(ta, lv_pct(100));
+  lv_obj_add_event_cb(ta, taFocused, LV_EVENT_FOCUSED, nullptr);
+  return ta;
+}
+
+static lv_obj_t* makeSpin(lv_obj_t* parent, int val) {
+  lv_obj_t* sp = lv_spinbox_create(parent);
+  lv_spinbox_set_range(sp, 1, 60);
+  lv_spinbox_set_value(sp, val);
+  lv_obj_set_width(sp, 90);
+  return sp;
+}
+
+void uiOpenSettings(const DeviceSettings& cur) {
+  scrSettings = lv_obj_create(nullptr);
+  lv_obj_t* col = lv_obj_create(scrSettings);
+  lv_obj_set_size(col, lv_pct(100), lv_pct(100));
+  lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_style_pad_all(col, 8, 0);
+
+  // Wi-Fi scan list: dropdown of visible networks fills the SSID field
+  lv_obj_t* dd = lv_dropdown_create(col);
+  lv_obj_set_width(dd, lv_pct(100));
+  {
+    int n = WiFi.scanNetworks(); // blocking ~2 s, acceptable on settings entry
+    String opts = "(scan)";
+    for (int i = 0; i < n && i < 12; i++) opts += String("\n") + WiFi.SSID(i);
+    lv_dropdown_set_options(dd, opts.c_str());
+  }
+  lv_obj_add_event_cb(
+      dd,
+      [](lv_event_t* e) {
+        char sel[64];
+        lv_dropdown_get_selected_str((lv_obj_t*)lv_event_get_target(e), sel, sizeof(sel));
+        if (strcmp(sel, "(scan)") != 0) lv_textarea_set_text(taSsid, sel);
+      },
+      LV_EVENT_VALUE_CHANGED, nullptr);
+
+  taSsid = makeTa(col, "WiFi SSID", false);
+  lv_textarea_set_text(taSsid, cur.wifiSsid.c_str());
+  taPass = makeTa(col, "WiFi password", true);
+  lv_textarea_set_text(taPass, cur.wifiPass.c_str());
+  taServer = makeTa(col, "http://server:8000", false);
+  lv_textarea_set_text(taServer, cur.serverUrl.c_str());
+
+  lv_obj_t* row = lv_obj_create(col);
+  lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+  lv_obj_set_size(row, lv_pct(100), LV_SIZE_CONTENT);
+  spinMax = makeSpin(row, cur.maxTravelSec);
+  spinHold = makeSpin(row, cur.holdSec);
+  spinRest = makeSpin(row, cur.restSec);
+
+  lv_obj_t* btnSave = lv_btn_create(col);
+  lv_obj_add_event_cb(btnSave, saveClicked, LV_EVENT_CLICKED, nullptr);
+  lv_obj_t* sl = lv_label_create(btnSave);
+  lv_obj_set_style_text_font(sl, &font_thai, 0);
+  lv_label_set_text(sl, "บันทึก");
+  lv_obj_center(sl);
+
+  kb = lv_keyboard_create(scrSettings);
+  lv_obj_add_flag(kb, LV_OBJ_FLAG_HIDDEN);
+
+  lv_scr_load(scrSettings);
 }
 
 void uiLoop() { lv_timer_handler(); }
