@@ -31,6 +31,7 @@ static lv_disp_draw_buf_t drawBuf;
 static lv_color_t* buf = nullptr;
 
 static void buildMain();
+static void leaveSettingsForStop();  // defined with the settings screen below
 
 static void flushCb(lv_disp_drv_t* disp, const lv_area_t* area, lv_color_t* pixels) {
   uint32_t w = area->x2 - area->x1 + 1, h = area->y2 - area->y1 + 1;
@@ -237,6 +238,13 @@ void uiUpdateMain(bool running, Phase phase, uint32_t elapsedSec, uint16_t reps,
   pWifi = wifiUp; pServer = serverUp; pLink = linkUp;
 
   uiRunning = running && linkUp;
+
+  // A session can start from a server command while the user is on the settings
+  // screen (reachable only when idle, but the state can change underneath them).
+  // That screen has no STOP control, so force back to the main screen where STOP
+  // is one tap away. Pending edits are discarded on purpose: STOP beats editing.
+  if (uiRunning) leaveSettingsForStop();
+
   lv_label_set_text_fmt(lblClock, "%02lu:%02lu", (unsigned long)(elapsedSec / 60),
                         (unsigned long)(elapsedSec % 60));
   lv_label_set_text_fmt(lblReps, "%u REPS", reps);
@@ -318,6 +326,15 @@ static void hideKeyboard() {
   if (!kb) return;
   lv_obj_add_flag(kb, LV_OBJ_FLAG_HIDDEN);
   lv_keyboard_set_textarea(kb, nullptr);
+}
+
+// Called from uiUpdateMain when a session is running: if the settings screen is
+// on top it has no STOP, so drop back to the main screen.
+static void leaveSettingsForStop() {
+  if (scrSettings && lv_scr_act() == scrSettings) {
+    hideKeyboard();
+    lv_scr_load(scrMain);
+  }
 }
 
 static void taFocused(lv_event_t* e) {

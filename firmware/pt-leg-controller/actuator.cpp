@@ -28,6 +28,10 @@ void actuatorBegin() {
 }
 
 void actuatorUp() {
+  // Idempotent: applyActuator() calls this every loop while lifting. Re-stamping
+  // energizeStart here would keep nowMs-energizeStart near zero forever and the
+  // travel cap could never trip. Only stamp on the OFF/DOWN -> UP transition.
+  if (state == ACT_UP) return;
   write(ON, OFF);
   state = ACT_UP;
   energizeStart = millis();
@@ -35,6 +39,7 @@ void actuatorUp() {
 }
 
 void actuatorDown() {
+  if (state == ACT_DOWN) return;  // see actuatorUp(): stamp only on transition
   write(OFF, ON);
   state = ACT_DOWN;
   energizeStart = millis();
