@@ -1,4 +1,9 @@
-"""Session state machine: the server-side source of truth (spec: Approach A)."""
+"""Session state machine: the server-side source of truth (spec: Approach A).
+
+[TH] เครื่องสถานะของเซสชัน ฝั่งเซิร์ฟเวอร์ถือเป็นความจริงหลัก (ต้นทาง)
+     รับเหตุการณ์/สัญญาณชีพจาก ESP32 และคำสั่ง start/stop จากแอป แล้วบันทึกลงฐานข้อมูล
+     พร้อมกลไกเยียวยา เช่น ปิดเซสชันค้างเมื่ออุปกรณ์เงียบหรือพลาดเหตุการณ์ 'stopped'
+"""
 
 import time
 from datetime import datetime, timezone
@@ -46,11 +51,13 @@ class SessionService:
         reps: int,
         device_id: str = DEFAULT_DEVICE_ID,
     ) -> str | None:
+        # [TH] จัดการเหตุการณ์จากอุปกรณ์: "started" เปิดเซสชันใหม่ อื่นๆ ปิดเซสชันที่เปิดอยู่
         dev = self._device(device_id)
         if event_type == "started":
             stale = db.get_open_session(device_id)
             if stale is not None:
                 # power-glitch recovery: close stale session with last-known numbers
+                # [TH] กู้จากไฟกระตุก: ปิดเซสชันค้างด้วยตัวเลขล่าสุดที่รู้
                 db.close_session(
                     stale["id"], self._iso_now(), dev.live_elapsed_sec, dev.live_reps
                 )
@@ -86,6 +93,7 @@ class SessionService:
         dev.heartbeat(state, elapsed_sec, reps)
         if state == "idle":
             # heal: device idle but a session is still open (lost 'stopped' event)
+            # [TH] เยียวยา: อุปกรณ์ว่างแต่ยังมีเซสชันเปิดค้าง (เหตุการณ์ 'stopped' หาย) จึงปิดให้
             open_session = db.get_open_session(device_id)
             if open_session is not None:
                 db.close_session(
@@ -95,6 +103,7 @@ class SessionService:
     # --- app-facing ---
 
     def queue_start(self, device_id: str = DEFAULT_DEVICE_ID) -> None:
+        # [TH] แอปสั่งเริ่ม: กันซ้ำหลายทาง (มีเซสชันเปิดอยู่ / คำสั่งค้าง / start กำลังไปถึงอุปกรณ์)
         self._auto_close_if_silent(device_id)
         dev = self._device(device_id)
         if db.get_open_session(device_id) is not None:
@@ -155,6 +164,7 @@ class SessionService:
         ]
 
     def _auto_close_if_silent(self, device_id: str = DEFAULT_DEVICE_ID) -> None:
+        # [TH] ปิดเซสชันอัตโนมัติถ้าอุปกรณ์เงียบนานเกินกำหนด (ป้องกันเซสชันค้างค้าง)
         dev = self._device(device_id)
         silent_for = dev.seconds_since_heartbeat()
         if silent_for is None or silent_for <= AUTO_CLOSE_AFTER_SEC:

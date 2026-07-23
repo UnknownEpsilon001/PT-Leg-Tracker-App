@@ -1,9 +1,13 @@
-"""In-memory device-facing state: one-slot command queue + liveness tracking."""
+"""In-memory device-facing state: one-slot command queue + liveness tracking.
+
+[TH] สถานะฝั่งอุปกรณ์ที่เก็บในหน่วยความจำ: คิวคำสั่งช่องเดียว + การติดตามว่าอุปกรณ์ยังมีชีวิต
+     ใช้เป็นตัวกลางระหว่างแอป (สั่ง start/stop) กับ ESP32 (มาดึงคำสั่งและส่งสัญญาณชีพ)
+"""
 
 import time
 
-COMMAND_TTL_SEC = 30
-DEVICE_OFFLINE_AFTER_SEC = 10
+COMMAND_TTL_SEC = 30  # คำสั่งที่ค้างเกินนี้ถือว่าหมดอายุ (วินาที)
+DEVICE_OFFLINE_AFTER_SEC = 10  # ไม่ได้ยินสัญญาณชีพเกินนี้ถือว่าอุปกรณ์ออฟไลน์ (วินาที)
 
 
 class DeviceState:
@@ -32,7 +36,10 @@ class DeviceState:
         return self._pending_command
 
     def fetch_command(self) -> str | None:
-        """Consume-on-read: hand the command to the device and clear the slot."""
+        """Consume-on-read: hand the command to the device and clear the slot.
+
+        [TH] อ่านแล้วล้าง: ส่งคำสั่งให้อุปกรณ์แล้วเคลียร์ช่องทันที กันส่งซ้ำ
+        """
         command = self.pending_command()
         self._pending_command = None
         if command == "start":
@@ -72,6 +79,7 @@ class DeviceState:
         self.live_reps = reps
 
     def device_online(self) -> bool:
+        # [TH] อุปกรณ์ออนไลน์ = เพิ่งได้ยินสัญญาณชีพภายในเวลาที่กำหนด
         if self._last_heartbeat_at is None:
             return False
         return self._now() - self._last_heartbeat_at <= DEVICE_OFFLINE_AFTER_SEC

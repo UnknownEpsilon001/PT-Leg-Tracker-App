@@ -1,4 +1,8 @@
-"""ESP32-facing endpoints. The device initiates every request."""
+"""ESP32-facing endpoints. The device initiates every request.
+
+[TH] เอนด์พอยต์ฝั่งอุปกรณ์ ESP32: อุปกรณ์เป็นฝ่ายเรียกเข้ามาเองทุกครั้ง
+     ดึงคำสั่ง (/command), ส่งเหตุการณ์ started/stopped (/event), ส่งสัญญาณชีพ (/heartbeat)
+"""
 
 from typing import Literal
 

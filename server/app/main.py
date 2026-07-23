@@ -1,3 +1,5 @@
+# จุดประกอบแอป FastAPI: เปิด CORS, ผูก service, และรวม router ทั้งฝั่งอุปกรณ์และฝั่งแอป
+# FastAPI app factory: enables CORS, wires the service, mounts device + app routers.
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 

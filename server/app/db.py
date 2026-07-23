@@ -1,4 +1,8 @@
-"""SQLite storage for therapy sessions. One table, stdlib sqlite3, no ORM."""
+"""SQLite storage for therapy sessions. One table, stdlib sqlite3, no ORM.
+
+[TH] ที่เก็บข้อมูลเซสชันกายภาพบำบัดด้วย SQLite ตารางเดียว ใช้ sqlite3 มาตรฐาน ไม่มี ORM
+     เซสชันที่ยังไม่จบคือแถวที่ ended_at เป็น NULL
+"""
 
 import os
 import sqlite3
@@ -56,6 +60,7 @@ def close_session(session_id: str, ended_at: str, duration_sec: int, reps: int) 
 
 
 def get_open_session(device_id: str = DEFAULT_DEVICE_ID) -> sqlite3.Row | None:
+    # [TH] คืนเซสชันที่ยังเปิดอยู่ล่าสุดของอุปกรณ์นี้ (ended_at ยังเป็น NULL)
     with _db() as conn:
         return conn.execute(
             "SELECT * FROM sessions"
@@ -66,6 +71,7 @@ def get_open_session(device_id: str = DEFAULT_DEVICE_ID) -> sqlite3.Row | None:
 
 
 def claim_session(session_id: str, patient_code: str) -> bool:
+    # [TH] ผูกเซสชันกับรหัสผู้ป่วย (แอปเรียกเพื่อระบุว่าเซสชันนี้เป็นของใคร)
     with _db() as conn:
         cur = conn.execute(
             "UPDATE sessions SET patient_code = ? WHERE id = ?",

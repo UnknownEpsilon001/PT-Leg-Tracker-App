@@ -1,4 +1,8 @@
-"""Android-app-facing endpoints."""
+"""Android-app-facing endpoints.
+
+[TH] เอนด์พอยต์ฝั่งแอปแอนดรอยด์: สั่งเริ่ม/หยุด (/start,/stop), อ่านสถานะปัจจุบัน (/current),
+     ดึงประวัติตามรหัสผู้ป่วย และผูกเซสชันกับผู้ป่วย (/claim) ; ชนสถานะจะได้ HTTP 409
+"""
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
