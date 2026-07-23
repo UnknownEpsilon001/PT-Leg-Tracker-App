@@ -1,16 +1,21 @@
 #pragma once
 #include <Arduino.h>
 
-struct LinkState {
-  bool running;
-  int phase;
-  uint32_t elapsed;
-  uint16_t reps;
-  bool wifi;
-  bool server;
+// โปรโตคอลลิงก์ระหว่างบอร์ดคอนโทรลเลอร์กับบอร์ดจอ (CYD) ผ่าน UART
+// รับส่งข้อความ JSON คั่นด้วยขึ้นบรรทัดใหม่ (ดู firmware/link-protocol.md)
+// UART link protocol between the controller and display boards
+// (newline-delimited JSON; see firmware/link-protocol.md).
+
+struct LinkState {  // สถานะที่คอนโทรลเลอร์ส่งให้จอแสดงผล
+  bool running;     // กำลังทำงานอยู่หรือไม่
+  int phase;        // หมายเลขสถานะ (ตรงกับ enum Phase)
+  uint32_t elapsed; // เวลาที่ผ่านไป (วินาที)
+  uint16_t reps;    // จำนวนครั้ง
+  bool wifi;        // สถานะเชื่อมต่อ WiFi
+  bool server;      // สถานะเชื่อมต่อเซิร์ฟเวอร์
 };
 
-struct LinkSettings {
+struct LinkSettings {  // ค่าตั้งค่าที่รับส่งกันสองทางระหว่างจอกับคอนโทรลเลอร์
   String ssid, pass, server, code;
   uint16_t maxTravel, hold, rest;
 };
@@ -26,11 +31,12 @@ class Link {
   void sendPing();
   uint32_t lastRxMs() const { return _lastRx; }
 
-  void (*onCmd)(const char* v) = nullptr;
-  void (*onSettings)(const LinkSettings&) = nullptr;   // controller side
-  void (*onHello)() = nullptr;                         // controller side
-  void (*onState)(const LinkState&) = nullptr;         // display side
-  void (*onSettingsReply)(const LinkSettings&) = nullptr; // display side
+  // [TH] คอลแบ็กแยกตามฝั่ง: บางตัวใช้ฝั่งคอนโทรลเลอร์ บางตัวใช้ฝั่งจอ
+  void (*onCmd)(const char* v) = nullptr;                 // รับคำสั่ง start/stop
+  void (*onSettings)(const LinkSettings&) = nullptr;   // controller side — คอนโทรลเลอร์รับค่าตั้งค่าเพื่อบันทึก
+  void (*onHello)() = nullptr;                         // controller side — จอทักทาย ขอค่าปัจจุบัน
+  void (*onState)(const LinkState&) = nullptr;         // display side — จอรับสถานะมาแสดง
+  void (*onSettingsReply)(const LinkSettings&) = nullptr; // display side — จอรับค่าตั้งค่าที่คอนโทรลเลอร์ตอบกลับ
 
  private:
   void dispatch(const String& line);

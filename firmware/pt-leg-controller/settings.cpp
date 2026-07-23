@@ -1,10 +1,13 @@
+// อ่าน/เขียนค่าตั้งค่าลงหน่วยความจำถาวร NVS ผ่านไลบรารี Preferences
+// Load/save device settings to NVS via the Preferences library.
 #include "settings.h"
 #include <Preferences.h>
 #include "config.h"
 
-static const char* NS = "ptleg";
+static const char* NS = "ptleg";  // ชื่อเนมสเปซใน NVS
 
 void settingsLoad(DeviceSettings& s) {
+  // [TH] เปิดแบบอ่านอย่างเดียว (true) ; ถ้าไม่มีคีย์ให้คืนค่าตั้งต้นจาก config.h
   Preferences p;
   p.begin(NS, true);
   s.wifiSsid = p.getString("ssid", "");
@@ -18,6 +21,7 @@ void settingsLoad(DeviceSettings& s) {
 }
 
 void settingsSave(const DeviceSettings& s) {
+  // [TH] เปิดแบบเขียนได้ (false) แล้วบันทึกทุกฟิลด์ลง NVS
   Preferences p;
   p.begin(NS, false);
   p.putString("ssid", s.wifiSsid);

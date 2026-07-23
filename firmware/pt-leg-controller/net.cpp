@@ -1,3 +1,7 @@
+// ตัวรับส่งข้อมูลกับเซิร์ฟเวอร์ผ่าน HTTP: ทำงานบนคอร์เดียวกับลูปความปลอดภัย
+// จึงตั้งค่า timeout ให้สั้น เพื่อไม่ให้บล็อกการอ่านลิมิตสวิตช์และเพดานเวลารีเลย์
+// Server HTTP client. Runs on the same core as the safety loop, so timeouts are
+// kept short to avoid starving the limit-switch / actuator-cap servicing.
 #include "net.h"
 #include <WiFi.h>
 #include <HTTPClient.h>
@@ -5,19 +9,23 @@
 
 static String baseUrl;
 static String devCode;
-static bool serverOk = false;
-static uint32_t lastReconnect = 0;
+static bool serverOk = false;       // สถานะเซิร์ฟเวอร์จากคำขอล่าสุด
+static uint32_t lastReconnect = 0;  // เวลาที่ลองเชื่อมต่อ WiFi ใหม่ครั้งล่าสุด
 
 // Small FIFO of pending events. A single slot dropped a "started" whenever a
 // "stopped" was queued before the first flushed on a slow link, leaving the
 // server with a stop for a session it never saw begin. Four slots comfortably
 // hold a start+stop (plus a spare) in flight; on overflow the OLDEST is dropped.
+// [TH] คิวเหตุการณ์แบบ FIFO ขนาดเล็ก เดิมมีช่องเดียวจึงทำให้เหตุการณ์ "started"
+//      ถูกทับด้วย "stopped" เมื่อเน็ตช้า เซิร์ฟเวอร์เลยเห็นแค่การหยุดของรอบที่ไม่เคยเห็นเริ่ม
+//      สี่ช่องพอสำหรับ start+stop ที่ค้างอยู่ ถ้าเต็มจะทิ้งตัวเก่าสุด
 static const int EV_MAX = 4;
 struct Ev { String type; uint32_t elapsed; uint16_t reps; };
 static Ev evq[EV_MAX];
 static int evHead = 0, evCount = 0;
 
 void netBegin(const DeviceSettings& s) {
+  // [TH] ตั้งค่า URL เซิร์ฟเวอร์และรหัสอุปกรณ์ แล้วเริ่มเชื่อมต่อ WiFi ถ้ามี SSID
   baseUrl = s.serverUrl;
   devCode = s.deviceCode;
   if (s.wifiSsid.length()) {
@@ -91,12 +99,14 @@ static void tryFlushEvent() {
 }
 
 void netHeartbeat(const char* state, uint32_t elapsedSec, uint16_t reps) {
+  // [TH] สัญญาณชีพ: บอกเซิร์ฟเวอร์ว่าอุปกรณ์ยังทำงานและอยู่สถานะใด (ส่งแล้วไม่รอผล)
   String body = String("{\"state\":\"") + state + "\",\"elapsedSec\":" + elapsedSec +
                 ",\"reps\":" + reps + ",\"deviceId\":\"" + devCode + "\"}";
   post("/api/device/heartbeat", body);
 }
 
 void netLoop(uint32_t nowMs) {
+  // [TH] งานเครือข่ายประจำลูป: ถ้า WiFi หลุดให้ลองเชื่อมใหม่ทุก 10 วินาที และส่งเหตุการณ์ที่ค้าง
   if (!netWifiUp() && WiFi.getMode() == WIFI_STA && nowMs - lastReconnect > 10000) {
     lastReconnect = nowMs;
     WiFi.reconnect();

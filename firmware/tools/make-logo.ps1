@@ -1,3 +1,7 @@
+# [TH] สร้างไฟล์ firmware/pt-leg-display/logo_img.c จากภาพ PNG ที่มีช่องอัลฟา (โปร่งใส)
+#      แปลงเป็นรูปแบบไบต์ LV_IMG_CF_TRUE_COLOR_ALPHA ให้ LVGL ใช้ได้โดยตรง
+#      เลือกย้อมสี (tint) ทุกพิกเซลได้ เพื่อให้โลโก้อ่านออกบนพื้นหลังสีเข้ม
+#
 # Generates firmware/pt-leg-display/logo_img.c from a source PNG with alpha.
 #
 #   .\firmware\tools\make-logo.ps1

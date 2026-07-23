@@ -1,3 +1,7 @@
+# [TH] สคริปต์สวมรอยเป็นบอร์ดคอนโทรลเลอร์ เพื่อทดสอบ UI บนจอ CYD โดยไม่ต้องมีบอร์ดที่สอง
+#      พูดโปรโตคอล JSON คั่นด้วยขึ้นบรรทัดใหม่แบบเดียวกับ firmware/link-protocol.md
+#      ตอบ hello ด้วยค่าตั้งค่า แล้วจำลองรอบการทำงาน ยก -> ค้าง -> ลง -> พัก วนไป
+#
 # Impersonates the controller so the CYD's UI can be exercised with no second
 # board on the desk. Speaks the same newline-delimited JSON as
 # firmware/link-protocol.md.

@@ -1,10 +1,13 @@
+// การสร้างส่วนติดต่อผู้ใช้ทั้งหมดบนจอสัมผัส CYD ด้วย LVGL
+// ประกอบด้วยหน้าจอหลัก (นาฬิกา/จำนวนครั้ง/ปุ่ม START-STOP) และหน้าตั้งค่า (WiFi/เซิร์ฟเวอร์/เวลารอบ)
+// All LVGL UI for the CYD touchscreen: main screen and settings screen.
 #include "ui.h"
 #include <lvgl.h>
 #include <TFT_eSPI.h>
 #include <XPT2046_Touchscreen.h>
-#include <WiFi.h>  // settings screen scans for SSIDs
+#include <WiFi.h>  // settings screen scans for SSIDs — หน้าตั้งค่าใช้สแกนหา WiFi
 
-// CYD touch pins (separate SPI bus)
+// CYD touch pins (separate SPI bus) — ขาทัชสกรีนของ CYD (ใช้บัส SPI แยกต่างหาก)
 #define XPT2046_IRQ 36
 #define XPT2046_MOSI 32
 #define XPT2046_MISO 39
@@ -12,6 +15,7 @@
 #define XPT2046_CS 33
 
 // App palette (matches the phone app's v4 rebrand)
+// [TH] ชุดสีของแอป ให้เข้ากับธีมของแอปบนมือถือ
 #define COL_BG 0x1a2b47      // navy-dark  - screen background
 #define COL_SURFACE 0x24395e // navy       - cards, inputs
 #define COL_TEXT 0xf2f5f9    // near-white - primary text
@@ -34,21 +38,26 @@ static void buildMain();
 static void leaveSettingsForStop();  // defined with the settings screen below
 
 static void flushCb(lv_disp_drv_t* disp, const lv_area_t* area, lv_color_t* pixels) {
+  // [TH] LVGL เรียกฟังก์ชันนี้เพื่อผลักพิกเซลลงหน้าจอจริงตามพื้นที่ที่เปลี่ยน
   uint32_t w = area->x2 - area->x1 + 1, h = area->y2 - area->y1 + 1;
   tft.startWrite();
   tft.setAddrWindow(area->x1, area->y1, w, h);
   // swap=false: lv_conf.h sets LV_COLOR_16_SWAP 1, so LVGL already hands us
   // byte-swapped pixels. Swapping again here mangles every colour and shows up
   // as fringed outlines around anti-aliased text.
+  // [TH] swap=false: เพราะ lv_conf.h ตั้ง LV_COLOR_16_SWAP 1 ทำให้ LVGL สลับไบต์มาแล้ว
+  //      ถ้าสลับซ้ำตรงนี้สีจะเพี้ยนและมีขอบสีรอบตัวอักษร
   tft.pushColors((uint16_t*)&pixels->full, w * h, false);
   tft.endWrite();
   lv_disp_flush_ready(disp);
 }
 
 static void touchCb(lv_indev_drv_t*, lv_indev_data_t* data) {
+  // [TH] อ่านตำแหน่งสัมผัสแล้วแปลงพิกัดดิบของทัชสกรีนเป็นพิกัดหน้าจอ
   if (touch.tirqTouched() && touch.touched()) {
     TS_Point p = touch.getPoint();
     // raw calibration for CYD landscape; tune on the bench if offset
+    // [TH] ค่าคาลิเบรตแบบดิบสำหรับ CYD แนวนอน ปรับจูนหน้างานถ้าตำแหน่งเพี้ยน
     data->point.x = map(p.x, 200, 3700, 0, 320);
     data->point.y = map(p.y, 240, 3800, 0, 240);
     data->state = LV_INDEV_STATE_PRESSED;
@@ -81,8 +90,9 @@ static lv_obj_t* makeBtn(lv_obj_t* parent, const char* text, uint32_t colour,
 }
 
 void uiBegin() {
+  // [TH] เริ่มต้นจอ TFT, ทัชสกรีน, LVGL และจองบัฟเฟอร์วาดภาพจากหน่วยความจำ DMA
   tft.init();
-  tft.setRotation(1); // landscape 320x240
+  tft.setRotation(1); // landscape 320x240 — แนวนอน
   touchSpi.begin(XPT2046_CLK, XPT2046_MISO, XPT2046_MOSI, XPT2046_CS);
   touch.begin(touchSpi);
   touch.setRotation(1);
@@ -91,12 +101,15 @@ void uiBegin() {
   uint32_t lines = DRAW_BUF_LINES;
   buf = (lv_color_t*)heap_caps_malloc(240 * lines * sizeof(lv_color_t), MALLOC_CAP_DMA);
   while (!buf && lines > 10) {  // degrade rather than boot-loop on a tight heap
+                               // [TH] ถ้าหน่วยความจำไม่พอ ให้ลดขนาดบัฟเฟอร์ลงแทนที่จะบูตวนไม่จบ
     lines /= 2;
     buf = (lv_color_t*)heap_caps_malloc(240 * lines * sizeof(lv_color_t), MALLOC_CAP_DMA);
   }
   if (!buf) {
     // Handing LVGL a null buffer trips LV_ASSERT_MALLOC, whose handler is
     // while(1) - a silent freeze. A reboot is far easier to diagnose.
+    // [TH] ถ้าส่งบัฟเฟอร์ null ให้ LVGL จะไปติด LV_ASSERT_MALLOC ที่ค้างเป็น while(1) เงียบๆ
+    //      รีบูตแทนเพื่อให้วินิจฉัยปัญหาได้ง่ายกว่า
     Serial.println("FATAL: no DMA memory for the draw buffer, restarting");
     Serial.flush();
     esp_restart();
@@ -140,19 +153,23 @@ void uiSetCallbacks(void (*onStart)(), void (*onStop)(), void (*onOpenSettings)(
 }
 
 static void goClicked(lv_event_t*) {
+  // [TH] ปุ่มหลัก: ถ้ากำลังทำงานให้สั่งหยุด ถ้าไม่ให้สั่งเริ่ม
   if (uiRunning) {
     if (cbStop) cbStop();
   } else {
     if (cbStart) cbStart();  // also clears a latched FAULT on the controller
+                             // [TH] การเริ่มยังล้างสถานะ FAULT ที่ค้างบนคอนโทรลเลอร์ด้วย
   }
 }
 
 static void gearClicked(lv_event_t*) {
   if (uiRunning) return;  // STOP must stay reachable during a session
+                          // [TH] ห้ามเข้าหน้าตั้งค่าระหว่างทำงาน เพื่อให้ปุ่ม STOP กดถึงตลอด
   if (cbSettings) cbSettings();
 }
 
 static void buildMain() {
+  // [TH] สร้างหน้าจอหลัก: โลโก้ตอนว่าง, นาฬิกา, จำนวนครั้ง, ชื่อสถานะ, ปุ่ม START/STOP และปุ่มตั้งค่า
   scrMain = lv_obj_create(nullptr);
   styleScreen(scrMain);
 
@@ -209,6 +226,7 @@ void uiSetDeviceCode(const char* code) {
   lv_label_set_text_fmt(lblCode, "CODE: %s", code);
 }
 
+// [TH] แปลงสถานะเป็นข้อความบนจอ (ยังคงเป็นภาษาอังกฤษบนหน้าจออุปกรณ์)
 static const char* phaseName(Phase p) {
   switch (p) {
     case Phase::Lift: return "LIFTING";
@@ -225,6 +243,7 @@ void uiUpdateMain(bool running, Phase phase, uint32_t elapsedSec, uint16_t reps,
                   bool wifiUp, bool serverUp, bool linkUp) {
   // Repainting identical text still copies the string and invalidates the area,
   // so an idle screen would redraw four times a second for nothing.
+  // [TH] วาดข้อความเดิมซ้ำก็ยังกินงาน จึงข้ามการอัปเดตถ้าค่าไม่เปลี่ยน กันจอวาดซ้ำ 4 ครั้ง/วินาทีเปล่าๆ
   static bool first = true;
   static bool pRunning, pWifi, pServer, pLink;
   static Phase pPhase;
@@ -351,6 +370,7 @@ static void kbDone(lv_event_t*) { hideKeyboard(); }
 static void saveClicked(lv_event_t*) {
   // Belt and braces: the button is disabled in this state, but never push a
   // screen full of placeholders over the controller's real NVS settings.
+  // [TH] กันพลาดสองชั้น: ปุ่มถูกปิดอยู่แล้ว แต่ห้ามส่งค่าตัวอย่างไปเขียนทับค่าจริงใน NVS เด็ดขาด
   if (!settingsKnown) return;
   DeviceSettings s;
   s.wifiSsid = lv_textarea_get_text(taSsid);
@@ -373,6 +393,7 @@ static void backClicked(lv_event_t*) {
 // Scanning blocks for ~2 s, so it is a button rather than something that runs
 // every time the screen opens.
 static void scanClicked(lv_event_t*) {
+  // [TH] สแกนหาเครือข่าย WiFi (บล็อกราว 2 วินาที) แล้วใส่ชื่อลงในรายการดรอปดาวน์
   int n = WiFi.scanNetworks();
   String opts = (n > 0) ? "(pick network)" : "(none found - retry)";
   for (int i = 0; i < n && i < 12; i++) opts += String("\n") + WiFi.SSID(i);
@@ -455,6 +476,8 @@ static lv_obj_t* makeSpinRow(lv_obj_t* parent, const char* label, int val,
 // pool every time (screens are not freed when another is loaded), and the fifth
 // open hit LV_ASSERT_MALLOC, whose handler is `while(1)` - a silent hard freeze
 // with a dead touchscreen and no reboot.
+// [TH] สร้างเพียงครั้งเดียว ถ้าสร้างใหม่ทุกครั้งที่เปิดจะรั่ว ~8.9 KB จากพูล 48 KB ของ LVGL
+//      (หน้าจอเก่าไม่ถูกคืนหน่วยความจำ) พอเปิดครั้งที่ห้าจะไปติด LV_ASSERT_MALLOC = ค้างตายเงียบๆ
 static void buildSettings() {
   scrSettings = lv_obj_create(nullptr);
   styleScreen(scrSettings);
@@ -515,6 +538,8 @@ static void buildSettings() {
   // MAX TRAVEL is the safety cap the whole switch-timeout story rests on: it is
   // how long a relay may stay energized with no end-of-travel switch closing.
   // Its ceiling is deliberately far lower than HOLD/REST.
+  // [TH] MAX TRAVEL คือเพดานความปลอดภัยหลัก: เวลาที่รีเลย์จ่ายไฟได้โดยไม่มีสวิตช์ปลายทางปิด
+  //      เพดานของมันตั้งไว้ต่ำกว่า HOLD/REST มากโดยตั้งใจ
   spinMax = makeSpinRow(col, "MAX TRAVEL s", 8, 1, 20);
   spinHold = makeSpinRow(col, "HOLD s", 10, 1, 60);
   spinRest = makeSpinRow(col, "REST s", 10, 1, 60);

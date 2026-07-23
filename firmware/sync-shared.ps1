@@ -1,3 +1,7 @@
+# [TH] คัดลอกไฟล์ที่ใช้ร่วมกันจากสเก็ตช์คอนโทรลเลอร์ (ถือเป็นต้นฉบับ) ไปยังสเก็ตช์จอ
+#      เพราะ Arduino ไม่ให้ include โค้ดข้ามโฟลเดอร์สเก็ตช์ จึงต้องเก็บเป็นไฟล์ซ้ำ
+#      รันแบบ -Check ก่อนปล่อยรุ่น เพื่อกันสองบอร์ดเข้าใจโครงสร้างข้อมูลไม่ตรงกัน
+#
 # Copies the files shared by both sketches from the controller (the source of
 # truth) into the display sketch. Arduino gives a sketch no way to include code
 # from outside its own directory, so these exist as duplicates.
