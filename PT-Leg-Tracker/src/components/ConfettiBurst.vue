@@ -1,4 +1,6 @@
 <script setup lang="ts">
+// เอฟเฟกต์กระดาษหลากสีฉลองความสำเร็จ (เช่น ทำครบเซสชัน/ควิซ) วาดบน canvas
+// Celebratory confetti burst on a canvas (e.g. after finishing a session/quiz).
 import { onMounted, onUnmounted, ref } from 'vue'
 
 const canvas = ref<HTMLCanvasElement | null>(null)
@@ -6,6 +8,7 @@ const done = ref(false)
 let raf = 0
 
 onMounted(() => {
+  // [TH] เคารพการตั้งค่า "ลดการเคลื่อนไหว" ของระบบ: ถ้าเปิดไว้ ให้ข้ามแอนิเมชัน
   if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
     done.value = true
     return

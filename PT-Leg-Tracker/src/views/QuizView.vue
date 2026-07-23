@@ -1,4 +1,6 @@
 <script setup lang="ts">
+// หน้าแบบทดสอบความรู้ (ก่อน/หลัง/ความพึงพอใจ): ทำทีละข้อ ให้คะแนน และบันทึกผล
+// Quiz screen (pre/post/satisfaction): answer per question, score, and save the result.
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import data from '@/content/quizzes.json'

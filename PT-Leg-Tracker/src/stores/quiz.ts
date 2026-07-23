@@ -1,3 +1,5 @@
+// สโตร์เก็บผลการทำแบบทดสอบ (ก่อน/หลัง/ความพึงพอใจ) ; hasTaken กันทำซ้ำ
+// Pinia store for quiz results; hasTaken prevents retaking a quiz.
 import { ref } from 'vue'
 import { defineStore } from 'pinia'
 import type { QuizResult } from '@/types'
@@ -17,7 +19,7 @@ export const useQuizStore = defineStore('quiz', () => {
     await saveJson(KEY, results.value)
   }
 
-  function hasTaken(quizId: string): boolean {
+  function hasTaken(quizId: string): boolean {  // เคยทำแบบทดสอบชุดนี้แล้วหรือยัง
     return results.value.some((r) => r.quizId === quizId)
   }
 

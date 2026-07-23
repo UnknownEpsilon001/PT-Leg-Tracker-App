@@ -1,4 +1,6 @@
 <script setup lang="ts">
+// หน้าตั้งค่า: ตัวอักษรใหญ่ ที่อยู่เซิร์ฟเวอร์/รหัสอุปกรณ์ การเตือนประจำวัน ซิงก์ข้อมูล และส่งออก
+// Settings screen: large font, server URL/device code, daily alarm, sync, and data export.
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import AppIcon from '@/components/AppIcon.vue'

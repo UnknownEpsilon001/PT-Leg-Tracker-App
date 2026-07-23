@@ -1,5 +1,8 @@
+// ไคลเอนต์สั่งงานอุปกรณ์ผ่านเซิร์ฟเวอร์ (v3): เริ่ม/หยุดเซสชัน และอ่านสถานะปัจจุบัน
+// Server-mediated device-control client (v3): start/stop a session, read current state.
 import type { CurrentSession } from '@/types'
 
+// [TH] ชนิดของข้อผิดพลาดจากอุปกรณ์: ติดต่อไม่ได้ / ไม่ว่าง / ว่างอยู่ / ออฟไลน์ / ไม่ได้ตั้งรหัสอุปกรณ์
 export type DeviceErrorKind = 'unreachable' | 'busy' | 'idle' | 'offline' | 'no-device'
 
 export class DeviceError extends Error {
@@ -10,12 +13,13 @@ export class DeviceError extends Error {
   }
 }
 
-const TIMEOUT_MS = 5000
+const TIMEOUT_MS = 5000  // หมดเวลารอคำขอ (มิลลิวินาที)
 
 function base(url: string): string {
   return url.replace(/\/+$/, '')
 }
 
+// [TH] ยิงคำขอ HTTP พร้อมตั้งเวลาหมดอายุ ; สถานะ 409 = ชนกันตามบริบท, อื่นๆ ที่ไม่ ok = ติดต่อไม่ได้
 async function request(
   url: string,
   conflictKind: DeviceErrorKind,
@@ -37,7 +41,7 @@ async function request(
 }
 
 // --- v3 server-session client (spec: server-mediated device control) ---
-
+// [TH] ทุกคำสั่งต้องแนบ deviceId (รหัสอุปกรณ์) ; ถ้าไม่ได้ตั้งรหัสจะโยน no-device
 function control(
   serverUrl: string,
   deviceCode: string,

@@ -1,7 +1,10 @@
+// ส่งออกข้อมูลทั้งหมดของผู้ป่วยเป็นไฟล์ JSON แล้วเปิดแชร์ (ให้แพทย์/ครูดูได้)
+// Export all patient data to a JSON file and open the share sheet.
 import { Directory, Encoding, Filesystem } from '@capacitor/filesystem'
 import { Share } from '@capacitor/share'
 import type { PainLog, Profile, QuizResult, Session } from '@/types'
 
+// [TH] รวมโปรไฟล์ เซสชัน ผลควิซ และบันทึกความปวด เป็นสตริง JSON เดียว
 export function buildExport(
   profile: Profile | null,
   sessions: Session[],
@@ -23,6 +26,7 @@ export function buildExport(
   )
 }
 
+// [TH] เขียนไฟล์ JSON ลงแคช แล้วเรียกหน้าต่างแชร์ ; ชื่อไฟล์ทำให้ปลอดภัยจากอักขระแปลก
 export async function shareExport(json: string, patientCode: string): Promise<void> {
   const date = new Date().toISOString().slice(0, 10)
   const safeCode = patientCode.replace(/[^A-Za-z0-9_-]/g, '_')

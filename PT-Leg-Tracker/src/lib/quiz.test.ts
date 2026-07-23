@@ -1,3 +1,5 @@
+// ทดสอบการให้คะแนนแบบทดสอบ (quiz.ts)
+// Tests for quiz scoring.
 import { describe, expect, it } from 'vitest'
 import { scoreQuiz } from './quiz'
 

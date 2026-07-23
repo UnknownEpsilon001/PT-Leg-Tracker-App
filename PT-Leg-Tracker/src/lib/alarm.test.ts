@@ -1,3 +1,5 @@
+// ทดสอบการตั้ง/ยกเลิกการเตือนประจำวัน (alarm.ts)
+// Tests for scheduling/cancelling the daily reminder.
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({

@@ -1,3 +1,5 @@
+// ทดสอบชุดข้อมูลไอคอน SVG (icons.ts)
+// Tests for the SVG icon data set.
 import { describe, expect, it } from 'vitest'
 import { ICONS } from './icons'
 

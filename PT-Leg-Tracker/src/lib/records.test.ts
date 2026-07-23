@@ -1,3 +1,5 @@
+// ทดสอบการรวมเซสชันกับบันทึกความปวดเป็นแถวข้อมูล (records.ts)
+// Tests for merging sessions with pain logs into record rows.
 import { describe, expect, it } from 'vitest'
 import type { PainLog, Session } from '@/types'
 import { buildRecordRows } from './records'

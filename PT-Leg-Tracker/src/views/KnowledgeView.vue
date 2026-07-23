@@ -1,4 +1,6 @@
 <script setup lang="ts">
+// หน้าความรู้: แสดงหัวข้อและบทความเรื่องข้อเข่าเสื่อม แตะเพื่ออ่านรายละเอียด
+// Knowledge screen: lists knee-OA topics and articles; tap to read.
 import { useRouter } from 'vue-router'
 import content from '@/content/knowledge.json'
 

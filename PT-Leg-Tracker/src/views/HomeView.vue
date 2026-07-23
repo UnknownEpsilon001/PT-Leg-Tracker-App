@@ -1,4 +1,6 @@
 <script setup lang="ts">
+// หน้าแรก: ทักทายผู้ป่วยและรวมเมนูหลัก (ความรู้ วิธีใช้เครื่อง ออกกำลังกาย บันทึก แบบทดสอบ ตั้งค่า)
+// Home screen: greeting + main menu buttons.
 import BigButton from '@/components/BigButton.vue'
 import AppIcon from '@/components/AppIcon.vue'
 import { useProfileStore } from '@/stores/profile'

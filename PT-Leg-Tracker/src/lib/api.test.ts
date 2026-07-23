@@ -1,3 +1,5 @@
+// ทดสอบการดึงและซิงก์เซสชันจากเซิร์ฟเวอร์ (api.ts)
+// Tests for fetching and syncing sessions from the server.
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { fetchDeviceSessions } from './api'
 

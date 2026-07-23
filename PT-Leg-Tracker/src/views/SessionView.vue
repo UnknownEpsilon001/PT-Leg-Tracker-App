@@ -1,4 +1,6 @@
 <script setup lang="ts">
+// หน้าออกกำลังกาย: สั่งเริ่ม/หยุดเครื่องผ่านเซิร์ฟเวอร์ แสดงเวลา/จำนวนครั้งสด บันทึกความปวดก่อน-หลัง
+// Exercise screen: start/stop the device via the server, live timer/reps, before/after pain logging.
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import AppIcon from '@/components/AppIcon.vue'

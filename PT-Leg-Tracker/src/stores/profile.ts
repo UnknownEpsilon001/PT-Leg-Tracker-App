@@ -1,3 +1,5 @@
+// สโตร์เก็บโปรไฟล์ผู้ป่วย ; hasProfile ใช้ตัดสินว่าต้องพาไปหน้าลงทะเบียนหรือยัง
+// Pinia store for the patient profile; hasProfile drives the registration guard.
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import type { Profile } from '@/types'

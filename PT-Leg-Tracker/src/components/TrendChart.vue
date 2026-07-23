@@ -1,4 +1,6 @@
 <script setup lang="ts">
+// กราฟเส้นแนวโน้มอย่างง่ายด้วย SVG แสดงค่าตามช่วงเวลา (เช่น ระยะเวลาหรือความปวด)
+// Simple SVG line chart of values over time (e.g. duration or pain trend).
 import { computed } from 'vue'
 
 const props = defineProps<{ points: { label: string; value: number }[]; max: number }>()

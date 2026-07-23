@@ -1,4 +1,6 @@
 <script setup lang="ts">
+// วาดไอคอนแบบ SVG จากชื่อ โดยดึงข้อมูลเส้นจาก ICONS (ดู lib/icons.ts)
+// Renders an inline SVG icon by name, pulling path data from ICONS.
 import { computed } from 'vue'
 import { ICONS } from '@/lib/icons'
 

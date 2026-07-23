@@ -1,3 +1,5 @@
+// ทดสอบไคลเอนต์สั่งงานอุปกรณ์ผ่านเซิร์ฟเวอร์ และการจัดการข้อผิดพลาด (device.ts)
+// Tests for the server-mediated device-control client and its error handling.
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DeviceError, claimSession, getCurrent, queueStart, queueStop } from './device'
 

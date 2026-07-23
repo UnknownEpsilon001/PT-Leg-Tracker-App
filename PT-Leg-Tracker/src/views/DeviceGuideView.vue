@@ -1,4 +1,6 @@
 <script setup lang="ts">
+// หน้าวิธีใช้เครื่อง: แนะนำการใช้งานทีละขั้น พร้อมแสดงสถานะออนไลน์/ออฟไลน์
+// Device guide screen: step-by-step usage with an online/offline indicator.
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import guide from '@/content/deviceGuide.json'
 

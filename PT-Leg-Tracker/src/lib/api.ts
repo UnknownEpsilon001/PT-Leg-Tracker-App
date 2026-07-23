@@ -1,3 +1,5 @@
+// ดึงประวัติเซสชันจากเซิร์ฟเวอร์ตามรหัสผู้ป่วย แล้วรวมเข้ากับข้อมูลในเครื่อง
+// Fetch a patient's session history from the server and merge into the local log.
 import type { Session } from '@/types'
 import { mergeSessions } from './sessions'
 import { useSessionsStore } from '@/stores/sessions'
@@ -30,6 +32,7 @@ export async function fetchDeviceSessions(
 }
 
 /** Fetch device sessions and merge into local log. Never throws. */
+// [TH] ซิงก์ทันที: ดึงเซสชันจากเครื่องมารวมกับ log ในเครื่อง ไม่โยน error (คืน false เมื่อพลาด)
 export async function syncNow(): Promise<boolean> {
   const settings = useSettingsStore()
   const profile = useProfileStore()

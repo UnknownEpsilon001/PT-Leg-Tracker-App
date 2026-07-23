@@ -1,3 +1,5 @@
+// ทดสอบการแปลงระดับความปวดเป็นสี พร้อมเกณฑ์คอนทราสต์ (pain.ts)
+// Tests for mapping pain level to color, including contrast bounds.
 import { describe, expect, it } from 'vitest'
 import { painColor } from './pain'
 

@@ -1,4 +1,6 @@
 <script setup lang="ts">
+// หน้าบทความ: แสดงเนื้อหาบทความตาม id จาก URL (ปรับขนาด/ความคืบหน้าการอ่านเก็บในเครื่อง)
+// Article screen: renders the article matching the URL id.
 import { computed, watchEffect } from 'vue'
 import { useRoute } from 'vue-router'
 import content from '@/content/knowledge.json'

@@ -1,3 +1,4 @@
+// ข้อมูลเส้น SVG ของไอคอนต่างๆ ใช้โดยคอมโพเนนต์ AppIcon (กรอบ 24x24 วาดแบบเส้น)
 /** Inline SVG path data (24x24 viewBox, stroke-drawn) for AppIcon. */
 export const ICONS: Record<string, string[]> = {
   'book-open': [

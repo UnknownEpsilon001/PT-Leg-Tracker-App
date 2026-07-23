@@ -1,3 +1,5 @@
+// ทดสอบการสร้างไฟล์ส่งออกและการแชร์ข้อมูลผู้ป่วย (exporter.ts)
+// Tests for building the export payload and sharing patient data.
 import { describe, expect, it, vi } from 'vitest'
 
 vi.mock('@capacitor/filesystem', () => ({ Filesystem: {}, Directory: { Cache: 'CACHE' } }))

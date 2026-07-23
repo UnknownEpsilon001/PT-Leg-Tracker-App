@@ -1,3 +1,5 @@
+// ทดสอบการอ่าน/เขียน JSON ลงที่เก็บถาวร รวมถึงกรณีอ่านพลาด (storage.ts)
+// Tests for reading/writing JSON to storage, including failure fallbacks.
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const store = new Map<string, string>()

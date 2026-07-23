@@ -1,4 +1,6 @@
 <script setup lang="ts">
+// หน้าบันทึกของฉัน: รวมเซสชันกับบันทึกความปวดเป็นตาราง พร้อมกราฟแนวโน้ม
+// Records screen: sessions + pain logs as a table, with a trend chart.
 import { computed } from 'vue'
 import AppIcon from '@/components/AppIcon.vue'
 import TrendChart from '@/components/TrendChart.vue'

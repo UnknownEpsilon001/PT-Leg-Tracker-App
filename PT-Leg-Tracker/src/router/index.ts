@@ -1,3 +1,5 @@
+// เส้นทางหน้าจอทั้งหมดของแอป และตัวกันเส้นทาง (ต้องลงทะเบียนโปรไฟล์ก่อนใช้หน้าอื่น)
+// App routes + a guard that forces registration before any other screen.
 import { createRouter, createWebHistory } from 'vue-router'
 import HomeView from '../views/HomeView.vue'
 import { useProfileStore } from '@/stores/profile'
@@ -57,6 +59,7 @@ const router = createRouter({
   ],
 })
 
+// [TH] ถ้ายังไม่มีโปรไฟล์ ให้บังคับไปหน้าลงทะเบียนก่อนเสมอ
 router.beforeEach((to) => {
   const store = useProfileStore()
   if (!store.hasProfile && to.name !== 'setup') return { name: 'setup' }

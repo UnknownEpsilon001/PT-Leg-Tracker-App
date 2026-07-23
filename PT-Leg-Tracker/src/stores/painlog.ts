@@ -1,3 +1,5 @@
+// สโตร์เก็บบันทึกระดับความปวดก่อน/หลังของผู้ป่วย
+// Pinia store for the patient's before/after pain logs.
 import { ref } from 'vue'
 import { defineStore } from 'pinia'
 import type { PainLog } from '@/types'

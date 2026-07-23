@@ -1,4 +1,6 @@
 <script setup lang="ts">
+// ปุ่มเมนูขนาดใหญ่พร้อมไอคอน สำหรับหน้าแรก กดแล้วไปยังหน้าที่กำหนด (ออกแบบให้ผู้สูงอายุกดง่าย)
+// Large icon menu button for the home screen; navigates to the given route.
 import { useRouter } from 'vue-router'
 import AppIcon from '@/components/AppIcon.vue'
 

@@ -1,3 +1,5 @@
+// ทดสอบการรวมเซสชันจากเครื่องกับในเครื่องแบบไม่ซ้ำ (sessions.ts)
+// Tests for de-duplicated merging of device and local sessions.
 import { describe, expect, it } from 'vitest'
 import { mergeSessions } from './sessions'
 import type { Session } from '@/types'

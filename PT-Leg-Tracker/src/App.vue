@@ -1,4 +1,6 @@
 <script setup lang="ts">
+// คอมโพเนนต์ราก: แถบหัวเรื่องพร้อมปุ่มย้อนกลับ, สลับโหมดตัวอักษรใหญ่, และแสดงหน้าตาม router
+// Root component: top bar with back button, large-font toggle, and the router outlet.
 import { watchEffect } from 'vue'
 import { RouterView, useRoute, useRouter } from 'vue-router'
 import { useSettingsStore } from '@/stores/settings'
@@ -8,6 +10,7 @@ const route = useRoute()
 const router = useRouter()
 const settings = useSettingsStore()
 
+// [TH] เปิด/ปิดคลาส font-large ที่ระดับราก ตามการตั้งค่าตัวอักษรใหญ่
 watchEffect(() => {
   document.documentElement.classList.toggle('font-large', settings.settings.fontLarge)
 })

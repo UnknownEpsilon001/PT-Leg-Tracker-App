@@ -1,4 +1,6 @@
 <script setup lang="ts">
+// แถบเลือกระดับความปวด 0-10 พร้อมไล่สีเขียว-แดงตามระดับ (ใช้ v-model)
+// Pain-level picker 0-10 with a green-to-red color ramp; two-way bound via v-model.
 import { painColor } from '@/lib/pain'
 
 defineProps<{ modelValue: number | null }>()

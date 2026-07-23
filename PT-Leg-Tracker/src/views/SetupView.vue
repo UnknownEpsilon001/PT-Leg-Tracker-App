@@ -1,4 +1,6 @@
 <script setup lang="ts">
+// หน้าลงทะเบียน: กรอกชื่อ อายุ และรหัสผู้ป่วย เพื่อสร้างโปรไฟล์ครั้งแรกก่อนใช้แอป
+// Registration screen: name, age, patient code to create the profile before using the app.
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useProfileStore } from '@/stores/profile'
