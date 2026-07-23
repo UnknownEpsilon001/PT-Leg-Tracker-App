@@ -1,3 +1,5 @@
+# [TH] เทสระดับ HTTP: จำลองฝั่งแอปเรียก API เซสชัน (start/stop/claim/list) ผ่าน TestClient
+# HTTP-level tests: simulate the app side calling the session API (start/stop/claim/list) via TestClient
 from fastapi.testclient import TestClient
 
 from app.main import create_app

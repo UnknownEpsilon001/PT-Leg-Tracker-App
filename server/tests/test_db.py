@@ -1,3 +1,5 @@
+# [TH] เทสชั้น db.py ตรงๆ: create/close/claim/list session และแยกตาม deviceId
+# Direct tests for db.py: create/close/claim/list sessions, and per-deviceId isolation
 from app import db
 
 

@@ -1,3 +1,7 @@
+# [TH] เทสตรรกะหลักของ SessionService: วงจรเซสชันสองต้นทาง (แอป/ปุ่มอุปกรณ์),
+# กติกาการ queue คำสั่ง, และการเยียวยาตัวเองเมื่อ heartbeat ขาดหาย
+# Tests for SessionService's core logic: dual-origin (app/device button) session
+# lifecycle, command-queueing rules, and self-healing on missed heartbeats
 import pytest
 
 from app import db
@@ -70,10 +74,13 @@ def test_started_event_refreshes_liveness_after_long_silence(clock):
 def test_button_win_clears_stale_pending_start_and_avoids_phantom_starting(clock):
     svc = make_service(clock)
     svc.queue_start()
+    # [TH] ปุ่มกดที่ตัวเครื่องชนะ race ก่อนอุปกรณ์จะไป fetch คำสั่งที่ queue ไว้
     # physical button wins the race before the device fetches the queued command
     session_id = svc.handle_event("started", 0, 0)
     assert db.get_open_session()["origin"] == "device"
 
+    # [TH] อุปกรณ์ poll มาช้าต้องไม่เห็นคำสั่ง "start" ค้างอยู่ -- เจตนาสำเร็จไปแล้ว
+    # จึงต้องไม่ถูกรายงานว่ายัง fetch ได้
     # device's late poll must not see a stale "start" -- the intent is already
     # satisfied, so it must not be reported as still fetchable
     assert svc.fetch_command() is None
@@ -82,6 +89,7 @@ def test_button_win_clears_stale_pending_start_and_avoids_phantom_starting(clock
     assert svc.handle_event("stopped", 5, 1) == session_id
     assert db.get_open_session() is None
 
+    # [TH] ต้องไม่มีสถานะ "starting" หลอกๆ และไม่มี 409 มั่วจากแฟลก in-flight ที่หลงเหลือ
     # no phantom "starting" state and no bogus 409 from a leftover in-flight flag
     assert svc.current()["state"] == "idle"
     svc.queue_start()  # must not raise
@@ -98,6 +106,8 @@ def test_start_in_flight_flag_cleared_on_stop_prevents_origin_leak(clock):
     svc.handle_event("stopped", 5, 1)
     assert svc.device.start_in_flight() is False
 
+    # [TH] การ start ด้วยปุ่มล้วนๆ ครั้งถัดไป (ไม่มีแอปเกี่ยวข้อง) ต้องได้ origin เป็น device
+    # ไม่ใช่ "app" จากแฟลก in-flight ที่หลุดค้างมา
     # a subsequent pure button start (no app involvement) must get device origin,
     # not "app" from a leaked in-flight flag
     svc.handle_event("started", 0, 0)

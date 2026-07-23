@@ -1,3 +1,5 @@
+# [TH] เทสระดับ HTTP ฝั่งอุปกรณ์: command/event/heartbeat endpoint ที่ ESP32 เรียก
+# HTTP-level tests for the device side: the command/event/heartbeat endpoints the ESP32 calls
 from fastapi.testclient import TestClient
 
 from app.main import create_app

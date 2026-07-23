@@ -1,3 +1,5 @@
+# [TH] เทส DeviceState ล้วนๆ: คิวคำสั่งหมดอายุ (TTL), แฟลก in-flight, และตรวจว่าอุปกรณ์ออนไลน์อยู่ไหม
+# Pure DeviceState tests: command TTL expiry, the in-flight flag, and device-online tracking
 from app.state import COMMAND_TTL_SEC, DEVICE_OFFLINE_AFTER_SEC, DeviceState
 
 
