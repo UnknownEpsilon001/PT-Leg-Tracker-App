@@ -11,23 +11,53 @@
 #     --build-property compiler.cpp.extra_flags=-DLINK_OVER_USB=1 `
 #     --upload -p COM4 firmware/pt-leg-display
 #
-# Then:
-#   .\firmware\tools\fake-controller.ps1 -Port COM4
+# Then (port auto-detected from the USB-serial chip; pass -Port COMx to override):
+#   .\firmware\tools\fake-controller.ps1
 #
-# It answers `hello` with a settings reply, then runs a compressed session so the
-# phases actually move: LIFT -> HOLD -> LOWER -> REST, repeating. Ctrl+C stops,
-# and the display should fall back to NO LINK about 2.5 s later.
+# It answers `hello` with a settings reply, then runs the device's real cycle:
+# LIFT -> HOLD 10 s -> LOWER -> REST 10 s, repeating. Ctrl+C stops, and the display
+# should fall back to NO LINK about 2.5 s later.
+# Shorten a phase for a quicker watch with -HoldSec / -RestSec.
 
 param(
-    [string]$Port = "COM4",
-    [int]$HoldSec = 4,      # compressed from the real 10 s so a cycle is watchable
-    [int]$RestSec = 4,
+    [string]$Port = "",     # empty = auto-detect the ESP32's USB-serial port
+    [int]$HoldSec = 10,     # matches the real device (lift -> hold 10 s -> lower -> rest 10 s)
+    [int]$RestSec = 10,
     [int]$TravelSec = 2,
     [int]$Seconds = 0,      # 0 = run until Ctrl+C
     [switch]$AutoStart      # begin a session immediately, without waiting for a touch
 )
 
 $ErrorActionPreference = "Stop"
+
+# [TH] หา COM ของ ESP32 อัตโนมัติ จากชิป USB-serial ที่รู้จัก (VID) ผ่าน arduino-cli
+#      มีตัวเดียว -> ใช้เลย, หลายตัว -> ให้ระบุ -Port, ไม่มี -> แจ้ง error
+# Auto-detect the ESP32's COM port by matching its USB-serial chip's VID, using
+# arduino-cli's JSON port list (already a build dependency). The CYD is a CH340;
+# the other VIDs cover the common ESP32 dev-board bridges so this tool is not
+# board-specific. One match -> use it; several -> ask the user to pass -Port.
+function Resolve-EspPort {
+    # 1A86 WCH CH340/CH9102 (the CYD) · 10C4 Silicon Labs CP210x · 0403 FTDI
+    # 303A Espressif native USB (S2/S3/C3)
+    $knownVids = @("0x1A86", "0x10C4", "0x0403", "0x303A")
+    $json = arduino-cli board list --format json | ConvertFrom-Json
+    $found = @($json.detected_ports | Where-Object {
+        $_.port.protocol -eq "serial" -and $knownVids -contains $_.port.properties.vid
+    })
+    if ($found.Count -eq 0) {
+        throw "No ESP32 USB-serial port found. Plug the board in, or pass -Port COMx."
+    }
+    if ($found.Count -gt 1) {
+        $list = ($found | ForEach-Object { "$($_.port.address) (vid $($_.port.properties.vid))" }) -join ", "
+        throw "Multiple candidate ports: $list. Pass -Port COMx to pick one."
+    }
+    return $found[0].port.address
+}
+
+if (-not $Port) {
+    $Port = Resolve-EspPort
+    Write-Host "auto-detected ESP32 on $Port" -ForegroundColor Cyan
+}
 
 $sp = New-Object System.IO.Ports.SerialPort $Port, 115200, None, 8, one
 $sp.DtrEnable = $false
@@ -59,6 +89,19 @@ if ($AutoStart) {
     Write-Host "   AUTOSTART" -ForegroundColor Green
 }
 
+# [TH] คุมด้วยแป้นพิมพ์ จำลองปุ่มหน้าปัดของคอนโทรลเลอร์ เพื่อทดสอบการตอบสนองของจอโดยไม่ต้องมีบอร์ดคอนโทรลเลอร์
+# Live keyboard control stands in for the controller's panel buttons so the
+# display's reaction to each session action can be exercised with only the CYD on
+# the desk. s=START (idle only), x=STOP, r=RESET reps (idle only), q=quit. This
+# drives the display SIDE of the button feature; it does not test the real button
+# GPIO/debounce, which lives in the controller firmware.
+# Skipped when input is redirected (e.g. piped/non-interactive) so the loop still
+# runs headless with -AutoStart -Seconds.
+$interactive = -not [Console]::IsInputRedirected
+if ($interactive) {
+    Write-Host "keys: s=start  x=stop  r=reset  q=quit" -ForegroundColor Cyan
+}
+
 $deadline = if ($Seconds -gt 0) { (Get-Date).AddSeconds($Seconds) } else { [datetime]::MaxValue }
 
 try {
@@ -82,6 +125,41 @@ try {
             elseif ($line -match '"v"\s*:\s*"stop"') {
                 $phase = 5; $phaseLeft = $TravelSec   # SafeLower, then idle
                 Write-Host "   STOP" -ForegroundColor Green
+            }
+        }
+
+        # keyboard: stand in for the controller's START/STOP/RESET panel buttons
+        if ($interactive) {
+            while ([Console]::KeyAvailable) {
+                $key = [Console]::ReadKey($true).KeyChar
+                switch -CaseSensitive ([char]::ToLower($key)) {
+                    's' {
+                        if (-not $running) {
+                            $running = $true; $phase = 1; $phaseLeft = $TravelSec
+                            $reps = 0; $sessionStart = Get-Date
+                            Write-Host "   START (key)" -ForegroundColor Green
+                        } else {
+                            Write-Host "   START ignored (already running)" -ForegroundColor DarkYellow
+                        }
+                    }
+                    'x' {
+                        if ($running -and $phase -ne 5) {
+                            $phase = 5; $phaseLeft = $TravelSec   # SafeLower, then idle
+                            Write-Host "   STOP (key)" -ForegroundColor Green
+                        } else {
+                            Write-Host "   STOP ignored (not running)" -ForegroundColor DarkYellow
+                        }
+                    }
+                    'r' {
+                        if (-not $running) {                      # controller: RESET only when idle
+                            $reps = 0; $elapsed = 0
+                            Write-Host "   RESET reps (key)" -ForegroundColor Green
+                        } else {
+                            Write-Host "   RESET ignored (running)" -ForegroundColor DarkYellow
+                        }
+                    }
+                    'q' { Write-Host "   quit (key)" -ForegroundColor Green; return }
+                }
             }
         }
 

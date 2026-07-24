@@ -116,7 +116,8 @@ controller and drive the whole UI with one board on the desk:
 ```powershell
 # flip LINK_OVER_USB to 1 in pt-leg-display.ino, then
 arduino-cli compile --fqbn "esp32:esp32:esp32:PartitionScheme=huge_app" --upload -p COM4 firmware/pt-leg-display
-.\firmware\tools\fake-controller.ps1 -Port COM4 -AutoStart
+# port auto-detected from the USB-serial chip; pass -Port COMx to override
+.\firmware\tools\fake-controller.ps1 -AutoStart
 ```
 
 The script answers `hello`, reacts to START/STOP touches, and runs a compressed
