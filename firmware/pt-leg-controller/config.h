@@ -15,7 +15,7 @@
 // [TH] ลิมิตสวิตช์ ต้องใช้ขาที่รองรับ INPUT_PULLUP เท่านั้น (ห้ามใช้ 34/35/36/39)
 #define PIN_SWITCH_TOP 32     // closes when leg fully up — สวิตช์บน: ปิดเมื่อขายกสุด
 #define PIN_SWITCH_BOTTOM 33  // closes when leg fully down — สวิตช์ล่าง: ปิดเมื่อขาลงสุด
-// #define SWITCH_NC          // define if switches are normally-closed (fail-safe on wire break)
+#define SWITCH_NC             // switches + panel buttons are normally-closed (fail-safe on wire break)
 // [TH] กำหนดถ้าใช้สวิตช์แบบ NC (ปกติปิด) เพื่อให้ปลอดภัยเมื่อสายขาด
 #define SWITCH_DEBOUNCE_MS 25 // เวลากันเด้งสัญญาณสวิตช์ (มิลลิวินาที)
 

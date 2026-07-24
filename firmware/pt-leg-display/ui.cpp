@@ -20,7 +20,6 @@
 #define COL_SURFACE 0x24395e // navy       - cards, inputs
 #define COL_TEXT 0xf2f5f9    // near-white - primary text
 #define COL_MUTED 0xc6ccd6   // silver     - secondary text
-#define COL_STOP 0x8c2f39    // maroon     - stop
 #define COL_FAULT 0xb00020   // red        - fault
 
 static TFT_eSPI tft;
