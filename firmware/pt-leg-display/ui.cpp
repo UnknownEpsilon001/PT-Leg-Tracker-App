@@ -179,22 +179,29 @@ static void buildMain() {
   lv_obj_align(imgLogo, LV_ALIGN_CENTER, 0, -6);  // full-screen idle branding; nothing below it now
                                                   // [TH] โลโก้ตอนว่างเต็มจอ ไม่มีปุ่มอยู่ข้างล่างแล้ว
 
+  // Hidden from creation, not just once the first controller state arrives: the
+  // boot screen must show the logo alone, with no one-frame flash of these
+  // stacked underneath it before uiUpdateMain's first call sorts visibility out.
+  // [TH] ซ่อนตั้งแต่สร้าง ไม่ใช่รอสถานะแรกจากคอนโทรลเลอร์ กันไม่ให้จอตอนบูตมีข้อความซ้อนโลโก้แวบเดียว
   lblClock = lv_label_create(scrMain);
   lv_obj_set_style_text_font(lblClock, &lv_font_montserrat_48, 0);
   lv_label_set_text(lblClock, "00:00");
   lv_obj_align(lblClock, LV_ALIGN_TOP_MID, 0, 44);
+  lv_obj_add_flag(lblClock, LV_OBJ_FLAG_HIDDEN);
 
   lblReps = lv_label_create(scrMain);
   lv_obj_set_style_text_font(lblReps, &lv_font_montserrat_28, 0);
   lv_obj_set_style_text_color(lblReps, lv_color_hex(COL_MUTED), 0);
   lv_label_set_text(lblReps, "0 REPS");
   lv_obj_align(lblReps, LV_ALIGN_TOP_MID, 0, 100);
+  lv_obj_add_flag(lblReps, LV_OBJ_FLAG_HIDDEN);
 
   lblPhase = lv_label_create(scrMain);
   lv_obj_set_style_text_font(lblPhase, &lv_font_montserrat_20, 0);
   lv_obj_set_style_text_color(lblPhase, lv_color_hex(COL_MUTED), 0);
   lv_label_set_text(lblPhase, "READY");
   lv_obj_align(lblPhase, LV_ALIGN_TOP_MID, 0, 134);
+  lv_obj_add_flag(lblPhase, LV_OBJ_FLAG_HIDDEN);
 
   // In-phase timer: seconds spent in the current HOLD/REST, so a patient can see
   // progress toward the configured hold/rest duration. Blank outside those two
@@ -204,6 +211,7 @@ static void buildMain() {
   lv_obj_set_style_text_color(lblPhaseTimer, lv_color_hex(COL_MUTED), 0);
   lv_label_set_text(lblPhaseTimer, "");
   lv_obj_align(lblPhaseTimer, LV_ALIGN_TOP_MID, 0, 164);
+  lv_obj_add_flag(lblPhaseTimer, LV_OBJ_FLAG_HIDDEN);
 
   lblCode = lv_label_create(scrMain);
   lv_obj_set_style_text_color(lblCode, lv_color_hex(COL_MUTED), 0);
@@ -543,6 +551,11 @@ static void buildSettings() {
   spinMax = makeSpinRow(col, "MAX TRAVEL s", 8, 1, 20);
   spinHold = makeSpinRow(col, "HOLD s", 10, 1, 60);
   spinRest = makeSpinRow(col, "REST s", 10, 1, 60);
+
+  lv_obj_t* lblCredit = lv_label_create(col);
+  lv_obj_set_style_text_color(lblCredit, lv_color_hex(COL_MUTED), 0);
+  lv_label_set_text(lblCredit, "By Leo ;3");
+  lv_obj_set_style_pad_top(lblCredit, 10, 0);
 
   kb = lv_keyboard_create(scrSettings);
   lv_obj_set_size(kb, lv_pct(100), 120);
