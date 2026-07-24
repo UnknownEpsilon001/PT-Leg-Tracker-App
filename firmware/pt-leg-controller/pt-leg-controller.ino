@@ -5,6 +5,7 @@
 #include "settings.h"
 #include "actuator.h"
 #include "switches.h"
+#include "buttons.h"
 #include "session.h"
 #include "net.h"
 #include "link.h"
@@ -21,13 +22,6 @@ static void applyActuator() {
     case Phase::SafeLower: actuatorDown(); break;
     default: actuatorOff(); break;  // Idle, Hold, Rest, Fault — สถานะที่ต้องดับรีเลย์
   }
-}
-
-static void onLinkCmd(const char* v) {
-  // [TH] คำสั่งจากจอผ่าน UART: เริ่ม หรือ หยุด รอบการทำงาน
-  uint32_t now = millis();
-  if (!strcmp(v, "start")) gSession.start(now);
-  else if (!strcmp(v, "stop")) gSession.requestStop(now);
 }
 
 static void applySettings(const DeviceSettings& s) {
@@ -64,6 +58,7 @@ static void onLinkHello() { gLink.sendSettings(currentAsLink()); }
 void setup() {
   actuatorBegin();  // safety first — ดับรีเลย์ก่อนเป็นอันดับแรกเพื่อความปลอดภัย
   switchesBegin();
+  buttonsBegin();
   Serial.begin(115200);
   delay(200);  // let UART0 settle so the boot banner is not clipped — รอ UART0 นิ่งกันข้อความต้นเปิดเครื่องขาด
   Serial2.begin(115200, SERIAL_8N1, 16, 17);  // UART to CYD — สาย UART ไปบอร์ดจอ (RX=16, TX=17)
@@ -73,7 +68,6 @@ void setup() {
   actuatorSetCap(gSettings.maxTravelSec * 1000u + 500u);
   netBegin(gSettings);
   gLink.begin(&Serial2);
-  gLink.onCmd = onLinkCmd;
   gLink.onSettings = onLinkSettings;
   gLink.onHello = onLinkHello;
   Serial.printf("pt-leg-controller %s ssid=%s server=%s code=%s cycle max/hold/rest=%u/%u/%u\n",
@@ -86,7 +80,13 @@ void loop() {
   // [TH] ลำดับสำคัญ: อ่านสวิตช์ -> เดินเครื่องสถานะ -> สั่งรีเลย์ -> ตรวจเพดานเวลา ก่อนงานเครือข่าย
   uint32_t now = millis();
   switchesPoll(now);
+  buttonsPoll(now);
   gSession.tick(now, switchTop(), switchBottom());
+  // panel buttons: START (idle only), STOP (any state), RESET (idle only)
+  // [TH] ปุ่มหน้าปัด: START เริ่ม (เฉพาะว่าง), STOP หยุด (ตลอดเวลา), RESET ล้าง (เฉพาะว่าง)
+  if (buttonStartPressed()) gSession.start(now);
+  if (buttonStopPressed()) gSession.requestStop(now);
+  if (buttonResetPressed()) gSession.reset(now);
   applyActuator();
   actuatorTick(now);
   if (actuatorCapTripped()) gSession.forceFault(now);  // backstop: SM never commanded OFF
