@@ -49,6 +49,17 @@ void SessionSM::forceFault(uint32_t nowMs) {
   finish(nowMs, Phase::Fault);
 }
 
+void SessionSM::reset(uint32_t nowMs) {
+  // [TH] ปุ่ม RESET: ใช้ได้เฉพาะตอนว่าง/ผิดพลาด ไม่ให้ล้างกลางรอบ (ต้องกด STOP ก่อน)
+  if (running()) return;         // must STOP first; RESET never interrupts a session
+  repCount = 0;
+  finalElapsed = 0;
+  finalRepCount = 0;
+  startedEdge = false;
+  stoppedEdge = false;
+  enter(Phase::Idle, nowMs);     // clears a latched Fault back to Idle
+}
+
 void SessionSM::tick(uint32_t nowMs, bool topPressed, bool bottomPressed) {
   // net 2: both switches pressed at once is physically impossible -> wiring fault
   // [TH] ตาข่ายกันพลาด 2: สวิตช์บนและล่างถูกกดพร้อมกันเป็นไปไม่ได้ทางกายภาพ -> ถือว่าสายผิด

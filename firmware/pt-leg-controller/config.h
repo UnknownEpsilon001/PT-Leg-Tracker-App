@@ -19,6 +19,13 @@
 // [TH] กำหนดถ้าใช้สวิตช์แบบ NC (ปกติปิด) เพื่อให้ปลอดภัยเมื่อสายขาด
 #define SWITCH_DEBOUNCE_MS 25 // เวลากันเด้งสัญญาณสวิตช์ (มิลลิวินาที)
 
+// panel buttons (NC momentary, INPUT_PULLUP, same polarity as SWITCH_NC)
+// [TH] ปุ่มหน้าปัด (แบบ NC กดชั่วขณะ) ใช้ INPUT_PULLUP ขั้วเดียวกับ SWITCH_NC
+#define PIN_BTN_START 25   // start a session — เริ่มรอบ (เฉพาะตอนว่าง)
+#define PIN_BTN_STOP 26    // stop / safe-lower — หยุดและลดขาลงอย่างปลอดภัย (ตลอดเวลา)
+#define PIN_BTN_RESET 4    // clear reps + FAULT when idle — ล้างจำนวนครั้งและสถานะ FAULT ตอนว่าง
+#define BUTTON_DEBOUNCE_MS 25 // เวลากันเด้งของปุ่ม (มิลลิวินาที)
+
 // safety cap: max time a stroke (LIFT/LOWER/SAFE-LOWER) may drive before FAULT
 // [TH] เพดานความปลอดภัย: เวลาสูงสุดที่มอเตอร์วิ่งได้ต่อจังหวะก่อนขึ้นสถานะ FAULT
 #define DEFAULT_MAX_TRAVEL_SEC 8

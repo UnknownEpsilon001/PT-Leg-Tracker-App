@@ -23,6 +23,8 @@ class SessionSM {
                                      // [TH] สั่งหยุดแบบปลอดภัย: ลดขาลงก่อนแล้วค่อยหยุด
   void forceFault(uint32_t nowMs);   // external safety trip (actuator cap)
                                      // [TH] บังคับเข้าสถานะผิดพลาดจากภายนอก (เพดานเวลารีเลย์)
+  void reset(uint32_t nowMs);        // idle-only: zero reps/elapsed, clear FAULT -> Idle; no-op while running
+                                     // [TH] เฉพาะตอนว่าง: ล้างจำนวนครั้ง/เวลา และล้าง FAULT กลับสู่ Idle ; ไม่ทำอะไรถ้ากำลังทำงาน
   void tick(uint32_t nowMs, bool topPressed, bool bottomPressed);
   bool running() const { return ph != Phase::Idle && ph != Phase::Fault; }
   bool faulted() const { return ph == Phase::Fault; }
