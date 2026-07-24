@@ -33,9 +33,7 @@ void Link::dispatch(const String& line) {
   JsonDocument d;
   if (deserializeJson(d, line)) return;  // malformed dropped — ข้อความเสียหายให้ทิ้ง
   const char* t = d["t"] | "";
-  if (!strcmp(t, "cmd")) {
-    if (onCmd) onCmd(d["v"] | "");
-  } else if (!strcmp(t, "hello")) {
+  if (!strcmp(t, "hello")) {
     if (onHello) onHello();
   } else if (!strcmp(t, "state")) {
     if (onState) {
@@ -59,9 +57,6 @@ void Link::dispatch(const String& line) {
   // [TH] ชนิด "ping" ไม่มีตัวจัดการ เพราะ _lastRx ถูกจับเวลาไว้แล้วใน poll()
 }
 
-void Link::sendCmd(const char* v) {
-  JsonDocument d; d["t"] = "cmd"; d["v"] = v; emit(_io, d);
-}
 void Link::sendHello() {
   JsonDocument d; d["t"] = "hello"; emit(_io, d);
 }

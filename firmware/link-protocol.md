@@ -9,7 +9,6 @@ ArduinoJson. Malformed lines are dropped. Lines over 512 chars reset the buffer.
 
 ## Display → Controller
 
-- `{"t":"cmd","v":"start"|"stop"}` — touch button press.
 - `{"t":"settings","ssid":..,"pass":..,"server":..,"code":..,"maxtravel":..,"hold":..,"rest":..}`
   — save from the settings screen. The controller persists it to NVS and
   reconnects Wi-Fi.
@@ -29,6 +28,8 @@ ArduinoJson. Malformed lines are dropped. Lines over 512 chars reset the buffer.
   5=SafeLower, 6=Fault.
 - `maxtravel` replaced the old `lift`/`lower` timings when travel became
   limit-switch terminated; it is the per-stroke safety cap in seconds.
-- UART loss is a safety event: if the controller sees no line for ~2 s during a
-  session it safe-lowers and stops (the touch STOP would otherwise be
-  unreachable).
+- Run control (START/STOP/RESET) is on physical NC panel buttons wired to the
+  controller, so it no longer travels over UART.
+- UART loss is still a safety event: if the controller sees no line for ~2 s
+  during a session it safe-lowers and stops, as defense-in-depth (the physical
+  STOP remains the primary stop).

@@ -24,7 +24,6 @@ class Link {
  public:
   void begin(Stream* io) { _io = io; }
   void poll();
-  void sendCmd(const char* v);
   void sendSettings(const LinkSettings& s);
   void sendHello();
   void sendState(const LinkState& st);
@@ -32,7 +31,6 @@ class Link {
   uint32_t lastRxMs() const { return _lastRx; }
 
   // [TH] คอลแบ็กแยกตามฝั่ง: บางตัวใช้ฝั่งคอนโทรลเลอร์ บางตัวใช้ฝั่งจอ
-  void (*onCmd)(const char* v) = nullptr;                 // รับคำสั่ง start/stop
   void (*onSettings)(const LinkSettings&) = nullptr;   // controller side — คอนโทรลเลอร์รับค่าตั้งค่าเพื่อบันทึก
   void (*onHello)() = nullptr;                         // controller side — จอทักทาย ขอค่าปัจจุบัน
   void (*onState)(const LinkState&) = nullptr;         // display side — จอรับสถานะมาแสดง
