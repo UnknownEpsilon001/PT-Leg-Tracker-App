@@ -1,5 +1,5 @@
-// สเก็ตช์หลักของบอร์ดจอ CYD (ESP32) — รับสถานะจากคอนโทรลเลอร์มาแสดง และส่งคำสั่งจากปุ่มสัมผัสกลับไป
-// Display board (CYD) main sketch: shows controller state, relays touch commands back.
+// สเก็ตช์หลักของบอร์ดจอ CYD (ESP32) — รับสถานะจากคอนโทรลเลอร์มาแสดง หน้าจอหลักแสดงผลอย่างเดียว มีเพียงการตั้งค่าที่ส่งกลับไป
+// Display board (CYD) main sketch: shows controller state; main screen is output-only, only settings are sent back.
 //
 // Bench aid: route the controller link over the USB serial port so a PC can
 // impersonate the controller and drive the whole UI with no second board
@@ -37,8 +37,6 @@ static DeviceSettings gLast = {"", "", "", "default", 8, 10, 10};
 static bool gSettingsKnown = false;
 static bool gLinkUp = false;
 
-static void onTouchStart() { Serial.println("touch: start"); gLink.sendCmd("start"); }
-static void onTouchStop() { Serial.println("touch: stop"); gLink.sendCmd("stop"); }
 static void onOpenSettings() { Serial.println("touch: settings"); uiOpenSettings(gLast); }
 
 static void onSaveFromUi(const DeviceSettings& s) {
@@ -75,7 +73,7 @@ void setup() {
   Serial.println("pt-leg-display boot");
   Serial2.begin(115200, SERIAL_8N1, 22, 27);  // UART to controller (CYD free pins) — สาย UART ไปคอนโทรลเลอร์ (ขาว่างของ CYD)
   uiBegin();
-  uiSetCallbacks(onTouchStart, onTouchStop, onOpenSettings);
+  uiSetCallbacks(onOpenSettings);
   uiSetSettingsSaved(onSaveFromUi);
   Serial.printf("controller link on %s\n", LINK_OVER_USB ? "USB (bench)" : "Serial2");
 #if LINK_OVER_USB

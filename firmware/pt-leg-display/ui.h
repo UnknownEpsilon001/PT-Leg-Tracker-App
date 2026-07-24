@@ -4,12 +4,13 @@
 #include "settings.h"
 
 // ส่วนติดต่อผู้ใช้บนจอสัมผัส CYD (สร้างด้วยไลบรารี LVGL)
-// หน้าจอหลักแสดงเวลา/จำนวนครั้ง/สถานะ และปุ่ม START/STOP กับหน้าตั้งค่า
-// Touchscreen UI (LVGL) for the CYD: main screen + settings screen.
+// หน้าจอหลักแสดงเวลา/จำนวนครั้ง/สถานะแบบอย่างเดียว (แสดงผลเท่านั้น) และมีปุ่มเฟืองไปหน้าตั้งค่า
+// Touchscreen UI (LVGL) for the CYD: output-only main screen + settings screen.
 
 void uiBegin();  // เริ่มต้นจอ ทัชสกรีน และ LVGL
 void uiLoop();   // เรียกทุกลูปเพื่อให้ LVGL ทำงาน
-void uiSetCallbacks(void (*onStart)(), void (*onStop)(), void (*onOpenSettings)());
+void uiSetCallbacks(void (*onOpenSettings)());  // main screen is output-only; only the gear is interactive
+                                                // [TH] หน้าจอหลักแสดงผลอย่างเดียว มีเพียงปุ่มเฟืองที่กดได้
 // linkUp false = no UART traffic from the controller recently; the screen must
 // not keep presenting the last known state as if it were live.
 // [TH] linkUp เป็น false = ไม่ได้รับข้อมูลจากคอนโทรลเลอร์เมื่อเร็วๆ นี้

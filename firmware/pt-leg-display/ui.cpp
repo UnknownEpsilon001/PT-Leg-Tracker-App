@@ -1,6 +1,6 @@
 // การสร้างส่วนติดต่อผู้ใช้ทั้งหมดบนจอสัมผัส CYD ด้วย LVGL
-// ประกอบด้วยหน้าจอหลัก (นาฬิกา/จำนวนครั้ง/ปุ่ม START-STOP) และหน้าตั้งค่า (WiFi/เซิร์ฟเวอร์/เวลารอบ)
-// All LVGL UI for the CYD touchscreen: main screen and settings screen.
+// ประกอบด้วยหน้าจอหลัก (นาฬิกา/จำนวนครั้ง/สถานะ แสดงผลอย่างเดียว) และหน้าตั้งค่า (WiFi/เซิร์ฟเวอร์/เวลารอบ)
+// All LVGL UI for the CYD touchscreen: output-only main screen and settings screen.
 #include "ui.h"
 #include <lvgl.h>
 #include <TFT_eSPI.h>
@@ -137,29 +137,15 @@ void uiBegin() {
 
 // ---------------------------------------------------------------- main screen
 
-static lv_obj_t *scrMain, *lblClock, *lblReps, *lblPhase, *lblStatus, *btnGo, *lblGo;
+static lv_obj_t *scrMain, *lblClock, *lblReps, *lblPhase, *lblStatus;
 static lv_obj_t *lblCode, *btnGear, *imgLogo;
 
 LV_IMG_DECLARE(logo_img)  // firmware/pt-leg-display/logo_img.c
-static void (*cbStart)() = nullptr;
-static void (*cbStop)() = nullptr;
 static void (*cbSettings)() = nullptr;
 static bool uiRunning = false;
 
-void uiSetCallbacks(void (*onStart)(), void (*onStop)(), void (*onOpenSettings)()) {
-  cbStart = onStart;
-  cbStop = onStop;
+void uiSetCallbacks(void (*onOpenSettings)()) {
   cbSettings = onOpenSettings;
-}
-
-static void goClicked(lv_event_t*) {
-  // [TH] ปุ่มหลัก: ถ้ากำลังทำงานให้สั่งหยุด ถ้าไม่ให้สั่งเริ่ม
-  if (uiRunning) {
-    if (cbStop) cbStop();
-  } else {
-    if (cbStart) cbStart();  // also clears a latched FAULT on the controller
-                             // [TH] การเริ่มยังล้างสถานะ FAULT ที่ค้างบนคอนโทรลเลอร์ด้วย
-  }
 }
 
 static void gearClicked(lv_event_t*) {
@@ -169,7 +155,7 @@ static void gearClicked(lv_event_t*) {
 }
 
 static void buildMain() {
-  // [TH] สร้างหน้าจอหลัก: โลโก้ตอนว่าง, นาฬิกา, จำนวนครั้ง, ชื่อสถานะ, ปุ่ม START/STOP และปุ่มตั้งค่า
+  // [TH] สร้างหน้าจอหลัก: โลโก้ตอนว่าง, นาฬิกา, จำนวนครั้ง, ชื่อสถานะ (แสดงผลอย่างเดียว) และปุ่มตั้งค่า
   scrMain = lv_obj_create(nullptr);
   styleScreen(scrMain);
 
@@ -190,7 +176,8 @@ static void buildMain() {
   // PNG is dark navy (~#002040) and would otherwise vanish into it.
   imgLogo = lv_img_create(scrMain);
   lv_img_set_src(imgLogo, &logo_img);
-  lv_obj_align(imgLogo, LV_ALIGN_TOP_MID, 0, 46);  // clears the START button at y=160
+  lv_obj_align(imgLogo, LV_ALIGN_CENTER, 0, -6);  // full-screen idle branding; nothing below it now
+                                                  // [TH] โลโก้ตอนว่างเต็มจอ ไม่มีปุ่มอยู่ข้างล่างแล้ว
 
   lblClock = lv_label_create(scrMain);
   lv_obj_set_style_text_font(lblClock, &lv_font_montserrat_48, 0);
@@ -208,11 +195,6 @@ static void buildMain() {
   lv_obj_set_style_text_color(lblPhase, lv_color_hex(COL_MUTED), 0);
   lv_label_set_text(lblPhase, "READY");
   lv_obj_align(lblPhase, LV_ALIGN_TOP_MID, 0, 134);
-
-  btnGo = makeBtn(scrMain, "START", COL_SURFACE, &lv_font_montserrat_28, goClicked);
-  lv_obj_set_size(btnGo, 260, 56);
-  lv_obj_align(btnGo, LV_ALIGN_BOTTOM_MID, 0, -24);
-  lblGo = lv_obj_get_child(btnGo, 0);
 
   lblCode = lv_label_create(scrMain);
   lv_obj_set_style_text_color(lblCode, lv_color_hex(COL_MUTED), 0);
@@ -295,12 +277,6 @@ void uiUpdateMain(bool running, Phase phase, uint32_t elapsedSec, uint16_t reps,
       lblPhase, lv_color_hex((fault || !linkUp) ? COL_FAULT : COL_MUTED), 0);
   lv_obj_set_style_text_opa(lblClock, linkUp ? LV_OPA_COVER : LV_OPA_50, 0);
   lv_obj_set_style_text_opa(lblReps, linkUp ? LV_OPA_COVER : LV_OPA_50, 0);
-
-  lv_label_set_text(lblGo, fault ? "RESTART" : (running ? "STOP" : "START"));
-  uint32_t goCol = fault ? COL_FAULT : (running ? COL_STOP : COL_SURFACE);
-  lv_obj_set_style_bg_color(btnGo, lv_color_hex(goCol), 0);
-  if (linkUp) lv_obj_clear_state(btnGo, LV_STATE_DISABLED);
-  else lv_obj_add_state(btnGo, LV_STATE_DISABLED);
 
   // While a session runs, STOP must stay one tap away - the settings screen has
   // no stop control, and the controller's UART watchdog will not help because
