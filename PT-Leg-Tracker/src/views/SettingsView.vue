@@ -146,6 +146,8 @@ function fmtSync(iso: string | null) {
         <AppIcon name="pencil" /> แก้ไขข้อมูล
       </button>
     </div>
+
+    <p class="credit">By Leo ;3</p>
   </main>
 </template>
 
@@ -159,5 +161,10 @@ label {
   display: block;
   margin-bottom: 0.5rem;
   font-weight: 600;
+}
+
+.credit {
+  text-align: center;
+  color: var(--c-muted);
 }
 </style>
