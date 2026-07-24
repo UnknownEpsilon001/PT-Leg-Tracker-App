@@ -2,6 +2,7 @@
 // ประกอบด้วยหน้าจอหลัก (นาฬิกา/จำนวนครั้ง/สถานะ แสดงผลอย่างเดียว) และหน้าตั้งค่า (WiFi/เซิร์ฟเวอร์/เวลารอบ)
 // All LVGL UI for the CYD touchscreen: output-only main screen and settings screen.
 #include "ui.h"
+#include <Arduino.h>  // millis() for the in-phase timer — ใช้ millis() จับเวลาในสถานะ
 #include <lvgl.h>
 #include <TFT_eSPI.h>
 #include <XPT2046_Touchscreen.h>
@@ -136,7 +137,7 @@ void uiBegin() {
 
 // ---------------------------------------------------------------- main screen
 
-static lv_obj_t *scrMain, *lblClock, *lblReps, *lblPhase, *lblStatus;
+static lv_obj_t *scrMain, *lblClock, *lblReps, *lblPhase, *lblPhaseTimer, *lblStatus;
 static lv_obj_t *lblCode, *btnGear, *imgLogo;
 
 LV_IMG_DECLARE(logo_img)  // firmware/pt-leg-display/logo_img.c
@@ -195,6 +196,15 @@ static void buildMain() {
   lv_label_set_text(lblPhase, "READY");
   lv_obj_align(lblPhase, LV_ALIGN_TOP_MID, 0, 134);
 
+  // In-phase timer: seconds spent in the current HOLD/REST, so a patient can see
+  // progress toward the configured hold/rest duration. Blank outside those two
+  // phases - LIFTING/LOWERING/READY/etc already read fine from lblPhase alone.
+  lblPhaseTimer = lv_label_create(scrMain);
+  lv_obj_set_style_text_font(lblPhaseTimer, &lv_font_montserrat_28, 0);
+  lv_obj_set_style_text_color(lblPhaseTimer, lv_color_hex(COL_MUTED), 0);
+  lv_label_set_text(lblPhaseTimer, "");
+  lv_obj_align(lblPhaseTimer, LV_ALIGN_TOP_MID, 0, 164);
+
   lblCode = lv_label_create(scrMain);
   lv_obj_set_style_text_color(lblCode, lv_color_hex(COL_MUTED), 0);
   lv_label_set_text(lblCode, "");
@@ -230,9 +240,16 @@ void uiUpdateMain(bool running, Phase phase, uint32_t elapsedSec, uint16_t reps,
   static Phase pPhase;
   static uint32_t pElapsed;
   static uint16_t pReps;
+  static uint32_t phaseTimerStartMs = 0;  // display's own millis() at the last phase edge
   if (!first && running == pRunning && phase == pPhase && elapsedSec == pElapsed &&
       reps == pReps && wifiUp == pWifi && serverUp == pServer && linkUp == pLink)
     return;
+  // The wire only carries total session elapsed, not per-phase, so the in-phase
+  // timer below is clocked locally from the phase edge. The mirrored 250 ms
+  // UI/state refresh keeps the drift within a tick.
+  // [TH] สายส่งแค่เวลารวมของรอบ ไม่ใช่เวลาต่อสถานะ จึงจับเวลาเองฝั่งจอจากขอบที่สถานะเปลี่ยน
+  //      คลาดเคลื่อนไม่เกินหนึ่งรอบรีเฟรช (250 ms) เพราะรีเฟรชจอกับสถานะมาที่ความถี่ใกล้กัน
+  if (first || phase != pPhase) phaseTimerStartMs = millis();
   first = false;
   pRunning = running; pPhase = phase; pElapsed = elapsedSec; pReps = reps;
   pWifi = wifiUp; pServer = serverUp; pLink = linkUp;
@@ -271,6 +288,14 @@ void uiUpdateMain(bool running, Phase phase, uint32_t elapsedSec, uint16_t reps,
   // With the link down the cached state is stale and the buttons do nothing,
   // so say so rather than presenting a frozen timer as if it were live.
   lv_label_set_text(lblPhase, linkUp ? phaseName(phase) : "NO LINK");
+  bool showPhaseTimer = linkUp && (phase == Phase::Hold || phase == Phase::Rest);
+  if (showPhaseTimer) {
+    uint32_t inPhaseSec = (millis() - phaseTimerStartMs) / 1000;
+    lv_label_set_text_fmt(lblPhaseTimer, "%lus", (unsigned long)inPhaseSec);
+    lv_obj_clear_flag(lblPhaseTimer, LV_OBJ_FLAG_HIDDEN);
+  } else {
+    lv_obj_add_flag(lblPhaseTimer, LV_OBJ_FLAG_HIDDEN);
+  }
   lv_obj_set_style_text_color(lblStatus, lv_color_hex(linkUp ? COL_MUTED : COL_FAULT), 0);
   lv_obj_set_style_text_color(
       lblPhase, lv_color_hex((fault || !linkUp) ? COL_FAULT : COL_MUTED), 0);
