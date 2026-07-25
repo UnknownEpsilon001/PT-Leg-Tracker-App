@@ -408,6 +408,24 @@ static void taFocused(lv_event_t* e) {
   lv_obj_scroll_to_view(ta, LV_ANIM_ON);  // keep the focused field above the keys
 }
 
+// Tapping anywhere that is not a text field dismisses the keyboard. Attached to
+// the containers rather than the screen: the top bar and the field column cover
+// the screen completely, so the screen itself never receives a click. Taps on a
+// textarea do not reach here - they land on the textarea, which has no bubbling.
+// [TH] แตะที่ว่างนอกช่องกรอกข้อความเพื่อปิดแป้นพิมพ์
+static void tapHidesKeyboard(lv_event_t*) { hideKeyboard(); }
+
+// Scrolling dismisses it too. Both a finger drag and the lv_obj_scroll_to_view()
+// that taFocused() runs immediately after showing the keyboard emit
+// LV_EVENT_SCROLL_BEGIN, so without this guard the keyboard would vanish the
+// instant it appeared. Only a real drag sets the input device's scroll object.
+// [TH] เลื่อนหน้าจอก็ปิดแป้นพิมพ์ แต่ต้องแยกจากการเลื่อนอัตโนมัติตอนเพิ่งเปิดแป้นพิมพ์
+//      ทั้งสองแบบส่ง LV_EVENT_SCROLL_BEGIN เหมือนกัน ต่างกันที่การลากนิ้วเท่านั้นที่ตั้ง scroll object
+static void scrollHidesKeyboard(lv_event_t*) {
+  if (lv_indev_get_scroll_obj(lv_indev_get_act()) == nullptr) return;
+  hideKeyboard();
+}
+
 // The keyboard's own OK / X keys fire these; without handling them the keyboard
 // covers the bottom half of the screen forever and the screen cannot be left.
 static void kbDone(lv_event_t*) { hideKeyboard(); }
@@ -491,6 +509,9 @@ static lv_obj_t* makeSpinRow(lv_obj_t* parent, const char* label, int val,
   lv_obj_set_style_border_width(row, 0, 0);
   lv_obj_set_style_pad_all(row, 0, 0);
   lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+  // Let taps on the row's own background reach the column's dismiss handler. The
+  // -/+ buttons are children without this flag, so their clicks stay theirs.
+  lv_obj_add_flag(row, LV_OBJ_FLAG_EVENT_BUBBLE);
 
   lv_obj_t* l = lv_label_create(row);
   lv_obj_set_style_text_font(l, &thai14, 0);
@@ -539,6 +560,7 @@ static void buildSettings() {
   lv_obj_set_style_border_width(bar, 0, 0);
   lv_obj_set_style_radius(bar, 0, 0);
   lv_obj_clear_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_event_cb(bar, tapHidesKeyboard, LV_EVENT_CLICKED, nullptr);
 
   lv_obj_t* back = makeBtn(bar, LV_SYMBOL_LEFT " กลับ", COL_BG,
                            &thai20, backClicked);
@@ -558,6 +580,8 @@ static void buildSettings() {
   lv_obj_set_style_pad_row(col, 4, 0);
   lv_obj_set_style_bg_opa(col, LV_OPA_TRANSP, 0);
   lv_obj_set_style_border_width(col, 0, 0);
+  lv_obj_add_event_cb(col, tapHidesKeyboard, LV_EVENT_CLICKED, nullptr);
+  lv_obj_add_event_cb(col, scrollHidesKeyboard, LV_EVENT_SCROLL_BEGIN, nullptr);
 
   lv_obj_t* scan = makeBtn(col, LV_SYMBOL_WIFI " ค้นหาเครือข่าย", COL_SURFACE,
                            &thai20, scanClicked);
@@ -571,6 +595,8 @@ static void buildSettings() {
   lv_obj_set_style_text_color(ddScan, lv_color_hex(COL_TEXT), 0);
   lv_obj_set_style_border_width(ddScan, 0, 0);
   lv_obj_add_flag(ddScan, LV_OBJ_FLAG_HIDDEN);
+  // Its option list drops down over the same space the keyboard occupies.
+  lv_obj_add_event_cb(ddScan, tapHidesKeyboard, LV_EVENT_CLICKED, nullptr);
   lv_obj_add_event_cb(
       ddScan,
       [](lv_event_t* e) {
