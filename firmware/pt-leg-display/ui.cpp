@@ -35,6 +35,7 @@ static lv_disp_draw_buf_t drawBuf;
 static lv_color_t* buf = nullptr;
 
 static void buildMain();
+static void initThaiFonts();         // defined with the main screen below
 static void leaveSettingsForStop();  // defined with the settings screen below
 
 static void flushCb(lv_disp_drv_t* disp, const lv_area_t* area, lv_color_t* pixels) {
@@ -132,6 +133,7 @@ void uiBegin() {
   indevDrv.read_cb = touchCb;
   lv_indev_drv_register(&indevDrv);
 
+  initThaiFonts();  // must precede buildMain(): it styles labels with these fonts
   buildMain();
 }
 
@@ -141,6 +143,29 @@ static lv_obj_t *scrMain, *lblClock, *lblReps, *lblPhase, *lblPhaseTimer, *lblSt
 static lv_obj_t *lblCode, *btnGear, *imgLogo;
 
 LV_IMG_DECLARE(logo_img)  // firmware/pt-leg-display/logo_img.c
+
+// [TH] ฟอนต์ไทย (Kanit) สำหรับข้อความบนจอ สร้างจาก lv_font_conv ดูวิธีสร้างใน firmware/README.md
+// Thai UI text. Regenerate with the command in firmware/README.md - it MUST pass
+// --no-compress (lv_conf.h keeps LV_USE_FONT_COMPRESSED 0, and a compressed font
+// draws nothing at all) and both the latin and thai fontsource woffs.
+LV_FONT_DECLARE(font_th_14)  // firmware/pt-leg-display/font_th_14.c
+LV_FONT_DECLARE(font_th_20)  // firmware/pt-leg-display/font_th_20.c
+LV_FONT_DECLARE(font_th_28)  // firmware/pt-leg-display/font_th_28.c
+
+// The generated fonts carry no LV_SYMBOL_* glyphs - those live in Montserrat's
+// 0xF000 range - so each Thai font falls back to its Montserrat twin and the
+// wifi/warning/gear icons keep resolving. The generated structs are const, hence
+// in unwritable flash, so fallback is set on RAM copies; only the ~40-byte struct
+// is copied, the glyph data stays in flash.
+// [TH] ฟอนต์ที่สร้างมาไม่มีไอคอน LV_SYMBOL_* จึงตั้ง fallback ไปที่ Montserrat
+//      ตัวโครงสร้างเป็น const อยู่ในแฟลชเขียนไม่ได้ จึงคัดลอกมาไว้ใน RAM ก่อนตั้งค่า
+static lv_font_t thai14, thai20, thai28;
+
+static void initThaiFonts() {
+  thai14 = font_th_14; thai14.fallback = &lv_font_montserrat_14;
+  thai20 = font_th_20; thai20.fallback = &lv_font_montserrat_20;
+  thai28 = font_th_28; thai28.fallback = &lv_font_montserrat_28;
+}
 static void (*cbSettings)() = nullptr;
 static bool uiRunning = false;
 
@@ -160,6 +185,7 @@ static void buildMain() {
   styleScreen(scrMain);
 
   lblStatus = lv_label_create(scrMain);
+  lv_obj_set_style_text_font(lblStatus, &thai14, 0);
   lv_obj_set_style_text_color(lblStatus, lv_color_hex(COL_MUTED), 0);
   lv_label_set_text(lblStatus, "");
   lv_obj_align(lblStatus, LV_ALIGN_TOP_LEFT, 8, 10);
@@ -190,16 +216,16 @@ static void buildMain() {
   lv_obj_add_flag(lblClock, LV_OBJ_FLAG_HIDDEN);
 
   lblReps = lv_label_create(scrMain);
-  lv_obj_set_style_text_font(lblReps, &lv_font_montserrat_28, 0);
+  lv_obj_set_style_text_font(lblReps, &thai28, 0);
   lv_obj_set_style_text_color(lblReps, lv_color_hex(COL_MUTED), 0);
-  lv_label_set_text(lblReps, "0 REPS");
+  lv_label_set_text(lblReps, "0 รอบ");
   lv_obj_align(lblReps, LV_ALIGN_TOP_MID, 0, 100);
   lv_obj_add_flag(lblReps, LV_OBJ_FLAG_HIDDEN);
 
   lblPhase = lv_label_create(scrMain);
-  lv_obj_set_style_text_font(lblPhase, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_font(lblPhase, &thai20, 0);
   lv_obj_set_style_text_color(lblPhase, lv_color_hex(COL_MUTED), 0);
-  lv_label_set_text(lblPhase, "READY");
+  lv_label_set_text(lblPhase, "พร้อม");
   lv_obj_align(lblPhase, LV_ALIGN_TOP_MID, 0, 134);
   lv_obj_add_flag(lblPhase, LV_OBJ_FLAG_HIDDEN);
 
@@ -207,13 +233,14 @@ static void buildMain() {
   // progress toward the configured hold/rest duration. Blank outside those two
   // phases - LIFTING/LOWERING/READY/etc already read fine from lblPhase alone.
   lblPhaseTimer = lv_label_create(scrMain);
-  lv_obj_set_style_text_font(lblPhaseTimer, &lv_font_montserrat_28, 0);
+  lv_obj_set_style_text_font(lblPhaseTimer, &thai28, 0);
   lv_obj_set_style_text_color(lblPhaseTimer, lv_color_hex(COL_MUTED), 0);
   lv_label_set_text(lblPhaseTimer, "");
   lv_obj_align(lblPhaseTimer, LV_ALIGN_TOP_MID, 0, 164);
   lv_obj_add_flag(lblPhaseTimer, LV_OBJ_FLAG_HIDDEN);
 
   lblCode = lv_label_create(scrMain);
+  lv_obj_set_style_text_font(lblCode, &thai14, 0);
   lv_obj_set_style_text_color(lblCode, lv_color_hex(COL_MUTED), 0);
   lv_label_set_text(lblCode, "");
   lv_obj_align(lblCode, LV_ALIGN_BOTTOM_MID, 0, -6);
@@ -222,19 +249,22 @@ static void buildMain() {
 }
 
 void uiSetDeviceCode(const char* code) {
-  lv_label_set_text_fmt(lblCode, "CODE: %s", code);
+  lv_label_set_text_fmt(lblCode, "รหัส: %s", code);
 }
 
-// [TH] แปลงสถานะเป็นข้อความบนจอ (ยังคงเป็นภาษาอังกฤษบนหน้าจออุปกรณ์)
+// [TH] แปลงสถานะเป็นข้อความบนจอ
+// Thai wording here deliberately avoids stacking a vowel above a tone mark on the
+// same consonant: LVGL has no shaping, so two marks at the same height overprint
+// (e.g. ครั้ง). "รอบ" is used for reps instead. See firmware/README.md.
 static const char* phaseName(Phase p) {
   switch (p) {
-    case Phase::Lift: return "LIFTING";
-    case Phase::Hold: return "HOLD";
-    case Phase::Lower: return "LOWERING";
-    case Phase::Rest: return "REST";
-    case Phase::SafeLower: return "STOPPING";
-    case Phase::Fault: return "SWITCH FAULT";
-    default: return "READY";
+    case Phase::Lift: return "กำลังยก";
+    case Phase::Hold: return "ค้าง";
+    case Phase::Lower: return "กำลังลง";
+    case Phase::Rest: return "พัก";
+    case Phase::SafeLower: return "กำลังหยุด";
+    case Phase::Fault: return "สวิตช์ผิดพลาด";
+    default: return "พร้อม";
   }
 }
 
@@ -272,7 +302,7 @@ void uiUpdateMain(bool running, Phase phase, uint32_t elapsedSec, uint16_t reps,
 
   lv_label_set_text_fmt(lblClock, "%02lu:%02lu", (unsigned long)(elapsedSec / 60),
                         (unsigned long)(elapsedSec % 60));
-  lv_label_set_text_fmt(lblReps, "%u REPS", reps);
+  lv_label_set_text_fmt(lblReps, "%u รอบ", reps);
 
   bool fault = (phase == Phase::Fault);
 
@@ -286,7 +316,7 @@ void uiUpdateMain(bool running, Phase phase, uint32_t elapsedSec, uint16_t reps,
     lv_obj_fade_in(imgLogo, 200, 0);
     lv_obj_add_flag(lblClock, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(lblReps, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(lblPhase, LV_OBJ_FLAG_HIDDEN);  // "READY" adds nothing next to the logo
+    lv_obj_add_flag(lblPhase, LV_OBJ_FLAG_HIDDEN);  // "พร้อม" adds nothing next to the logo
   } else {
     lv_obj_add_flag(imgLogo, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(lblClock, LV_OBJ_FLAG_HIDDEN);
@@ -295,11 +325,11 @@ void uiUpdateMain(bool running, Phase phase, uint32_t elapsedSec, uint16_t reps,
   }
   // With the link down the cached state is stale and the buttons do nothing,
   // so say so rather than presenting a frozen timer as if it were live.
-  lv_label_set_text(lblPhase, linkUp ? phaseName(phase) : "NO LINK");
+  lv_label_set_text(lblPhase, linkUp ? phaseName(phase) : "ไม่พบตัวควบคุม");
   bool showPhaseTimer = linkUp && (phase == Phase::Hold || phase == Phase::Rest);
   if (showPhaseTimer) {
     uint32_t inPhaseSec = (millis() - phaseTimerStartMs) / 1000;
-    lv_label_set_text_fmt(lblPhaseTimer, "%lus", (unsigned long)inPhaseSec);
+    lv_label_set_text_fmt(lblPhaseTimer, "%lu วิ", (unsigned long)inPhaseSec);
     lv_obj_clear_flag(lblPhaseTimer, LV_OBJ_FLAG_HIDDEN);
   } else {
     lv_obj_add_flag(lblPhaseTimer, LV_OBJ_FLAG_HIDDEN);
@@ -320,11 +350,18 @@ void uiUpdateMain(bool running, Phase phase, uint32_t elapsedSec, uint16_t reps,
     lv_label_set_text_fmt(lblStatus, "%s %s", wifiUp ? LV_SYMBOL_WIFI : "--",
                           serverUp ? LV_SYMBOL_OK : LV_SYMBOL_CLOSE);
   } else {
-    lv_label_set_text(lblStatus, LV_SYMBOL_WARNING " NO LINK");
+    lv_label_set_text(lblStatus, LV_SYMBOL_WARNING " ไม่พบตัวควบคุม");
   }
 }
 
 // ------------------------------------------------------------ settings screen
+
+// The dropdown's first row is a prompt, not a network. It is compared by string
+// in the selection handler, so it must be defined once - two literals drifting
+// apart would silently let "pick a network" be typed into the SSID field.
+// [TH] แถวแรกของดรอปดาวน์เป็นข้อความชวนให้เลือก ไม่ใช่ชื่อเครือข่าย
+//      ตัวจัดการเปรียบเทียบด้วยสตริง จึงต้องนิยามไว้ที่เดียว
+#define SCAN_PLACEHOLDER "(เลือกเครือข่าย)"
 
 static lv_obj_t *scrSettings, *taSsid, *taPass, *taServer, *taCode, *kb, *ddScan;
 static lv_obj_t *spinMax, *spinHold, *spinRest, *btnSave;
@@ -403,7 +440,7 @@ static void backClicked(lv_event_t*) {
 static void scanClicked(lv_event_t*) {
   // [TH] สแกนหาเครือข่าย WiFi (บล็อกราว 2 วินาที) แล้วใส่ชื่อลงในรายการดรอปดาวน์
   int n = WiFi.scanNetworks();
-  String opts = (n > 0) ? "(pick network)" : "(none found - retry)";
+  String opts = (n > 0) ? SCAN_PLACEHOLDER : "(ไม่พบเครือข่าย - ลองใหม่)";
   for (int i = 0; i < n && i < 12; i++) opts += String("\n") + WiFi.SSID(i);
   lv_dropdown_set_options(ddScan, opts.c_str());
   lv_obj_clear_flag(ddScan, LV_OBJ_FLAG_HIDDEN);
@@ -416,9 +453,12 @@ static void scanClicked(lv_event_t*) {
 static lv_obj_t* makeField(lv_obj_t* parent, const char* label, const char* placeholder,
                            bool password, lv_obj_t** out) {
   lv_obj_t* l = lv_label_create(parent);
+  lv_obj_set_style_text_font(l, &thai14, 0);
   lv_obj_set_style_text_color(l, lv_color_hex(COL_MUTED), 0);
   lv_label_set_text(l, label);
 
+  // The textarea keeps the default Montserrat: everything typed into it (SSID,
+  // password, server URL, device code) is Latin, and so is the on-screen keyboard.
   lv_obj_t* ta = lv_textarea_create(parent);
   lv_textarea_set_one_line(ta, true);
   lv_textarea_set_placeholder_text(ta, placeholder);
@@ -453,6 +493,7 @@ static lv_obj_t* makeSpinRow(lv_obj_t* parent, const char* label, int val,
   lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
 
   lv_obj_t* l = lv_label_create(row);
+  lv_obj_set_style_text_font(l, &thai14, 0);
   lv_obj_set_style_text_color(l, lv_color_hex(COL_MUTED), 0);
   lv_label_set_text(l, label);
   lv_obj_align(l, LV_ALIGN_LEFT_MID, 0, 0);
@@ -499,12 +540,12 @@ static void buildSettings() {
   lv_obj_set_style_radius(bar, 0, 0);
   lv_obj_clear_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
 
-  lv_obj_t* back = makeBtn(bar, LV_SYMBOL_LEFT " BACK", COL_BG,
-                           &lv_font_montserrat_20, backClicked);
+  lv_obj_t* back = makeBtn(bar, LV_SYMBOL_LEFT " กลับ", COL_BG,
+                           &thai20, backClicked);
   lv_obj_set_size(back, 110, 34);
   lv_obj_align(back, LV_ALIGN_LEFT_MID, -8, 0);
 
-  btnSave = makeBtn(bar, "SAVE", COL_BG, &lv_font_montserrat_20, saveClicked);
+  btnSave = makeBtn(bar, "บันทึก", COL_BG, &thai20, saveClicked);
   lv_obj_set_size(btnSave, 90, 34);
   lv_obj_align(btnSave, LV_ALIGN_RIGHT_MID, 8, 0);
   applySaveEnabled();
@@ -518,13 +559,14 @@ static void buildSettings() {
   lv_obj_set_style_bg_opa(col, LV_OPA_TRANSP, 0);
   lv_obj_set_style_border_width(col, 0, 0);
 
-  lv_obj_t* scan = makeBtn(col, LV_SYMBOL_WIFI " SCAN NETWORKS", COL_SURFACE,
-                           &lv_font_montserrat_20, scanClicked);
+  lv_obj_t* scan = makeBtn(col, LV_SYMBOL_WIFI " ค้นหาเครือข่าย", COL_SURFACE,
+                           &thai20, scanClicked);
   lv_obj_set_size(scan, lv_pct(100), 38);
 
   ddScan = lv_dropdown_create(col);
   lv_obj_set_width(ddScan, lv_pct(100));
-  lv_dropdown_set_options(ddScan, "(pick network)");
+  lv_dropdown_set_options(ddScan, SCAN_PLACEHOLDER);
+  lv_obj_set_style_text_font(ddScan, &thai14, 0);
   lv_obj_set_style_bg_color(ddScan, lv_color_hex(COL_SURFACE), 0);
   lv_obj_set_style_text_color(ddScan, lv_color_hex(COL_TEXT), 0);
   lv_obj_set_style_border_width(ddScan, 0, 0);
@@ -534,23 +576,23 @@ static void buildSettings() {
       [](lv_event_t* e) {
         char sel[64];
         lv_dropdown_get_selected_str((lv_obj_t*)lv_event_get_target(e), sel, sizeof(sel));
-        if (strcmp(sel, "(pick network)") != 0) lv_textarea_set_text(taSsid, sel);
+        if (strcmp(sel, SCAN_PLACEHOLDER) != 0) lv_textarea_set_text(taSsid, sel);
       },
       LV_EVENT_VALUE_CHANGED, nullptr);
 
-  makeField(col, "WiFi network", "SSID", false, &taSsid);
-  makeField(col, "WiFi password", "password", true, &taPass);
-  makeField(col, "Server", "http://192.168.0.12:8000", false, &taServer);
-  makeField(col, "Device code", "KNEE-01", false, &taCode);
+  makeField(col, "เครือข่าย WiFi", "SSID", false, &taSsid);
+  makeField(col, "รหัสผ่าน WiFi", "password", true, &taPass);
+  makeField(col, "เซิร์ฟเวอร์", "http://192.168.0.12:8000", false, &taServer);
+  makeField(col, "รหัสอุปกรณ์", "KNEE-01", false, &taCode);
 
   // MAX TRAVEL is the safety cap the whole switch-timeout story rests on: it is
   // how long a relay may stay energized with no end-of-travel switch closing.
   // Its ceiling is deliberately far lower than HOLD/REST.
   // [TH] MAX TRAVEL คือเพดานความปลอดภัยหลัก: เวลาที่รีเลย์จ่ายไฟได้โดยไม่มีสวิตช์ปลายทางปิด
   //      เพดานของมันตั้งไว้ต่ำกว่า HOLD/REST มากโดยตั้งใจ
-  spinMax = makeSpinRow(col, "MAX TRAVEL s", 8, 1, 20);
-  spinHold = makeSpinRow(col, "HOLD s", 10, 1, 60);
-  spinRest = makeSpinRow(col, "REST s", 10, 1, 60);
+  spinMax = makeSpinRow(col, "เวลาเดินทางสูงสุด (วิ)", 8, 1, 20);
+  spinHold = makeSpinRow(col, "ค้าง (วิ)", 10, 1, 60);
+  spinRest = makeSpinRow(col, "พัก (วิ)", 10, 1, 60);
 
   lv_obj_t* lblCredit = lv_label_create(col);
   lv_obj_set_style_text_color(lblCredit, lv_color_hex(COL_MUTED), 0);

@@ -46,11 +46,25 @@ changed: enable block `#if 1`, `LV_COLOR_16_SWAP 1`, `LV_TICK_CUSTOM 1`
 (millis()), Montserrat 20/28/48 fonts on. `LV_COLOR_DEPTH 16` and
 `LV_MEM_SIZE 48K` are already the template defaults.
 
-## UI language: English
+## UI language: Thai
 
-The device UI is **English**, unlike the phone app. Short English words (`START`,
-`HOLD`, `SWITCH FAULT`) use the built-in Montserrat fonts and stay legible at
-20–48 px.
+The device UI is **Thai**, matching the phone app (since 2026-07-25). Text is drawn
+with Kanit fonts generated at 14/20/28 px into `font_th_14.c`, `font_th_20.c` and
+`font_th_28.c`. The 48 px clock stays Montserrat — it shows only digits.
+
+**Wording must avoid stacking a vowel and a tone mark on the same consonant.**
+LVGL has no shaping, so two marks land at the same height and overprint. This is
+not a style preference, it is the one hard constraint; it is why reps read `รอบ`
+rather than ครั้ง, and why "no link" reads `ไม่พบตัวควบคุม` rather than
+ไม่เชื่อมต่อ. Check any new string against it before shipping.
+
+Left in Latin on purpose: the clock, the on-screen keyboard, and everything typed
+through it (SSID, password, server URL, device code).
+
+`LV_SYMBOL_*` icons live in Montserrat's 0xF000 range, which the generated fonts
+do not carry. `ui.cpp` copies each font struct into RAM and sets `.fallback` to the
+matching Montserrat size, so icons resolve through the fallback chain. The copy is
+needed because the generated structs are `const`, hence in unwritable flash.
 
 ### What the 2026-07-21 Thai attempt actually hit
 
@@ -67,30 +81,35 @@ lv_font_get_bitmap_fmt_txt: Compressed fonts is used but LV_USE_FONT_COMPRESSED 
 lv_draw_sw_letter: lv_draw_letter: character's bitmap not found
 ```
 
-Two rules for regenerating a Thai font here:
+Two rules for regenerating these fonts:
 
 - pass `--no-compress` (or flip `LV_USE_FONT_COMPRESSED`, which costs runtime CPU)
 - pass **both** fontsource woffs — `kanit-latin-*` and `kanit-thai-*` are separate
   files, and the Thai one carries no Latin at all
 
 ```powershell
-npx lv_font_conv `
-  --font PT-Leg-Tracker/node_modules/@fontsource/kanit/files/kanit-latin-400-normal.woff --range 0x20-0x7F `
-  --font PT-Leg-Tracker/node_modules/@fontsource/kanit/files/kanit-thai-400-normal.woff --range 0x0E00-0x0E7F `
-  --size 24 --bpp 2 --no-compress --format lvgl --lv-include lvgl.h `
-  -o firmware/pt-leg-display/font_thai.c
+# run from the repo root; repeat for each size the UI uses
+foreach ($s in 14, 20, 28) {
+  npx lv_font_conv `
+    --font PT-Leg-Tracker/node_modules/@fontsource/kanit/files/kanit-latin-400-normal.woff --range 0x20-0x7F `
+    --font PT-Leg-Tracker/node_modules/@fontsource/kanit/files/kanit-thai-400-normal.woff --range 0x0E00-0x0E7F `
+    --size $s --bpp 2 --no-compress --format lvgl --lv-include lvgl.h `
+    -o "firmware/pt-leg-display/font_th_$s.c"
+}
 ```
 
 Built that way, Thai renders on the CYD **without** a shaping engine. Kanit gives
 combining marks `adv_w = 0` and a negative `ofs_x`, so LVGL draws each mark back
-over the consonant it follows and never advances the cursor. `ค้าง` and `พัก`
-are legible.
+over the consonant it follows and never advances the cursor.
 
-The one genuine limit: a **vowel + tone double stack** collides, because both
-marks sit at `ofs_y = +15` and nothing raises the tone above the vowel. `ตั้งค่า`
-(ต + ั + ้) overprints. Single-mark syllables are fine, so a Thai UI is viable if
-its wording avoids double stacks — a much narrower constraint than "needs a
-shaping engine".
+The one genuine limit is the double stack described above: both marks sit at
+`ofs_y = +15`, so `ตั้งค่า` (ต + ั + ้) overprints while single-mark syllables
+like `ค้าง` and `พัก` are clean. Far narrower than "needs a shaping engine", but
+it does constrain wording permanently.
+
+A fast way to check a font before flashing: run `firmware/tools/fake-controller.ps1`
+and grep its output for `bitmap not found`. The display logs one such line per
+unresolved glyph, so a silent-but-blank font is loud in the log.
 
 ## Shared files between the two sketches
 
