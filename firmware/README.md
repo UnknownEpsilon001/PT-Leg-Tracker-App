@@ -48,13 +48,49 @@ changed: enable block `#if 1`, `LV_COLOR_16_SWAP 1`, `LV_TICK_CUSTOM 1`
 
 ## UI language: English
 
-The device UI is **English**, unlike the phone app. A Kanit-based LVGL font was
-generated and tried on hardware (2026-07-21) and Thai rendered wrong: LVGL 8 has
-no complex-script shaping, so Thai vowel/tone marks that stack above and below
-the base consonant are laid out as separate advancing glyphs. Fixing that means
-a shaping engine, which is out of proportion for a screen showing six words.
-Short English words (`START`, `HOLD`, `SWITCH FAULT`) use the built-in Montserrat
-fonts and stay legible at 20–48 px.
+The device UI is **English**, unlike the phone app. Short English words (`START`,
+`HOLD`, `SWITCH FAULT`) use the built-in Montserrat fonts and stay legible at
+20–48 px.
+
+### What the 2026-07-21 Thai attempt actually hit
+
+That attempt concluded LVGL 8 lays Thai vowel/tone marks out "as separate
+advancing glyphs" and that Thai therefore needs a shaping engine. **A re-test on
+hardware 2026-07-25 disproved this.** The original font was generated compressed
+while `lv_conf.h` keeps `LV_USE_FONT_COMPRESSED 0`, so *every* glyph lookup
+failed and the label drew nothing; the boxes visible on screen were only the
+characters the font lacked entirely, drawn as `LV_USE_FONT_PLACEHOLDER`
+rectangles. The device says so plainly over the link:
+
+```
+lv_font_get_bitmap_fmt_txt: Compressed fonts is used but LV_USE_FONT_COMPRESSED is not enabled in lv_conf.h
+lv_draw_sw_letter: lv_draw_letter: character's bitmap not found
+```
+
+Two rules for regenerating a Thai font here:
+
+- pass `--no-compress` (or flip `LV_USE_FONT_COMPRESSED`, which costs runtime CPU)
+- pass **both** fontsource woffs — `kanit-latin-*` and `kanit-thai-*` are separate
+  files, and the Thai one carries no Latin at all
+
+```powershell
+npx lv_font_conv `
+  --font PT-Leg-Tracker/node_modules/@fontsource/kanit/files/kanit-latin-400-normal.woff --range 0x20-0x7F `
+  --font PT-Leg-Tracker/node_modules/@fontsource/kanit/files/kanit-thai-400-normal.woff --range 0x0E00-0x0E7F `
+  --size 24 --bpp 2 --no-compress --format lvgl --lv-include lvgl.h `
+  -o firmware/pt-leg-display/font_thai.c
+```
+
+Built that way, Thai renders on the CYD **without** a shaping engine. Kanit gives
+combining marks `adv_w = 0` and a negative `ofs_x`, so LVGL draws each mark back
+over the consonant it follows and never advances the cursor. `ค้าง` and `พัก`
+are legible.
+
+The one genuine limit: a **vowel + tone double stack** collides, because both
+marks sit at `ofs_y = +15` and nothing raises the tone above the vowel. `ตั้งค่า`
+(ต + ั + ้) overprints. Single-mark syllables are fine, so a Thai UI is viable if
+its wording avoids double stacks — a much narrower constraint than "needs a
+shaping engine".
 
 ## Shared files between the two sketches
 
