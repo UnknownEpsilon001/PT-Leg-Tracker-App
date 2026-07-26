@@ -1,6 +1,19 @@
 // สเก็ตช์หลักของบอร์ดคอนโทรลเลอร์ (ESP32) — สมองของเครื่องกายภาพบำบัดขา
 // รวมทุกโมดูล: อ่านสวิตช์ -> เดินเครื่องสถานะ -> สั่งรีเลย์ -> คุยกับเซิร์ฟเวอร์และจอ
 // Controller main sketch: switches -> state machine -> relays -> server + display.
+//
+// Bench aid: with no display wired the board says nothing, so panel-button
+// polarity cannot be checked. Enable per-build to print button edges, raw pin
+// levels, phase changes and reps on the USB port — UART0 is free, the display
+// link lives on Serial2. Off for real hardware; enable per-build, never commit
+// it on (see firmware/README.md):
+//   --build-property compiler.cpp.extra_flags=-DDEBUG_SERIAL=1 --clean
+// [TH] โหมดทดสอบบนโต๊ะ: พิมพ์ขอบการกดปุ่ม ค่าดิบของขา สถานะ และจำนวนรอบ ออกทางพอร์ต USB
+//      ใช้ตรวจขั้วปุ่มโดยไม่ต้องต่อจอ ใช้เฉพาะตอนทดสอบ ห้าม commit ทั้งค่าเปิดไว้
+#ifndef DEBUG_SERIAL
+#define DEBUG_SERIAL 0
+#endif
+
 #include "config.h"
 #include "settings.h"
 #include "actuator.h"
@@ -55,6 +68,67 @@ static LinkSettings currentAsLink() {
 // [TH] เมื่อจอทักทาย (hello) ให้ส่งค่าตั้งค่าปัจจุบันกลับไป
 static void onLinkHello() { gLink.sendSettings(currentAsLink()); }
 
+#if DEBUG_SERIAL
+static const char* phaseName(Phase p) {
+  switch (p) {
+    case Phase::Idle: return "IDLE";
+    case Phase::Lift: return "LIFT";
+    case Phase::Hold: return "HOLD";
+    case Phase::Lower: return "LOWER";
+    case Phase::Rest: return "REST";
+    case Phase::SafeLower: return "SAFE-LOWER";
+    case Phase::Fault: return "FAULT";
+  }
+  return "?";
+}
+
+// Everything here prints on change only. The loop runs hundreds of times a
+// second, so a per-loop dump would bury the one line being looked for.
+// Raw pin levels are printed alongside the debounced edges because polarity is
+// the thing under test: an unwired NC input floats HIGH, which reads as a held
+// press, and only the raw level makes that obvious.
+// [TH] พิมพ์เฉพาะตอนค่าเปลี่ยน เพราะลูปเดินเร็วมาก ถ้าพิมพ์ทุกลูปจะท่วมจนหาบรรทัดที่ต้องการไม่เจอ
+//      พิมพ์ค่าดิบของขาคู่กับขอบที่ผ่านกันเด้งแล้ว เพราะกำลังตรวจขั้ว: ขา NC ที่ไม่ได้ต่อจะลอยเป็น HIGH
+//      ซึ่งอ่านได้เหมือนกดค้าง จะเห็นชัดก็ต่อเมื่อดูค่าดิบ
+static void debugTick(uint32_t nowMs, bool startEdge, bool stopEdge, bool resetEdge) {
+  static bool firstRun = true;
+  static int lvStart = -1, lvStop = -1, lvReset = -1;
+  static bool lastTop = false, lastBot = false;
+  static Phase lastPhase = Phase::Idle;
+  static uint16_t lastReps = 0;
+
+  if (startEdge) Serial.printf("[dbg %lu] EDGE START\n", (unsigned long)nowMs);
+  if (stopEdge) Serial.printf("[dbg %lu] EDGE STOP\n", (unsigned long)nowMs);
+  if (resetEdge) Serial.printf("[dbg %lu] EDGE RESET\n", (unsigned long)nowMs);
+
+  int s = digitalRead(PIN_BTN_START), t = digitalRead(PIN_BTN_STOP),
+      r = digitalRead(PIN_BTN_RESET);
+  if (firstRun || s != lvStart || t != lvStop || r != lvReset) {
+    lvStart = s; lvStop = t; lvReset = r;
+    // NC + INPUT_PULLUP: HIGH = open contact = pressed (or a broken/absent wire)
+    Serial.printf("[dbg %lu] btn levels start=%s stop=%s reset=%s\n", (unsigned long)nowMs,
+                  s ? "HIGH/pressed" : "LOW/rest", t ? "HIGH/pressed" : "LOW/rest",
+                  r ? "HIGH/pressed" : "LOW/rest");
+  }
+
+  bool top = switchTop(), bot = switchBottom();
+  if (firstRun || top != lastTop || bot != lastBot) {
+    lastTop = top; lastBot = bot;
+    Serial.printf("[dbg %lu] limits top=%s bottom=%s\n", (unsigned long)nowMs,
+                  top ? "AT-LIMIT" : "clear", bot ? "AT-LIMIT" : "clear");
+  }
+
+  if (firstRun || gSession.phase() != lastPhase || gSession.reps() != lastReps) {
+    lastPhase = gSession.phase();
+    lastReps = gSession.reps();
+    Serial.printf("[dbg %lu] phase=%s reps=%u elapsed=%lus\n", (unsigned long)nowMs,
+                  phaseName(lastPhase), lastReps,
+                  (unsigned long)gSession.elapsedSec(nowMs));
+  }
+  firstRun = false;
+}
+#endif
+
 void setup() {
   actuatorBegin();  // safety first — ดับรีเลย์ก่อนเป็นอันดับแรกเพื่อความปลอดภัย
   switchesBegin();
@@ -74,6 +148,15 @@ void setup() {
                 FW_VERSION, gSettings.wifiSsid.c_str(), gSettings.serverUrl.c_str(),
                 gSettings.deviceCode.c_str(), gSettings.maxTravelSec, gSettings.holdSec,
                 gSettings.restSec);
+#if DEBUG_SERIAL
+  Serial.printf("debug prints ON — btn pins start=%d stop=%d reset=%d, NC=%s\n",
+                PIN_BTN_START, PIN_BTN_STOP, PIN_BTN_RESET,
+#ifdef SWITCH_NC
+                "yes (LOW = at rest, HIGH = pressed)");
+#else
+                "no (HIGH = at rest, LOW = pressed)");
+#endif
+#endif
 }
 
 void loop() {
@@ -83,10 +166,16 @@ void loop() {
   buttonsPoll(now);
   gSession.tick(now, switchTop(), switchBottom());
   // panel buttons: START (idle only), STOP (any state), RESET (idle only)
+  // Read all three first: each accessor clears its edge, so the debug build has
+  // to see the same values this loop acts on.
   // [TH] ปุ่มหน้าปัด: START เริ่ม (เฉพาะว่าง), STOP หยุด (ตลอดเวลา), RESET ล้าง (เฉพาะว่าง)
-  if (buttonStartPressed()) gSession.start(now);
-  if (buttonStopPressed()) gSession.requestStop(now);
-  if (buttonResetPressed()) gSession.reset(now);
+  //      อ่านทั้งสามก่อน เพราะการอ่านจะล้างขอบทิ้ง โหมดดีบักต้องเห็นค่าชุดเดียวกับที่ลูปใช้
+  bool pressStart = buttonStartPressed();
+  bool pressStop = buttonStopPressed();
+  bool pressReset = buttonResetPressed();
+  if (pressStart) gSession.start(now);
+  if (pressStop) gSession.requestStop(now);
+  if (pressReset) gSession.reset(now);
   applyActuator();
   actuatorTick(now);
   if (actuatorCapTripped()) gSession.forceFault(now);  // backstop: SM never commanded OFF
@@ -123,5 +212,8 @@ void loop() {
                  gSession.reps(), netWifiUp(), netServerUp()};
     gLink.sendState(st);
   }
+#if DEBUG_SERIAL
+  debugTick(now, pressStart, pressStop, pressReset);
+#endif
   delay(2);
 }

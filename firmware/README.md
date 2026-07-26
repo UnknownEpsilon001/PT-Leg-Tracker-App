@@ -181,6 +181,49 @@ falls back to `NO LINK` after ~2.5 s. **Set the switch back to `0` before
 flashing a real machine** — do not use `--build-property` to set it, as flag
 changes against cached objects have produced broken images.
 
+## Running the controller without a display
+
+The panel buttons hang off the controller, so their polarity can be checked with
+that board alone — no CYD, no UART jumpers. Two things make this work:
+
+- the display link is on `Serial2` (GPIO 16/17), so USB serial (UART0) is free;
+- the UART-loss safe-stop is guarded by `gLink.lastRxMs() != 0`, so a board that
+  never saw a display does not stop itself.
+
+Build with `DEBUG_SERIAL=1` for a running commentary on the USB port — button
+edges, raw pin levels, limit-switch state, phase and rep changes, all printed on
+change only:
+
+```powershell
+arduino-cli compile --fqbn "esp32:esp32:esp32:PartitionScheme=huge_app" `
+  --build-property compiler.cpp.extra_flags=-DDEBUG_SERIAL=1 --clean `
+  --upload -p COM4 firmware/pt-leg-controller
+```
+
+`--clean` is required: the flag changes a `#define`, and Arduino's cache happily
+reuses stale objects compiled without it. The source line stays at `0`, so the
+flag cannot be committed enabled.
+
+**Unwired NC inputs read as pressed.** `SWITCH_NC` + `INPUT_PULLUP` means a
+closed contact pulls the pin LOW and an open one floats HIGH, and an absent wire
+is indistinguishable from an open contact — that is the fail-safe, not a bug. A
+bare board therefore boots with START, STOP and RESET all "pressed", firing one
+edge each on the first debounce pass. For a bench test, jumper each button pin to
+GND to stand in for the closed contact, and lift the jumper to press:
+
+| Signal | Pin | Jumper to GND | Lift jumper |
+| ------ | --- | ------------- | ----------- |
+| START  | 25  | at rest       | press       |
+| STOP   | 26  | at rest       | press       |
+| RESET  | 4   | at rest       | press       |
+| TOP limit    | 32 | not at limit | leg fully up   |
+| BOTTOM limit | 33 | not at limit | leg fully down |
+
+With both limit pins left floating the machine reads as "at both limits at once",
+so LIFT and LOWER complete instantly and the cycle becomes HOLD 10 s → REST 10 s
+→ rep. Ground both instead and a stroke runs until the max-travel cap trips
+FAULT, which is the safety path worth watching once too.
+
 ## LVGL logging and asserts
 
 `lv_conf.h` enables `LV_USE_LOG` at WARN with `LV_LOG_PRINTF`, and sets
