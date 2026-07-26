@@ -52,6 +52,12 @@ void Link::dispatch(const String& line) {
     s.rest = d["rest"] | 0;
     if (onSettings) onSettings(s);            // controller consumes a save — ฝั่งคอนโทรลเลอร์นำไปบันทึก
     else if (onSettingsReply) onSettingsReply(s);  // display consumes a reply — ฝั่งจอรับค่าที่ตอบกลับ
+  } else if (!strcmp(t, "done")) {
+    if (onDone) {
+      LinkDone dn{d["elapsed"] | 0u, (uint16_t)(d["reps"] | 0),
+                  d["epoch"] | 0u, d["fault"] | false};
+      onDone(dn);
+    }
   }
   // "ping": no handler; _lastRx already stamped in poll()
   // [TH] ชนิด "ping" ไม่มีตัวจัดการ เพราะ _lastRx ถูกจับเวลาไว้แล้วใน poll()
@@ -68,6 +74,12 @@ void Link::sendState(const LinkState& st) {
   d["t"] = "state"; d["running"] = st.running; d["phase"] = st.phase;
   d["elapsed"] = st.elapsed; d["reps"] = st.reps; d["wifi"] = st.wifi;
   d["server"] = st.server;
+  emit(_io, d);
+}
+void Link::sendDone(const LinkDone& dn) {
+  JsonDocument d;
+  d["t"] = "done"; d["elapsed"] = dn.elapsed; d["reps"] = dn.reps;
+  d["epoch"] = dn.epoch; d["fault"] = dn.fault;
   emit(_io, d);
 }
 void Link::sendSettings(const LinkSettings& s) {

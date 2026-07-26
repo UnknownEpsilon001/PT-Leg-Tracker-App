@@ -21,6 +21,10 @@ ArduinoJson. Malformed lines are dropped. Lines over 512 chars reset the buffer.
   — ~4 Hz.
 - `{"t":"settings", ...current...}` — reply to `hello`, so the CYD settings
   screen pre-fills and the main screen can show the device code.
+- `{"t":"done","elapsed":int,"reps":int,"epoch":unixUTC|0,"fault":bool}` — sent
+  once at session end (clean stop or FAULT); the display logs it to SD. `epoch`
+  is UTC seconds from the controller's DS3231, or 0 when the clock is absent or
+  was never set.
 
 ## Notes
 
