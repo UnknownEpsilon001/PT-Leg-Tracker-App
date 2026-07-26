@@ -5,15 +5,8 @@
 #include <Arduino.h>  // millis() for the in-phase timer — ใช้ millis() จับเวลาในสถานะ
 #include <lvgl.h>
 #include <TFT_eSPI.h>
-#include <XPT2046_Touchscreen.h>
+#include "touch_bb.h"  // touch pins live there — ขาทัชสกรีนอยู่ในไฟล์นั้น
 #include <WiFi.h>  // settings screen scans for SSIDs — หน้าตั้งค่าใช้สแกนหา WiFi
-
-// CYD touch pins (separate SPI bus) — ขาทัชสกรีนของ CYD (ใช้บัส SPI แยกต่างหาก)
-#define XPT2046_IRQ 36
-#define XPT2046_MOSI 32
-#define XPT2046_MISO 39
-#define XPT2046_CLK 25
-#define XPT2046_CS 33
 
 // App palette (matches the phone app's v4 rebrand)
 // [TH] ชุดสีของแอป ให้เข้ากับธีมของแอปบนมือถือ
@@ -24,8 +17,6 @@
 #define COL_FAULT 0xb00020   // red        - fault
 
 static TFT_eSPI tft;
-static SPIClass touchSpi(VSPI);
-static XPT2046_Touchscreen touch(XPT2046_CS, XPT2046_IRQ);
 
 static lv_disp_draw_buf_t drawBuf;
 // A taller buffer means far fewer flush round-trips per frame, which is most of
@@ -55,15 +46,30 @@ static void flushCb(lv_disp_drv_t* disp, const lv_area_t* area, lv_color_t* pixe
 
 static void touchCb(lv_indev_drv_t*, lv_indev_data_t* data) {
   // [TH] อ่านตำแหน่งสัมผัสแล้วแปลงพิกัดดิบของทัชสกรีนเป็นพิกัดหน้าจอ
-  if (touch.tirqTouched() && touch.touched()) {
-    TS_Point p = touch.getPoint();
-    // raw calibration for CYD landscape; tune on the bench if offset
-    // [TH] ค่าคาลิเบรตแบบดิบสำหรับ CYD แนวนอน ปรับจูนหน้างานถ้าตำแหน่งเพี้ยน
-    data->point.x = map(p.x, 200, 3700, 0, 320);
-    data->point.y = map(p.y, 240, 3800, 0, 240);
+  static bool wasDown = false;
+  uint16_t rx, ry;
+  if (touchBBRead(rx, ry)) {
+    // The old driver applied setRotation(1) itself and handed back landscape
+    // coordinates; these are unrotated panel counts, so the swap and the flip
+    // live here now. Panel Y grows towards screen X, and panel X grows the
+    // opposite way from screen Y.
+    // [TH] ไดรเวอร์เดิมหมุนภาพให้เองแล้วคืนพิกัดแนวนอนมา ค่าที่ได้ตรงนี้เป็นค่าดิบยังไม่หมุน
+    //      จึงต้องสลับแกนและกลับด้านเอง: แกน Y ของแผงวิ่งไปทางแกน X ของจอ ส่วนแกน X วิ่งกลับทางกับแกน Y
+    int sx = map(ry, 240, 3800, 0, 320);
+    int sy = map(rx, 3700, 200, 0, 240);
+    data->point.x = constrain(sx, 0, 319);
+    data->point.y = constrain(sy, 0, 239);
     data->state = LV_INDEV_STATE_PRESSED;
+    // One line per press, not per poll: the ranges above are a starting point
+    // and get retuned against these numbers on the bench.
+    // [TH] พิมพ์บรรทัดเดียวต่อการกดหนึ่งครั้ง ไม่ใช่ทุกครั้งที่อ่าน
+    //      ค่าช่วงด้านบนเป็นค่าตั้งต้น ใช้ตัวเลขนี้ปรับจูนหน้างาน
+    if (!wasDown) Serial.printf("touch raw=%u,%u -> %d,%d\n", rx, ry, (int)data->point.x,
+                                (int)data->point.y);
+    wasDown = true;
   } else {
     data->state = LV_INDEV_STATE_RELEASED;
+    wasDown = false;
   }
 }
 
@@ -94,9 +100,7 @@ void uiBegin() {
   // [TH] เริ่มต้นจอ TFT, ทัชสกรีน, LVGL และจองบัฟเฟอร์วาดภาพจากหน่วยความจำ DMA
   tft.init();
   tft.setRotation(1); // landscape 320x240 — แนวนอน
-  touchSpi.begin(XPT2046_CLK, XPT2046_MISO, XPT2046_MOSI, XPT2046_CS);
-  touch.begin(touchSpi);
-  touch.setRotation(1);
+  touchBBBegin();
 
   lv_init();
   uint32_t lines = DRAW_BUF_LINES;

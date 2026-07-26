@@ -17,13 +17,15 @@ Plan: `../docs/superpowers/plans/2026-07-19-esp32-firmware.md`
 
 - lvgl 8.4.0 — `lv_conf.h` lives next to the library folder, see setup below
 - TFT_eSPI 2.5.43 — `User_Setup.h` for the CYD: `TFT_eSPI_User_Setup.h`, copy over the library's own
-- XPT2046_Touchscreen 1.4
 - ArduinoJson 7.4.1 (7.4.x fine — same API)
 - RTClib 2.1.4 — DS3231 on the controller, controller sketch only
 
 ```powershell
-arduino-cli lib install "lvgl@8.4.0" "TFT_eSPI@2.5.43" "XPT2046_Touchscreen@1.4" "ArduinoJson@7.4.1" "RTClib@2.1.4"
+arduino-cli lib install "lvgl@8.4.0" "TFT_eSPI@2.5.43" "ArduinoJson@7.4.1" "RTClib@2.1.4"
 ```
+
+XPT2046_Touchscreen is **no longer used** — see "Touch is bit-banged" below. `SD`
+comes bundled with the ESP32 core, so it is not pinned here.
 
 lvgl **must** stay on 8.4.0. Installing 9.x breaks the display sketch with a wall
 of renamed-API errors (`lv_disp_draw_buf_t`, `LV_IMG_CF_TRUE_COLOR_ALPHA`,
@@ -117,6 +119,25 @@ it does constrain wording permanently.
 A fast way to check a font before flashing: run `firmware/tools/fake-controller.ps1`
 and grep its output for `bitmap not found`. The display logs one such line per
 unresolved glyph, so a silent-but-blank font is loud in the log.
+
+## Touch is bit-banged, because the SD card owns VSPI
+
+The ESP32 has two usable SPI peripherals. TFT_eSPI holds HSPI (12/13/14/15), and
+the CYD's microSD socket is hard-wired to VSPI's pins (CS 5, SCK 18, MISO 19,
+MOSI 23) — there is no third bus for the touch panel. Touch therefore moved to a
+software SPI read in `pt-leg-display/touch_bb.cpp` (pins unchanged: MOSI 32,
+MISO 39, CLK 25, CS 33, PENIRQ 36), and `XPT2046_Touchscreen` was dropped.
+
+The usual bit-bang driver for this chip is GitHub-only and not in the Arduino
+library index, so it could not be pinned like everything else here; the protocol
+is one command byte and two data bytes per axis, so it is vendored instead.
+
+The old library applied `setRotation(1)` internally. `touch_bb` returns raw panel
+counts, so the axis swap and flip now live in `touchCb` in `ui.cpp`. Those
+`map()` ranges are a **starting point and need a bench pass** — the display logs
+one `touch raw=..,.. -> x,y` line per press for exactly that purpose.
+[TH] ทัชสกรีนเปลี่ยนมาอ่านด้วยการกระตุกขาเอง เพราะการ์ด SD ต้องใช้บัส VSPI
+     ค่าคาลิเบรตในตอนนี้เป็นค่าตั้งต้น ต้องปรับจูนกับเครื่องจริงอีกครั้ง
 
 ## Shared files between the two sketches
 
