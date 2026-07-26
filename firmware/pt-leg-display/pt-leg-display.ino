@@ -16,6 +16,8 @@
 #include "link.h"
 #include "session.h"   // Phase enum for uiUpdateMain — ใช้ enum Phase
 #include "settings.h"  // DeviceSettings cached from the controller — เก็บค่าตั้งค่าที่คอนโทรลเลอร์ส่งมา
+#include "store.h"     // patient roster on the SD card — ทะเบียนคนไข้บนการ์ด SD
+#include "sdlog.h"     // session rows written to the SD card — บันทึกผลแต่ละรอบลงการ์ด
 
 Link gLink;  // ลิงก์ UART ไปยังคอนโทรลเลอร์
 static bool uiRunning = false;
@@ -37,7 +39,25 @@ static DeviceSettings gLast = {"", "", "", "default", 8, 10, 10};
 static bool gSettingsKnown = false;
 static bool gLinkUp = false;
 
+// Which patient the next session belongs to. -1 until someone picks one, and it
+// stays -1 all day if nobody does: the machine must run for a walk-up patient
+// with no roster at all, the row just logs without a name.
+// [TH] คนไข้ที่รอบถัดไปจะถูกบันทึกให้ -1 คือยังไม่ได้เลือก และปล่อยเป็น -1 ทั้งวันก็ได้
+//      เครื่องต้องใช้งานได้แม้ไม่มีใครลงทะเบียน แค่บันทึกโดยไม่มีชื่อ
+static int gActivePatient = -1;
+
 static void onOpenSettings() { Serial.println("touch: settings"); uiOpenSettings(gLast); }
+static void onOpenData() { Serial.println("touch: data"); uiOpenData(); }
+
+// -1 tells the UI "no card", which reads differently from an empty roster.
+// [TH] คืน -1 เพื่อบอก UI ว่าไม่มีการ์ด ซึ่งความหมายต่างจากทะเบียนที่ว่างเปล่า
+static int dataCount() { return storeCardPresent() ? storePatientCount() : -1; }
+static const Patient* dataGet(int i) { return &storePatient(i); }
+static bool dataAdd(const char* code, const char* name, int age) {
+  Patient p{String(code), String(name), (uint16_t)age};
+  return storeAddPatient(p);
+}
+static void dataSetActive(int i) { gActivePatient = i; }
 
 static void onSaveFromUi(const DeviceSettings& s) {
   gLast = s;
@@ -57,6 +77,33 @@ static void onLinkSettingsReply(const LinkSettings& s) {
   uiSetSettingsKnown(true);  // the controller's real values are on screen now
 }
 
+// One row per finished session, arriving once from the controller — see the
+// done message in link-protocol.md.
+// [TH] หนึ่งแถวต่อหนึ่งรอบที่จบ ส่งมาครั้งเดียวจากคอนโทรลเลอร์
+static void onLinkDone(const LinkDone& d) {
+  SessionRow r;
+  r.epoch = d.epoch;
+  r.reps = d.reps;
+  r.durationSec = d.elapsed;
+  r.fault = d.fault;
+  // The index is re-checked against the roster because a card can be swapped
+  // between picking a patient and finishing the session.
+  // [TH] ตรวจดัชนีซ้ำกับทะเบียนอีกครั้ง เพราะการ์ดอาจถูกเปลี่ยนหลังเลือกคนไข้ไปแล้ว
+  if (gActivePatient >= 0 && gActivePatient < storePatientCount()) {
+    const Patient& p = storePatient(gActivePatient);
+    r.patientCode = p.code;
+    r.patientName = p.name;
+  } else {
+    r.patientCode = "-";
+    r.patientName = "";
+  }
+  bool saved = storeCardPresent() && sdlogWrite(r);
+  if (!saved) sdlogRingPush(r);  // retried from loop() — ลองใหม่จากลูปหลัก
+  Serial.printf("session done: %lus x%u fault=%d saved=%d\n", (unsigned long)r.durationSec,
+                r.reps, r.fault ? 1 : 0, saved ? 1 : 0);
+  uiShowFinish(r.patientName.c_str(), r.durationSec, r.reps, r.fault, saved);
+}
+
 static void onLinkState(const LinkState& s) {
   uiRunning = s.running;
   uiPhase = (Phase)s.phase;
@@ -73,7 +120,15 @@ void setup() {
   Serial.println("pt-leg-display boot");
   Serial2.begin(115200, SERIAL_8N1, 22, 27);  // UART to controller (CYD free pins) — สาย UART ไปคอนโทรลเลอร์ (ขาว่างของ CYD)
   uiBegin();
-  uiSetCallbacks(onOpenSettings);
+  // A missing or unreadable card is not an error worth stopping for: the roster
+  // is empty, sessions ring-buffer, and the machine still runs.
+  // [TH] ไม่มีการ์ดหรืออ่านการ์ดไม่ได้ ไม่ถือเป็นข้อผิดพลาดที่ต้องหยุดเครื่อง
+  //      ทะเบียนจะว่าง ผลรอบจะพักไว้ในหน่วยความจำ และเครื่องยังทำงานได้ตามปกติ
+  Serial.printf("sd card: %s, patients=%d\n", storeBegin() ? "mounted" : "absent",
+                storePatientCount());
+  sdlogEnsureHeader();
+  uiSetCallbacks(onOpenSettings, onOpenData);
+  uiSetDataCallbacks(dataCount, dataGet, dataAdd, dataSetActive);
   uiSetSettingsSaved(onSaveFromUi);
   Serial.printf("controller link on %s\n", LINK_OVER_USB ? "USB (bench)" : "Serial2");
 #if LINK_OVER_USB
@@ -83,6 +138,7 @@ void setup() {
 #endif
   gLink.onState = onLinkState;
   gLink.onSettingsReply = onLinkSettingsReply;
+  gLink.onDone = onLinkDone;
   gLink.sendHello();  // ask controller for current settings + state
 }
 
@@ -114,6 +170,18 @@ void loop() {
   if (!gSettingsKnown && now - lastHello >= 3000) {
     lastHello = now;
     gLink.sendHello();
+  }
+
+  // Sessions that could not be written wait in RAM. Retry slowly, and try to
+  // mount again first — the usual reason for a failed write is a card that was
+  // not in the slot, and the fix is someone pushing one in.
+  // [TH] ผลรอบที่เขียนไม่สำเร็จค้างอยู่ในหน่วยความจำ ลองใหม่เป็นระยะ และลองเมานต์การ์ดก่อน
+  //      เพราะสาเหตุที่พบบ่อยคือยังไม่ได้เสียบการ์ด พอเสียบแล้วก็เขียนได้
+  static uint32_t lastFlush = 0;
+  if (sdlogRingDepth() > 0 && now - lastFlush > 5000) {
+    lastFlush = now;
+    if (!storeCardPresent()) storeBegin();
+    sdlogFlushRing();
   }
   delay(2);
 }

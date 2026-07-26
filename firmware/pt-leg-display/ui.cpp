@@ -27,7 +27,8 @@ static lv_color_t* buf = nullptr;
 
 static void buildMain();
 static void initThaiFonts();         // defined with the main screen below
-static void leaveSettingsForStop();  // defined with the settings screen below
+static void leaveSubScreenForRun();  // defined with the settings screen below
+static void hideAddKeyboard();       // defined with the add-patient form below
 
 static void flushCb(lv_disp_drv_t* disp, const lv_area_t* area, lv_color_t* pixels) {
   // [TH] LVGL เรียกฟังก์ชันนี้เพื่อผลักพิกเซลลงหน้าจอจริงตามพื้นที่ที่เปลี่ยน
@@ -144,7 +145,7 @@ void uiBegin() {
 // ---------------------------------------------------------------- main screen
 
 static lv_obj_t *scrMain, *lblClock, *lblReps, *lblPhase, *lblPhaseTimer, *lblStatus;
-static lv_obj_t *lblCode, *btnGear, *imgLogo;
+static lv_obj_t *lblCode, *btnGear, *btnData, *imgLogo;
 
 LV_IMG_DECLARE(logo_img)  // firmware/pt-leg-display/logo_img.c
 
@@ -171,16 +172,26 @@ static void initThaiFonts() {
   thai28 = font_th_28; thai28.fallback = &lv_font_montserrat_28;
 }
 static void (*cbSettings)() = nullptr;
+static void (*cbData)() = nullptr;
 static bool uiRunning = false;
 
-void uiSetCallbacks(void (*onOpenSettings)()) {
+void uiSetCallbacks(void (*onOpenSettings)(), void (*onOpenData)()) {
   cbSettings = onOpenSettings;
+  cbData = onOpenData;
 }
 
 static void gearClicked(lv_event_t*) {
   if (uiRunning) return;  // STOP must stay reachable during a session
                           // [TH] ห้ามเข้าหน้าตั้งค่าระหว่างทำงาน เพื่อให้ปุ่ม STOP กดถึงตลอด
   if (cbSettings) cbSettings();
+}
+
+// Same gate as the gear: nothing but the live session should be on screen while
+// the machine is moving.
+// [TH] เงื่อนไขเดียวกับปุ่มเฟือง: ระหว่างเครื่องทำงาน จอต้องแสดงแต่สถานะรอบปัจจุบัน
+static void dataClicked(lv_event_t*) {
+  if (uiRunning) return;
+  if (cbData) cbData();
 }
 
 static void buildMain() {
@@ -198,6 +209,11 @@ static void buildMain() {
                     &lv_font_montserrat_20, gearClicked);
   lv_obj_set_size(btnGear, 48, 40);
   lv_obj_align(btnGear, LV_ALIGN_TOP_RIGHT, -8, 4);
+
+  btnData = makeBtn(scrMain, LV_SYMBOL_LIST, COL_SURFACE,
+                    &lv_font_montserrat_20, dataClicked);
+  lv_obj_set_size(btnData, 48, 40);
+  lv_obj_align(btnData, LV_ALIGN_TOP_RIGHT, -60, 4);  // left of the gear — อยู่ซ้ายของปุ่มเฟือง
 
   // Idle branding. Lives in flash, so it costs no RAM; it is swapped out for the
   // session stats the moment the machine starts moving.
@@ -302,7 +318,7 @@ void uiUpdateMain(bool running, Phase phase, uint32_t elapsedSec, uint16_t reps,
   // screen (reachable only when idle, but the state can change underneath them).
   // That screen has no STOP control, so force back to the main screen where STOP
   // is one tap away. Pending edits are discarded on purpose: STOP beats editing.
-  if (uiRunning) leaveSettingsForStop();
+  if (uiRunning) leaveSubScreenForRun();
 
   lv_label_set_text_fmt(lblClock, "%02lu:%02lu", (unsigned long)(elapsedSec / 60),
                         (unsigned long)(elapsedSec % 60));
@@ -396,13 +412,19 @@ static void hideKeyboard() {
   lv_keyboard_set_textarea(kb, nullptr);
 }
 
-// Called from uiUpdateMain when a session is running: if the settings screen is
-// on top it has no STOP, so drop back to the main screen.
-static void leaveSettingsForStop() {
-  if (scrSettings && lv_scr_act() == scrSettings) {
-    hideKeyboard();
-    lv_scr_load(scrMain);
-  }
+// Called from uiUpdateMain when a session is running. A session can begin from a
+// panel button or a server command while someone is on the settings, patient or
+// add-patient screen; none of those show what the machine is doing, so the
+// running session takes the screen back. Pending edits are discarded on purpose.
+// [TH] เรียกเมื่อเครื่องเริ่มทำงาน: รอบอาจเริ่มจากปุ่มหน้าปัดหรือคำสั่งจากเซิร์ฟเวอร์
+//      ขณะที่ผู้ใช้อยู่หน้าตั้งค่า/ทะเบียนคนไข้ ซึ่งไม่แสดงสถานะเครื่อง จึงต้องดึงกลับหน้าหลัก
+//      ค่าที่กำลังกรอกค้างไว้จะถูกทิ้ง โดยตั้งใจ
+static void leaveSubScreenForRun() {
+  lv_obj_t* act = lv_scr_act();
+  if (act == scrMain) return;
+  hideKeyboard();
+  hideAddKeyboard();
+  lv_scr_load(scrMain);
 }
 
 static void taFocused(lv_event_t* e) {
@@ -653,6 +675,278 @@ void uiOpenSettings(const DeviceSettings& cur) {
   lv_obj_scroll_to_y(lv_obj_get_parent(taSsid), 0, LV_ANIM_OFF);
 
   lv_scr_load(scrSettings);
+}
+
+// ---------------------------------------------------------------- data screen
+
+// Roster access is injected, so this file never includes SD or touches the card.
+// [TH] ฟังก์ชันเข้าถึงทะเบียนถูกส่งเข้ามา ไฟล์นี้จึงไม่ต้องรู้จักการ์ด SD เลย
+static int (*cbCount)() = nullptr;
+static const Patient* (*cbGet)(int) = nullptr;
+static bool (*cbAdd)(const char*, const char*, int) = nullptr;
+static void (*cbSetActive)(int) = nullptr;
+
+static lv_obj_t *scrData, *lblDataTitle, *lstPatients;
+static lv_obj_t *scrAdd, *taPCode, *taPName, *taPAge, *kbAdd;
+
+void uiSetDataCallbacks(int (*count)(), const Patient* (*get)(int),
+                        bool (*add)(const char*, const char*, int),
+                        void (*setActive)(int)) {
+  cbCount = count; cbGet = get; cbAdd = add; cbSetActive = setActive;
+}
+
+static void openAddForm();
+
+static void patientRowClicked(lv_event_t* e) {
+  int idx = (int)(intptr_t)lv_event_get_user_data(e);
+  if (cbSetActive) cbSetActive(idx);
+  lv_scr_load(scrMain);  // picked; the next session is theirs — เลือกแล้ว รอบต่อไปเป็นของคนนี้
+}
+
+// Rebuilt on every open, unlike the screen itself: the roster changes when a
+// patient is added, and lv_obj_clean frees the old rows properly.
+// [TH] สร้างรายการใหม่ทุกครั้งที่เปิด เพราะทะเบียนเปลี่ยนได้ ส่วน lv_obj_clean คืนหน่วยความจำแถวเก่าให้เรียบร้อย
+static void fillPatientList() {
+  lv_obj_clean(lstPatients);
+  int n = cbCount ? cbCount() : 0;
+
+  // -1 is "no card", which is not the same as "no patients registered" and must
+  // not look like it: one is a missing card, the other is an empty roster.
+  // [TH] ค่า -1 คือไม่มีการ์ด ซึ่งต่างจาก "ยังไม่มีคนไข้" ต้องไม่แสดงให้ดูเหมือนกัน
+  if (n < 0) {
+    lv_label_set_text(lblDataTitle, "ไม่พบการ์ด SD");
+    return;
+  }
+  lv_label_set_text(lblDataTitle, n > 0 ? "คนไข้" : "ยังไม่มีคนไข้");
+
+  for (int i = 0; i < n; i++) {
+    const Patient* p = cbGet(i);
+    lv_obj_t* b = lv_list_add_btn(lstPatients, LV_SYMBOL_RIGHT, "");
+    // Set the font on the button, not its label: text_font is an inherited
+    // style, and the label is created inside lv_list_add_btn.
+    // [TH] ตั้งฟอนต์ที่ตัวปุ่ม ไม่ใช่ที่ป้ายข้อความ เพราะสไตล์ฟอนต์สืบทอดลงไปหาลูกอยู่แล้ว
+    lv_obj_set_style_text_font(b, &thai14, 0);
+    lv_obj_set_style_bg_color(b, lv_color_hex(COL_SURFACE), 0);
+    lv_obj_set_style_text_color(b, lv_color_hex(COL_TEXT), 0);
+    lv_obj_set_style_border_width(b, 0, 0);
+    lv_obj_t* lbl = lv_obj_get_child(b, -1);  // the text label of the list button
+    if (p->name.length())
+      lv_label_set_text_fmt(lbl, "%s  (%s)", p->name.c_str(), p->code.c_str());
+    else
+      lv_label_set_text(lbl, p->code.c_str());
+    lv_obj_add_event_cb(b, patientRowClicked, LV_EVENT_CLICKED, (void*)(intptr_t)i);
+  }
+}
+
+// Built once, like the settings screen and for the same reason: LVGL does not
+// free a screen when another is loaded, so rebuilding per open leaks the pool.
+// [TH] สร้างครั้งเดียวด้วยเหตุผลเดียวกับหน้าตั้งค่า: LVGL ไม่คืนหน่วยความจำหน้าจอเก่า
+static void buildData() {
+  scrData = lv_obj_create(nullptr);
+  styleScreen(scrData);
+
+  lv_obj_t* bar = lv_obj_create(scrData);
+  lv_obj_set_size(bar, lv_pct(100), 44);
+  lv_obj_align(bar, LV_ALIGN_TOP_MID, 0, 0);
+  lv_obj_set_style_bg_color(bar, lv_color_hex(COL_SURFACE), 0);
+  lv_obj_set_style_border_width(bar, 0, 0);
+  lv_obj_set_style_radius(bar, 0, 0);
+  lv_obj_clear_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
+
+  lv_obj_t* back = makeBtn(bar, LV_SYMBOL_LEFT " กลับ", COL_BG, &thai20,
+                           [](lv_event_t*) { lv_scr_load(scrMain); });
+  lv_obj_set_size(back, 110, 34);
+  lv_obj_align(back, LV_ALIGN_LEFT_MID, -8, 0);
+
+  // "ลงทะเบียน" not "เพิ่มผู้ป่วย": เพิ่ม stacks a vowel and a tone on the same
+  // consonant, which LVGL overprints (see firmware/README.md).
+  // [TH] ใช้คำว่า ลงทะเบียน เพราะคำว่า เพิ่ม มีสระกับวรรณยุกต์ซ้อนกัน จะพิมพ์ทับกันบนจอ
+  lv_obj_t* add = makeBtn(bar, "ลงทะเบียน", COL_BG, &thai20,
+                          [](lv_event_t*) { openAddForm(); });
+  lv_obj_set_size(add, 120, 34);
+  lv_obj_align(add, LV_ALIGN_RIGHT_MID, 8, 0);
+
+  lblDataTitle = lv_label_create(scrData);
+  lv_obj_set_style_text_font(lblDataTitle, &thai14, 0);
+  lv_obj_set_style_text_color(lblDataTitle, lv_color_hex(COL_MUTED), 0);
+  lv_label_set_text(lblDataTitle, "");
+  lv_obj_align(lblDataTitle, LV_ALIGN_TOP_LEFT, 10, 50);
+
+  lstPatients = lv_list_create(scrData);
+  lv_obj_set_size(lstPatients, lv_pct(100), 168);
+  lv_obj_align(lstPatients, LV_ALIGN_BOTTOM_MID, 0, 0);
+  lv_obj_set_style_bg_color(lstPatients, lv_color_hex(COL_BG), 0);
+  lv_obj_set_style_border_width(lstPatients, 0, 0);
+  lv_obj_set_style_pad_all(lstPatients, 4, 0);
+}
+
+void uiOpenData() {
+  if (!scrData) buildData();
+  fillPatientList();
+  lv_scr_load(scrData);
+}
+
+// ------------------------------------------------------------- add-patient form
+
+// The CSV has no quoting rules, so the two characters that would break a
+// positional split are dropped at the point of entry rather than escaped.
+// [TH] ไฟล์ CSV ไม่มีกฎการใส่เครื่องหมายคำพูด จึงตัดอักขระที่ทำให้แยกคอลัมน์พังทิ้งตั้งแต่ตอนกรอก
+static String sanitize(const char* s) {
+  String out;
+  for (const char* p = s; *p; ++p)
+    if (*p != ',' && *p != '\n' && *p != '\r') out += *p;
+  return out;
+}
+
+static void hideAddKeyboard() {
+  if (!kbAdd) return;
+  lv_obj_add_flag(kbAdd, LV_OBJ_FLAG_HIDDEN);
+  lv_keyboard_set_textarea(kbAdd, nullptr);
+}
+
+static void addFieldFocused(lv_event_t* e) {
+  lv_obj_t* ta = (lv_obj_t*)lv_event_get_target(e);
+  lv_keyboard_set_textarea(kbAdd, ta);
+  lv_obj_clear_flag(kbAdd, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void addSaveClicked(lv_event_t*) {
+  String code = sanitize(lv_textarea_get_text(taPCode));
+  String name = sanitize(lv_textarea_get_text(taPName));
+  int age = atoi(lv_textarea_get_text(taPAge));
+  // A row with no code cannot be identified later, in the CSV or on screen.
+  // [TH] ถ้าไม่มีรหัส จะอ้างอิงแถวนี้ทีหลังไม่ได้ทั้งในไฟล์และบนจอ
+  if (code.length() == 0) return;
+  if (cbAdd) cbAdd(code.c_str(), name.c_str(), age);
+  hideAddKeyboard();
+  uiOpenData();  // back to the list, now including the new row
+}
+
+static lv_obj_t* makeAddField(lv_obj_t* parent, const char* placeholder,
+                              const char* accepted, lv_obj_t** out) {
+  lv_obj_t* ta = lv_textarea_create(parent);
+  lv_textarea_set_one_line(ta, true);
+  lv_textarea_set_placeholder_text(ta, placeholder);
+  if (accepted) lv_textarea_set_accepted_chars(ta, accepted);
+  lv_obj_set_width(ta, lv_pct(100));
+  lv_obj_set_style_text_font(ta, &thai14, 0);  // placeholders are Thai; typed text is Latin
+  lv_obj_set_style_bg_color(ta, lv_color_hex(COL_SURFACE), 0);
+  lv_obj_set_style_text_color(ta, lv_color_hex(COL_TEXT), 0);
+  lv_obj_set_style_border_width(ta, 0, 0);
+  lv_obj_add_event_cb(ta, addFieldFocused, LV_EVENT_FOCUSED, nullptr);
+  *out = ta;
+  return ta;
+}
+
+static void buildAddForm() {
+  scrAdd = lv_obj_create(nullptr);
+  styleScreen(scrAdd);
+
+  lv_obj_t* bar = lv_obj_create(scrAdd);
+  lv_obj_set_size(bar, lv_pct(100), 44);
+  lv_obj_align(bar, LV_ALIGN_TOP_MID, 0, 0);
+  lv_obj_set_style_bg_color(bar, lv_color_hex(COL_SURFACE), 0);
+  lv_obj_set_style_border_width(bar, 0, 0);
+  lv_obj_set_style_radius(bar, 0, 0);
+  lv_obj_clear_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
+
+  lv_obj_t* back = makeBtn(bar, LV_SYMBOL_LEFT " กลับ", COL_BG, &thai20,
+                           [](lv_event_t*) { hideAddKeyboard(); uiOpenData(); });
+  lv_obj_set_size(back, 110, 34);
+  lv_obj_align(back, LV_ALIGN_LEFT_MID, -8, 0);
+
+  lv_obj_t* save = makeBtn(bar, "บันทึก", COL_BG, &thai20, addSaveClicked);
+  lv_obj_set_size(save, 90, 34);
+  lv_obj_align(save, LV_ALIGN_RIGHT_MID, 8, 0);
+
+  lv_obj_t* col = lv_obj_create(scrAdd);
+  lv_obj_set_size(col, lv_pct(100), 80);
+  lv_obj_align(col, LV_ALIGN_TOP_MID, 0, 44);
+  lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_style_pad_all(col, 8, 0);
+  lv_obj_set_style_pad_row(col, 4, 0);
+  lv_obj_set_style_bg_opa(col, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(col, 0, 0);
+
+  // The on-screen keyboard is Latin-only, so names typed here are Latin. Thai
+  // names can still be put in /patients.csv from a PC — the screen renders them
+  // fine, it is only the keyboard that cannot produce them.
+  // [TH] แป้นพิมพ์บนจอมีแต่ตัวอักษรละติน ชื่อที่พิมพ์ตรงนี้จึงเป็นละติน
+  //      ถ้าต้องการชื่อไทย ให้แก้ไฟล์ /patients.csv จากคอมพิวเตอร์ จอแสดงผลภาษาไทยได้ปกติ
+  makeAddField(col, "รหัสคนไข้ (P001)", nullptr, &taPCode);
+  makeAddField(col, "นาม", nullptr, &taPName);
+  makeAddField(col, "อายุ", "0123456789", &taPAge);
+
+  kbAdd = lv_keyboard_create(scrAdd);
+  lv_obj_set_size(kbAdd, lv_pct(100), 120);
+  lv_obj_align(kbAdd, LV_ALIGN_BOTTOM_MID, 0, 0);
+  lv_obj_add_event_cb(kbAdd, [](lv_event_t*) { hideAddKeyboard(); }, LV_EVENT_READY, nullptr);
+  lv_obj_add_event_cb(kbAdd, [](lv_event_t*) { hideAddKeyboard(); }, LV_EVENT_CANCEL, nullptr);
+  lv_obj_add_flag(kbAdd, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void openAddForm() {
+  if (!scrAdd) buildAddForm();
+  lv_textarea_set_text(taPCode, "");
+  lv_textarea_set_text(taPName, "");
+  lv_textarea_set_text(taPAge, "");
+  hideAddKeyboard();
+  lv_scr_load(scrAdd);
+}
+
+// -------------------------------------------------------------- finish screen
+
+static lv_obj_t *scrFinish, *lblFinWho, *lblFinStat, *lblFinFault, *lblFinSaved;
+
+// Built once and re-filled, like every other screen here.
+static void buildFinish() {
+  scrFinish = lv_obj_create(nullptr);
+  styleScreen(scrFinish);
+
+  lv_obj_t* col = lv_obj_create(scrFinish);
+  lv_obj_set_size(col, lv_pct(100), lv_pct(100));
+  lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_flex_align(col, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
+                        LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_style_bg_opa(col, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(col, 0, 0);
+  lv_obj_set_style_pad_row(col, 6, 0);
+  lv_obj_clear_flag(col, LV_OBJ_FLAG_SCROLLABLE);
+
+  lblFinWho = lv_label_create(col);
+  lv_obj_set_style_text_font(lblFinWho, &thai20, 0);
+
+  lblFinStat = lv_label_create(col);
+  lv_obj_set_style_text_font(lblFinStat, &lv_font_montserrat_28, 0);
+
+  lblFinFault = lv_label_create(col);
+  lv_obj_set_style_text_font(lblFinFault, &thai20, 0);
+  lv_obj_set_style_text_color(lblFinFault, lv_color_hex(COL_FAULT), 0);
+
+  lblFinSaved = lv_label_create(col);
+  lv_obj_set_style_text_font(lblFinSaved, &thai14, 0);
+  lv_obj_set_style_text_color(lblFinSaved, lv_color_hex(COL_MUTED), 0);
+
+  lv_obj_t* ok = makeBtn(col, "ตกลง", COL_SURFACE, &thai20,
+                         [](lv_event_t*) { lv_scr_load(scrMain); });
+  lv_obj_set_size(ok, 120, 40);
+}
+
+void uiShowFinish(const char* patientName, uint32_t durationSec, uint16_t reps,
+                  bool fault, bool saved) {
+  if (!scrFinish) buildFinish();
+
+  lv_label_set_text(lblFinWho, (patientName && patientName[0]) ? patientName : "ไม่ระบุ");
+  lv_label_set_text_fmt(lblFinStat, "%02lu:%02lu   x%u", (unsigned long)(durationSec / 60),
+                        (unsigned long)(durationSec % 60), reps);
+  // A faulted session still logs and still shows its numbers; the extra line
+  // says why it ended, it does not replace the summary.
+  // [TH] รอบที่จบเพราะขึ้นสถานะผิดพลาดก็ยังบันทึกและยังแสดงตัวเลขตามปกติ
+  //      บรรทัดนี้บอกสาเหตุที่จบ ไม่ได้มาแทนที่สรุปผล
+  lv_label_set_text(lblFinFault, fault ? "ตรวจสอบสวิตช์" : "");
+  lv_label_set_text(lblFinSaved, saved ? "บันทึกแล้ว" : "ยังไม่ได้บันทึก รอการ์ด");
+
+  lv_scr_load(scrFinish);
 }
 
 void uiLoop() { lv_timer_handler(); }
