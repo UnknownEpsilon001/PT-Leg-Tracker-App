@@ -18,6 +18,14 @@
 # LIFT -> HOLD 10 s -> LOWER -> REST 10 s, repeating. Ctrl+C stops, and the display
 # should fall back to NO LINK about 2.5 s later.
 # Shorten a phase for a quicker watch with -HoldSec / -RestSec.
+#
+# Ending a session (x, or -Seconds running out mid-stop) sends `done`, the same
+# message the real controller emits, so the finish screen and the SD row can be
+# exercised with only the CYD attached. With no card in the slot the summary
+# should read "ยังไม่ได้บันทึก รอการ์ด" and the row waits in RAM; -Epoch 0
+# impersonates a controller with no RTC, which logs its datetime as "?".
+# [TH] ตอนจบรอบจะส่งข้อความ done เหมือนคอนโทรลเลอร์จริง ใช้ทดสอบหน้าสรุปและการบันทึกลงการ์ดได้
+#      ด้วยจอ CYD ตัวเดียว
 
 param(
     [string]$Port = "",     # empty = auto-detect the ESP32's USB-serial port
@@ -25,7 +33,12 @@ param(
     [int]$RestSec = 10,
     [int]$TravelSec = 2,
     [int]$Seconds = 0,      # 0 = run until Ctrl+C
-    [switch]$AutoStart      # begin a session immediately, without waiting for a touch
+    [switch]$AutoStart,     # begin a session immediately, without waiting for a touch
+    # Epoch put in the `done` message at session end. 0 impersonates a controller
+    # whose RTC is missing or unset, which is the case that logs a datetime of "?".
+    # -Epoch -1 means "use the PC's clock", i.e. a controller with a good RTC.
+    # [TH] เวลาที่ใส่ในข้อความ done ตอนจบรอบ: 0 = เหมือนไม่มีนาฬิกา, -1 = ใช้เวลาจริงของเครื่องพีซี
+    [long]$Epoch = -1
 )
 
 $ErrorActionPreference = "Stop"
@@ -150,7 +163,20 @@ try {
                     2 { $phase = 3; $phaseLeft = $TravelSec }      # Hold  -> Lower
                     3 { $phase = 4; $phaseLeft = $RestSec }        # Lower -> Rest
                     4 { $reps++; $phase = 1; $phaseLeft = $TravelSec }  # Rest -> Lift
-                    5 { $running = $false; $phase = 0; $elapsed = 0 }   # SafeLower -> Idle
+                    5 {
+                        # [TH] จบรอบ: ส่งข้อความ done เหมือนคอนโทรลเลอร์จริง จอจะได้บันทึกและขึ้นหน้าสรุป
+                        # SafeLower -> Idle. The real controller emits `done` on this
+                        # edge and the display logs it, so the bench must too -
+                        # otherwise the finish screen and the SD row never appear here.
+                        # epoch: -Epoch 0 stands in for a controller with no RTC, which
+                        # is the case that logs a datetime of "?".
+                        $running = $false; $phase = 0
+                        $ep = if ($Epoch -lt 0) { [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() }
+                              else { $Epoch }
+                        $done = '{{"t":"done","elapsed":{0},"reps":{1},"epoch":{2},"fault":false}}'
+                        Send-Line ([string]::Format($done, $elapsed, $reps, $ep))
+                        $elapsed = 0
+                    }
                 }
             }
         }
