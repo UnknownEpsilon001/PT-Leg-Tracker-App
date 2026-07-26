@@ -19,10 +19,17 @@ Plan: `../docs/superpowers/plans/2026-07-19-esp32-firmware.md`
 - TFT_eSPI 2.5.43 — `User_Setup.h` for the CYD: `TFT_eSPI_User_Setup.h`, copy over the library's own
 - XPT2046_Touchscreen 1.4
 - ArduinoJson 7.4.1 (7.4.x fine — same API)
+- RTClib 2.1.4 — DS3231 on the controller, controller sketch only
 
 ```powershell
-arduino-cli lib install "lvgl@8.4.0" "TFT_eSPI@2.5.43" "XPT2046_Touchscreen@1.4" "ArduinoJson@7.4.1"
+arduino-cli lib install "lvgl@8.4.0" "TFT_eSPI@2.5.43" "XPT2046_Touchscreen@1.4" "ArduinoJson@7.4.1" "RTClib@2.1.4"
 ```
+
+lvgl **must** stay on 8.4.0. Installing 9.x breaks the display sketch with a wall
+of renamed-API errors (`lv_disp_draw_buf_t`, `LV_IMG_CF_TRUE_COLOR_ALPHA`,
+`lv_image_header_t has no member named 'always_zero'`) — that is version drift,
+not a code problem. Reinstall the pin and rebuild with `--clean`.
+[TH] ต้องใช้ lvgl 8.4.0 เท่านั้น ถ้าเผลออัปเป็น 9.x จะคอมไพล์จอไม่ผ่านเพราะชื่อ API เปลี่ยน
 
 Core: `arduino-cli core install esp32:esp32` (board manager URL
 `https://espressif.github.io/arduino-esp32/package_esp32_index.json`).

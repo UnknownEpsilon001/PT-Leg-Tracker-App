@@ -49,6 +49,15 @@
 #endif
 #define BUTTON_DEBOUNCE_MS 25 // เวลากันเด้งของปุ่ม (มิลลิวินาที)
 
+// DS3231 real-time clock on the controller I2C bus. Not the ESP32 default pair
+// (21/22): 22 drives a relay, and 25 — the pin the plan first picked for SCL —
+// is now START. 21 and 19 are what is left free after relays 22/27, UART 16/17,
+// limits 32/33 and buttons 25/26/4.
+// [TH] นาฬิกา DS3231 ต่อผ่าน I2C ของบอร์ดคอนโทรลเลอร์
+//      ใช้ขา 21/19 เพราะขา 22 เป็นรีเลย์ และขา 25 ถูกใช้เป็นปุ่ม START ไปแล้ว
+#define PIN_RTC_SDA 21
+#define PIN_RTC_SCL 19
+
 // safety cap: max time a stroke (LIFT/LOWER/SAFE-LOWER) may drive before FAULT
 // [TH] เพดานความปลอดภัย: เวลาสูงสุดที่มอเตอร์วิ่งได้ต่อจังหวะก่อนขึ้นสถานะ FAULT
 #define DEFAULT_MAX_TRAVEL_SEC 8
