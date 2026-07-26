@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// หน้าออกกำลังกาย: สั่งเริ่ม/หยุดเครื่องผ่านเซิร์ฟเวอร์ แสดงเวลา/จำนวนครั้งสด บันทึกความปวดก่อน-หลัง
+// หน้าออกกำลังกาย: สั่งเริ่ม/หยุดเครื่องผ่านเซิร์ฟเวอร์ แสดงเวลา/จำนวนรอบสด บันทึกความปวดก่อน-หลัง
 // Exercise screen: start/stop the device via the server, live timer/reps, before/after pain logging.
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
@@ -203,7 +203,7 @@ onUnmounted(() => {
         <p class="clock">{{ clock }}</p>
       </div>
       <p class="reps">
-        จำนวนครั้ง:
+        จำนวนรอบ:
         <Transition name="pop" mode="out-in">
           <span :key="reps" class="reps-num">{{ reps }}</span>
         </Transition>
