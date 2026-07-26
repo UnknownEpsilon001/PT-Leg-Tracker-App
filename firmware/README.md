@@ -197,19 +197,26 @@ that board alone — no CYD, no UART jumpers. Two things make this work:
 - the UART-loss safe-stop is guarded by `gLink.lastRxMs() != 0`, so a board that
   never saw a display does not stop itself.
 
-Build with `DEBUG_SERIAL=1` for a running commentary on the USB port — button
+Build with `BENCH_DEBUG=1` for a running commentary on the USB port — button
 edges, raw pin levels, limit-switch state, phase and rep changes, all printed on
 change only:
 
 ```powershell
 arduino-cli compile --fqbn "esp32:esp32:esp32:PartitionScheme=huge_app" `
-  --build-property compiler.cpp.extra_flags=-DDEBUG_SERIAL=1 --clean `
+  --build-property compiler.cpp.extra_flags=-DBENCH_DEBUG=1 --clean `
   --upload -p COM4 firmware/pt-leg-controller
 ```
 
 `--clean` is required: the flag changes a `#define`, and Arduino's cache happily
 reuses stale objects compiled without it. The source line stays at `0`, so the
 flag cannot be committed enabled.
+
+The flag is `BENCH_DEBUG`, **not** `DEBUG_SERIAL`, and must not be renamed back:
+Adafruit_BusIO (pulled in by RTClib) uses `DEBUG_SERIAL` as a `Stream` object, so
+defining it as `1` on the command line turns every `DEBUG_SERIAL.print(...)` in
+that library into `1.print(...)` and the controller stops compiling.
+[TH] ต้องใช้ชื่อ `BENCH_DEBUG` ห้ามกลับไปใช้ `DEBUG_SERIAL` เพราะไลบรารี Adafruit_BusIO
+ใช้ชื่อนี้เป็นออบเจ็กต์ Stream อยู่แล้ว จะทำให้คอมไพล์ไม่ผ่าน
 
 **Unwired NC inputs read as pressed.** `SWITCH_NC` + `INPUT_PULLUP` means a
 closed contact pulls the pin LOW and an open one floats HIGH, and an absent wire

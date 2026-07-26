@@ -2,13 +2,13 @@
 #      อ่านบรรทัด [dbg] จากพอร์ต USB แล้วพาทำทีละขั้น พร้อมบอกผ่าน/ไม่ผ่านทุกขั้น
 #
 # Walks the controller's panel buttons through a pass/fail checklist using the
-# DEBUG_SERIAL prints on USB. No display board and no UART jumpers needed: the
+# BENCH_DEBUG prints on USB. No display board and no UART jumpers needed: the
 # display link is on Serial2, and the UART-loss safe-stop only arms once a
 # display has actually been heard from.
 #
 # Flash the controller with the debug prints on first:
 #   arduino-cli compile --fqbn "esp32:esp32:esp32:PartitionScheme=huge_app" `
-#     --build-property compiler.cpp.extra_flags=-DDEBUG_SERIAL=1 --clean `
+#     --build-property compiler.cpp.extra_flags=-DBENCH_DEBUG=1 --clean `
 #     --upload -p COM4 firmware/pt-leg-controller
 #
 # Then (port auto-detected; pass -Port COMx to override):
@@ -89,7 +89,7 @@ if ($DryRun) {
 
     # [TH] กระตุก RTS เพื่อรีเซ็ตบอร์ด จะได้เห็นข้อความตอนบูตและเริ่มจากสถานะที่รู้แน่
     # RTS drives EN on a dev board, so pulsing it reboots the controller. Worth
-    # doing: the banner proves the running image really has DEBUG_SERIAL on, and
+    # doing: the banner proves the running image really has BENCH_DEBUG on, and
     # the run starts from a known state instead of mid-session.
     if (-not $NoReset) {
         $sp.RtsEnable = $true
@@ -165,11 +165,11 @@ if ($Tail) {
 
 # ---- the checklist -------------------------------------------------------
 # Each step: what to do by hand, then what the firmware must print for a pass.
-# Patterns match the DEBUG_SERIAL format in pt-leg-controller.ino.
+# Patterns match the BENCH_DEBUG format in pt-leg-controller.ino.
 $steps = @(
     [pscustomobject]@{
         Name    = "debug build is running"
-        Do      = "nothing - just confirming the board is flashed with DEBUG_SERIAL=1"
+        Do      = "nothing - just confirming the board is flashed with BENCH_DEBUG=1"
         Expect  = @('debug prints ON')
         Hint    = "No banner: the image was built without the flag, or -NoReset skipped the reboot that prints it."
         Fatal   = $true   # every later step reads that same debug output
@@ -251,7 +251,7 @@ try {
                 Write-Host "      Erase it and flash the controller (see firmware/README.md):" -ForegroundColor Yellow
                 Write-Host "        esptool --chip esp32 --port $Port --baud 921600 erase_flash" -ForegroundColor Yellow
                 Write-Host "        arduino-cli compile --fqbn esp32:esp32:esp32:PartitionScheme=huge_app ``" -ForegroundColor Yellow
-                Write-Host "          --build-property compiler.cpp.extra_flags=-DDEBUG_SERIAL=1 --clean ``" -ForegroundColor Yellow
+                Write-Host "          --build-property compiler.cpp.extra_flags=-DBENCH_DEBUG=1 --clean ``" -ForegroundColor Yellow
                 Write-Host "          --upload -p $Port firmware/pt-leg-controller" -ForegroundColor Yellow
             } else {
                 Write-Host "      $($step.Hint)" -ForegroundColor DarkYellow

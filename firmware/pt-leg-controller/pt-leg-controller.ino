@@ -7,11 +7,11 @@
 // levels, phase changes and reps on the USB port — UART0 is free, the display
 // link lives on Serial2. Off for real hardware; enable per-build, never commit
 // it on (see firmware/README.md):
-//   --build-property compiler.cpp.extra_flags=-DDEBUG_SERIAL=1 --clean
+//   --build-property compiler.cpp.extra_flags=-DBENCH_DEBUG=1 --clean
 // [TH] โหมดทดสอบบนโต๊ะ: พิมพ์ขอบการกดปุ่ม ค่าดิบของขา สถานะ และจำนวนรอบ ออกทางพอร์ต USB
 //      ใช้ตรวจขั้วปุ่มโดยไม่ต้องต่อจอ ใช้เฉพาะตอนทดสอบ ห้าม commit ทั้งค่าเปิดไว้
-#ifndef DEBUG_SERIAL
-#define DEBUG_SERIAL 0
+#ifndef BENCH_DEBUG
+#define BENCH_DEBUG 0
 #endif
 
 #include "config.h"
@@ -22,10 +22,19 @@
 #include "session.h"
 #include "net.h"
 #include "link.h"
+#include "rtc.h"
+#include <time.h>
 
 DeviceSettings gSettings;  // ค่าตั้งค่าปัจจุบัน
 SessionSM gSession;        // เครื่องสถานะของรอบการทำงาน
 Link gLink;                // ลิงก์ UART ไปยังบอร์ดจอ
+
+// The NTP sync is one-shot per boot: the DS3231 keeps time on its own from then
+// on, and the machine is meant to work offline, so re-syncing forever would be
+// noise. A power cut with the coin cell in place does not need it either.
+// [TH] ซิงก์เวลาจาก NTP ครั้งเดียวต่อการเปิดเครื่อง เพราะ DS3231 เดินเวลาเองต่อได้
+//      และเครื่องต้องใช้งานแบบออฟไลน์ได้ ไม่จำเป็นต้องซิงก์ซ้ำเรื่อยๆ
+static bool gNtpDone = false;
 
 static void applyActuator() {
   // [TH] แปลงสถานะปัจจุบันของรอบให้เป็นคำสั่งรีเลย์ (เรียกทุกลูป)
@@ -68,7 +77,7 @@ static LinkSettings currentAsLink() {
 // [TH] เมื่อจอทักทาย (hello) ให้ส่งค่าตั้งค่าปัจจุบันกลับไป
 static void onLinkHello() { gLink.sendSettings(currentAsLink()); }
 
-#if DEBUG_SERIAL
+#if BENCH_DEBUG
 static const char* phaseName(Phase p) {
   switch (p) {
     case Phase::Idle: return "IDLE";
@@ -127,6 +136,19 @@ static void debugTick(uint32_t nowMs, bool startEdge, bool stopEdge, bool resetE
                   top ? "AT-LIMIT" : "clear", bot ? "AT-LIMIT" : "clear");
   }
 
+  // The clock is printed only when it crosses into "known", which is the moment
+  // worth seeing: chip found, and either battery-backed or just NTP-set. A
+  // per-tick print would be a new line every second and drown the bench.
+  // [TH] พิมพ์เวลาเฉพาะตอนที่เปลี่ยนจาก "ไม่ทราบ" เป็น "ทราบ" ซึ่งเป็นจังหวะที่ต้องการเห็น
+  //      ถ้าพิมพ์ทุกรอบจะได้บรรทัดใหม่ทุกวินาทีจนกลบข้อความอื่น
+  static bool lastEpochKnown = false;
+  uint32_t epoch = rtcEpoch();
+  if (firstRun || (epoch != 0) != lastEpochKnown) {
+    lastEpochKnown = (epoch != 0);
+    Serial.printf("[dbg %lu] rtc %s epoch=%lu\n", (unsigned long)nowMs,
+                  rtcPresent() ? "found" : "ABSENT", (unsigned long)epoch);
+  }
+
   // A press always reprints the state, even when nothing moved. RESET pressed on
   // an already-clear session changes neither phase nor reps, and a change-only
   // print would leave the press looking like it did nothing at all.
@@ -148,6 +170,7 @@ void setup() {
   actuatorBegin();  // safety first — ดับรีเลย์ก่อนเป็นอันดับแรกเพื่อความปลอดภัย
   switchesBegin();
   buttonsBegin();
+  rtcBegin();  // absent chip is fine: epochs just read 0 — ไม่มีชิปก็ไม่เป็นไร เวลาจะเป็น 0
   Serial.begin(115200);
   delay(200);  // let UART0 settle so the boot banner is not clipped — รอ UART0 นิ่งกันข้อความต้นเปิดเครื่องขาด
   Serial2.begin(115200, SERIAL_8N1, 16, 17);  // UART to CYD — สาย UART ไปบอร์ดจอ (RX=16, TX=17)
@@ -156,6 +179,11 @@ void setup() {
                   gSettings.restSec * 1000u};
   actuatorSetCap(gSettings.maxTravelSec * 1000u + 500u);
   netBegin(gSettings);
+  // UTC, no DST rule: every epoch on the wire is UTC and the CYD adds the Thai
+  // offset only when it formats a datetime for the log.
+  // [TH] ตั้งเป็น UTC ล้วน ไม่ใส่เขตเวลา เพราะเวลาที่ส่งกันเป็น UTC ทั้งหมด
+  //      ฝั่งจอค่อยบวกเวลาไทยตอนเขียนลงไฟล์
+  configTime(0, 0, "pool.ntp.org", "time.google.com");
   gLink.begin(&Serial2);
   gLink.onSettings = onLinkSettings;
   gLink.onHello = onLinkHello;
@@ -163,7 +191,7 @@ void setup() {
                 FW_VERSION, gSettings.wifiSsid.c_str(), gSettings.serverUrl.c_str(),
                 gSettings.deviceCode.c_str(), gSettings.maxTravelSec, gSettings.holdSec,
                 gSettings.restSec);
-#if DEBUG_SERIAL
+#if BENCH_DEBUG
   // ASCII only: an em dash here reaches a serial monitor as mojibake.
   Serial.printf("debug prints ON - btn start=%d(%s) stop=%d(%s) reset=%d(%s), limits=%s\n",
                 PIN_BTN_START, BTN_START_NC ? "NC" : "NO",
@@ -199,6 +227,19 @@ void loop() {
   if (actuatorCapTripped()) gSession.forceFault(now);  // backstop: SM never commanded OFF
                                                        // [TH] แนวป้องกันสำรอง เผื่อเครื่องสถานะไม่ได้สั่งดับ
   netLoop(now);
+  // One-shot NTP -> RTC. time(nullptr) returns a small number until SNTP has
+  // answered, so the threshold is what distinguishes "clock not set yet" from a
+  // real time; writing the former into the DS3231 would replace a good
+  // battery-backed time with 1970.
+  // [TH] ซิงก์เวลาจากอินเทอร์เน็ตลงชิปนาฬิกาครั้งเดียว ก่อน SNTP ตอบ เวลาจะเป็นค่าน้อยๆ
+  //      จึงต้องเช็กเกณฑ์ก่อน ไม่งั้นจะเอาปี 1970 ไปทับเวลาจริงที่ชิปเก็บไว้
+  if (!gNtpDone && netWifiUp()) {
+    time_t t = time(nullptr);
+    if (t > 1700000000) {  // ~2023-11
+      rtcSetFromEpoch((uint32_t)t);
+      gNtpDone = true;
+    }
+  }
   gLink.poll();
 
   // UART-loss safe-stop: screen may be dead, no touch-stop possible
@@ -222,7 +263,16 @@ void loop() {
   }
   // [TH] ส่งเหตุการณ์เมื่อ "เพิ่งเริ่ม" หรือ "เพิ่งหยุด" (ตรวจจับขอบสัญญาณครั้งเดียว)
   if (gSession.takeStartedEdge()) netQueueEvent("started", gSession.elapsedSec(now), gSession.reps());
-  if (gSession.takeStoppedEdge()) netQueueEvent("stopped", gSession.finalElapsedSec(), gSession.finalReps());
+  // The same edge feeds two independent records: the server event (online) and
+  // the CYD's SD row (offline). Neither depends on the other succeeding.
+  // [TH] ขอบเดียวกันนี้ใช้บันทึกสองที่ที่ไม่ขึ้นต่อกัน: เหตุการณ์ฝั่งเซิร์ฟเวอร์ (ตอนออนไลน์)
+  //      กับแถวข้อมูลใน SD ของจอ (ตอนออฟไลน์)
+  if (gSession.takeStoppedEdge()) {
+    netQueueEvent("stopped", gSession.finalElapsedSec(), gSession.finalReps());
+    LinkDone d{gSession.finalElapsedSec(), gSession.finalReps(), rtcEpoch(),
+               gSession.faulted()};
+    gLink.sendDone(d);
+  }
 
   if (now - lastState >= 250) {  // [TH] ส่งสถานะให้จอ ~4 ครั้งต่อวินาที
     lastState = now;
@@ -230,7 +280,7 @@ void loop() {
                  gSession.reps(), netWifiUp(), netServerUp()};
     gLink.sendState(st);
   }
-#if DEBUG_SERIAL
+#if BENCH_DEBUG
   debugTick(now, pressStart, pressStop, pressReset);
 #endif
   delay(2);
