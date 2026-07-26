@@ -183,7 +183,7 @@ $steps = @(
         # session the later steps try to start.
         Do      = "start with all jumpers OFF; ground GPIO 32 and 33 (limits, leave them), then ground GPIO 25, 26 and 4"
         Expect  = @('btn levels start=LOW/rest stop=LOW/rest reset=LOW/rest')
-        Hint    = "A pin stuck HIGH is not grounded, or the button wiring is normally-open while config.h says SWITCH_NC."
+        Hint    = "Nothing wired yet reads exactly like this: every floating pin is HIGH. This step needs real jumpers - GPIO 25, 26, 4 (and 32, 33) to any GND pin, or the NC buttons themselves between GPIO and GND. A pin still HIGH once wired is either not grounded or wired normally-open while config.h says SWITCH_NC."
     },
     [pscustomobject]@{
         Name    = "START begins a session"
