@@ -82,6 +82,16 @@ static const char* phaseName(Phase p) {
   return "?";
 }
 
+// The raw level alone means nothing without the button's contact type: HIGH is
+// "pressed" on an NC button and "at rest" on an NO one. Print both so the
+// polarity being tested is never inferred from the pin state.
+// [TH] ค่าดิบอย่างเดียวบอกอะไรไม่ได้ถ้าไม่รู้ชนิดหน้าสัมผัส: HIGH คือ "กด" สำหรับ NC แต่คือ "ปกติ" สำหรับ NO
+static const char* levelName(int level, bool nc) {
+  bool pressed = nc ? (level == HIGH) : (level == LOW);
+  if (level == HIGH) return pressed ? "HIGH/pressed" : "HIGH/rest";
+  return pressed ? "LOW/pressed" : "LOW/rest";
+}
+
 // Everything here prints on change only. The loop runs hundreds of times a
 // second, so a per-loop dump would bury the one line being looked for.
 // Raw pin levels are printed alongside the debounced edges because polarity is
@@ -105,10 +115,9 @@ static void debugTick(uint32_t nowMs, bool startEdge, bool stopEdge, bool resetE
       r = digitalRead(PIN_BTN_RESET);
   if (firstRun || s != lvStart || t != lvStop || r != lvReset) {
     lvStart = s; lvStop = t; lvReset = r;
-    // NC + INPUT_PULLUP: HIGH = open contact = pressed (or a broken/absent wire)
     Serial.printf("[dbg %lu] btn levels start=%s stop=%s reset=%s\n", (unsigned long)nowMs,
-                  s ? "HIGH/pressed" : "LOW/rest", t ? "HIGH/pressed" : "LOW/rest",
-                  r ? "HIGH/pressed" : "LOW/rest");
+                  levelName(s, BTN_START_NC), levelName(t, BTN_STOP_NC),
+                  levelName(r, BTN_RESET_NC));
   }
 
   bool top = switchTop(), bot = switchBottom();
@@ -156,12 +165,14 @@ void setup() {
                 gSettings.restSec);
 #if DEBUG_SERIAL
   // ASCII only: an em dash here reaches a serial monitor as mojibake.
-  Serial.printf("debug prints ON - btn pins start=%d stop=%d reset=%d, NC=%s\n",
-                PIN_BTN_START, PIN_BTN_STOP, PIN_BTN_RESET,
+  Serial.printf("debug prints ON - btn start=%d(%s) stop=%d(%s) reset=%d(%s), limits=%s\n",
+                PIN_BTN_START, BTN_START_NC ? "NC" : "NO",
+                PIN_BTN_STOP, BTN_STOP_NC ? "NC" : "NO",
+                PIN_BTN_RESET, BTN_RESET_NC ? "NC" : "NO",
 #ifdef SWITCH_NC
-                "yes (LOW = at rest, HIGH = pressed)");
+                "NC");
 #else
-                "no (HIGH = at rest, LOW = pressed)");
+                "NO");
 #endif
 #endif
 }

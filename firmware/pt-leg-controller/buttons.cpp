@@ -7,27 +7,30 @@
 
 struct Btn {
   uint8_t pin;
+  bool nc;          // normally-closed contact — หน้าสัมผัสแบบปกติปิด
   bool stable;      // debounced logical pressed — ค่าที่ผ่านกันเด้งแล้ว
   bool lastRaw;     // last raw logical read — ค่าดิบครั้งก่อน
   uint32_t changed; // ms of last raw change — เวลาที่ค่าดิบเปลี่ยนล่าสุด
   bool edge;        // one-shot press edge, cleared on read — ขอบกดครั้งเดียว อ่านแล้วล้าง
 };
 
-static Btn bStart{PIN_BTN_START, false, false, 0, false};
-static Btn bStop{PIN_BTN_STOP, false, false, 0, false};
-static Btn bReset{PIN_BTN_RESET, false, false, 0, false};
+static Btn bStart{PIN_BTN_START, BTN_START_NC, false, false, 0, false};
+static Btn bStop{PIN_BTN_STOP, BTN_STOP_NC, false, false, 0, false};
+static Btn bReset{PIN_BTN_RESET, BTN_RESET_NC, false, false, 0, false};
 
-static bool rawPressed(uint8_t pin) {
+// Polarity is per button now, so it is a runtime field rather than a #ifdef: the
+// three can differ, and mixed panels are the common case.
+// [TH] ขั้วของแต่ละปุ่มแยกกัน จึงเก็บเป็นค่าในโครงสร้างแทนการใช้ #ifdef
+static bool rawPressed(uint8_t pin, bool nc) {
   int level = digitalRead(pin);
-#ifdef SWITCH_NC
-  return level == HIGH;  // NC: pressed (or broken wire) reads open/HIGH — แบบ NC กด/สายขาด = HIGH
-#else
-  return level == LOW;   // NO to GND with pullup: pressed reads LOW — แบบ NO ลง GND = LOW
-#endif
+  // NC: pressed (or a broken wire) opens the contact and the pullup reads HIGH.
+  // NO to GND: pressed closes it and reads LOW.
+  // [TH] NC: กด (หรือสายขาด) = วงจรเปิด = HIGH ; NO ลง GND: กด = LOW
+  return nc ? (level == HIGH) : (level == LOW);
 }
 
 static void poll(Btn& b, uint32_t nowMs) {
-  bool raw = rawPressed(b.pin);
+  bool raw = rawPressed(b.pin, b.nc);
   if (raw != b.lastRaw) {
     b.lastRaw = raw;
     b.changed = nowMs;

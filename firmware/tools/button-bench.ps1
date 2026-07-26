@@ -38,12 +38,12 @@ $ErrorActionPreference = "Stop"
 # here first, instead of on the bench with jumpers in hand.
 $script:dryTranscript = @(
     'pt-leg-controller 0.1.0 ssid=ClinicWiFi server=http://192.168.0.12:8000 code=KNEE-01 cycle max/hold/rest=8/10/10'
-    'debug prints ON - btn pins start=25 stop=26 reset=4, NC=yes (LOW = at rest, HIGH = pressed)'
+    'debug prints ON - btn start=25(NC) stop=26(NC) reset=4(NO), limits=NC'
     '[dbg 812] btn levels start=HIGH/pressed stop=HIGH/pressed reset=HIGH/pressed'
     '[dbg 812] limits top=AT-LIMIT bottom=AT-LIMIT'
     '[dbg 812] phase=IDLE reps=0 elapsed=0s'
     '[dbg 2100] limits top=clear bottom=clear'
-    '[dbg 2400] btn levels start=LOW/rest stop=LOW/rest reset=LOW/rest'
+    '[dbg 2400] btn levels start=LOW/rest stop=LOW/rest reset=HIGH/rest'   # RESET wired NO, still at rest
     '[dbg 5100] EDGE START'
     '[dbg 5100] phase=LIFT reps=0 elapsed=0s'
     '[dbg 5140] btn levels start=HIGH/pressed stop=LOW/rest reset=LOW/rest'
@@ -181,9 +181,12 @@ $steps = @(
         # GPIO 32/33 get grounded here too and stay that way: both limits reading
         # AT-LIMIT at once is the wiring-fault net, and it would fault every
         # session the later steps try to start.
-        Do      = "start with all jumpers OFF; ground GPIO 32 and 33 (limits, leave them), then ground GPIO 25, 26 and 4"
-        Expect  = @('btn levels start=LOW/rest stop=LOW/rest reset=LOW/rest')
-        Hint    = "Nothing wired yet reads exactly like this: every floating pin is HIGH. This step needs real jumpers - GPIO 25, 26, 4 (and 32, 33) to any GND pin, or the NC buttons themselves between GPIO and GND. A pin still HIGH once wired is either not grounded or wired normally-open while config.h says SWITCH_NC."
+        Do      = "start with all jumpers OFF; ground GPIO 32 and 33 (limits, leave them), then wire the three buttons"
+        # Match on /rest rather than LOW/rest: contact type is per button now, so
+        # an NO button correctly rests HIGH. The firmware resolves level plus
+        # polarity into the rest/pressed word, which is the part that must agree.
+        Expect  = @('btn levels start=\S+/rest stop=\S+/rest reset=\S+/rest')
+        Hint    = "Nothing wired yet reads exactly like this: every floating pin is HIGH, and an NC button reads that as pressed. This step needs the buttons wired between their GPIO and GND (or plain jumpers to GND). If one still says /pressed once wired, its contact type is wrong - flip BTN_START_NC / BTN_STOP_NC / BTN_RESET_NC in config.h and reflash. The banner in step 1 prints what the firmware currently believes."
     },
     [pscustomobject]@{
         Name    = "START begins a session"
