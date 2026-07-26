@@ -155,7 +155,8 @@ void setup() {
                 gSettings.deviceCode.c_str(), gSettings.maxTravelSec, gSettings.holdSec,
                 gSettings.restSec);
 #if DEBUG_SERIAL
-  Serial.printf("debug prints ON — btn pins start=%d stop=%d reset=%d, NC=%s\n",
+  // ASCII only: an em dash here reaches a serial monitor as mojibake.
+  Serial.printf("debug prints ON - btn pins start=%d stop=%d reset=%d, NC=%s\n",
                 PIN_BTN_START, PIN_BTN_STOP, PIN_BTN_RESET,
 #ifdef SWITCH_NC
                 "yes (LOW = at rest, HIGH = pressed)");

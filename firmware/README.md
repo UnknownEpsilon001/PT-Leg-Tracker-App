@@ -209,7 +209,8 @@ closed contact pulls the pin LOW and an open one floats HIGH, and an absent wire
 is indistinguishable from an open contact — that is the fail-safe, not a bug. A
 bare board therefore boots with START, STOP and RESET all "pressed", firing one
 edge each on the first debounce pass. For a bench test, jumper each button pin to
-GND to stand in for the closed contact, and lift the jumper to press:
+GND to stand in for the closed contact, and lift the jumper to press. **Ground
+GPIO 32 and 33 as well before starting** — see the fault note below:
 
 | Signal | Pin | Jumper to GND | Lift jumper |
 | ------ | --- | ------------- | ----------- |
@@ -236,10 +237,21 @@ replays a transcript copied from the sketch's own `printf` formats, so a pattern
 that drifts out of sync with the firmware fails at the desk rather than on the
 bench. Exit code is the number of failed steps.
 
-With both limit pins left floating the machine reads as "at both limits at once",
-so LIFT and LOWER complete instantly and the cycle becomes HOLD 10 s → REST 10 s
-→ rep. Ground both instead and a stroke runs until the max-travel cap trips
-FAULT, which is the safety path worth watching once too.
+Leaving the limit pins floating does **not** give a fast cycle. Both read
+AT-LIMIT at once, which is physically impossible, so `SessionSM::tick` calls it a
+wiring fault and the session goes straight to FAULT — verified on the bench
+2026-07-26, where a bare board went `SAFE-LOWER` → `FAULT` 13 ms after boot:
+
+```
+[dbg 247] EDGE START / EDGE STOP / EDGE RESET   <- three floating buttons
+[dbg 247] limits top=AT-LIMIT bottom=AT-LIMIT
+[dbg 260] phase=FAULT reps=0 elapsed=0s
+```
+
+So ground 32 and 33 for the whole button test. With them grounded, neither limit
+ever closes, and the phases run on the max-travel cap alone: START gives LIFT for
+8 s and then FAULT (net 1), while STOP gives SAFE-LOWER for 8 s and then IDLE —
+the safe-stop path deliberately ends idle rather than faulted.
 
 ## LVGL logging and asserts
 

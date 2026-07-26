@@ -42,6 +42,7 @@ $script:dryTranscript = @(
     '[dbg 812] btn levels start=HIGH/pressed stop=HIGH/pressed reset=HIGH/pressed'
     '[dbg 812] limits top=AT-LIMIT bottom=AT-LIMIT'
     '[dbg 812] phase=IDLE reps=0 elapsed=0s'
+    '[dbg 2100] limits top=clear bottom=clear'
     '[dbg 2400] btn levels start=LOW/rest stop=LOW/rest reset=LOW/rest'
     '[dbg 5100] EDGE START'
     '[dbg 5100] phase=LIFT reps=0 elapsed=0s'
@@ -49,11 +50,11 @@ $script:dryTranscript = @(
     '[dbg 5260] btn levels start=LOW/rest stop=LOW/rest reset=LOW/rest'
     '[dbg 9000] EDGE STOP'
     '[dbg 9000] phase=SAFE-LOWER reps=0 elapsed=4s'
-    '[dbg 9300] phase=IDLE reps=0 elapsed=0s'
-    '[dbg 12000] EDGE RESET'
-    '[dbg 12000] phase=IDLE reps=0 elapsed=0s'
-    '[dbg 15000] limits top=clear bottom=clear'
-    '[dbg 18000] limits top=AT-LIMIT bottom=AT-LIMIT'
+    '[dbg 17000] phase=IDLE reps=0 elapsed=0s'   # safe-lower ran the full 8 s cap
+    '[dbg 20000] EDGE RESET'
+    '[dbg 20000] phase=IDLE reps=0 elapsed=0s'
+    '[dbg 23000] limits top=AT-LIMIT bottom=AT-LIMIT'
+    '[dbg 26000] limits top=clear bottom=clear'
 )
 $script:dryIndex = 0
 $script:seenLines = [System.Collections.ArrayList]::new()
@@ -177,7 +178,10 @@ $steps = @(
         Name    = "all three buttons at rest"
         # Levels print on change, so the step has to create one: starting from
         # bare pins guarantees a HIGH -> LOW transition to watch for.
-        Do      = "start with all jumpers OFF, then ground GPIO 25, 26 and 4 (START/STOP/RESET)"
+        # GPIO 32/33 get grounded here too and stay that way: both limits reading
+        # AT-LIMIT at once is the wiring-fault net, and it would fault every
+        # session the later steps try to start.
+        Do      = "start with all jumpers OFF; ground GPIO 32 and 33 (limits, leave them), then ground GPIO 25, 26 and 4"
         Expect  = @('btn levels start=LOW/rest stop=LOW/rest reset=LOW/rest')
         Hint    = "A pin stuck HIGH is not grounded, or the button wiring is normally-open while config.h says SWITCH_NC."
     },
@@ -189,21 +193,27 @@ $steps = @(
     },
     [pscustomobject]@{
         Name    = "STOP safe-lowers"
+        # No bottom switch ever closes on the bench, so SAFE-LOWER runs the full
+        # max-travel cap (8 s by default) before ending IDLE - not FAULT, the
+        # safe-stop path is deliberately not a fault.
         Do      = "lift the STOP jumper (GPIO 26) briefly, then put it back on GND"
-        Expect  = @('EDGE STOP', 'phase=(SAFE-LOWER|IDLE)')
-        Hint    = "With both limit pins floating the board reads 'already at the bottom', so it can go straight to IDLE - that still counts."
+        Expect  = @('EDGE STOP', 'phase=SAFE-LOWER', 'phase=IDLE')
+        Hint    = "Reaching IDLE takes the full max-travel cap (~8 s) because no bottom switch closes. FAULT here instead means a limit pin came loose."
     },
     [pscustomobject]@{
         Name    = "RESET clears reps when idle"
-        Do      = "wait for phase=IDLE, then lift the RESET jumper (GPIO 4) briefly"
+        Do      = "with phase=IDLE, lift the RESET jumper (GPIO 4) briefly"
         Expect  = @('EDGE RESET', 'phase=IDLE reps=0')
         Hint    = "RESET is idle-only by design: pressed mid-session it prints the edge and does nothing."
     },
     [pscustomobject]@{
         Name    = "limit switches read both ways"
-        Do      = "ground GPIO 32 and 33 as well (both limits 'clear'), then remove those two jumpers"
-        Expect  = @('limits top=clear bottom=clear', 'limits top=AT-LIMIT bottom=AT-LIMIT')
-        Hint    = "Floating NC inputs read AT-LIMIT - that is the fail-safe, not a fault. Grounding them must flip both to clear."
+        # Both limits reading AT-LIMIT at once is the wiring-fault net in
+        # SessionSM::tick, so this step is deliberately last: it leaves the board
+        # in the state that faults any running session.
+        Do      = "lift the GPIO 32 and 33 jumpers (both go AT-LIMIT), then ground them again"
+        Expect  = @('limits top=AT-LIMIT bottom=AT-LIMIT', 'limits top=clear bottom=clear')
+        Hint    = "Floating NC inputs read AT-LIMIT - that is the fail-safe. Grounding them must flip both back to clear."
     }
 )
 
