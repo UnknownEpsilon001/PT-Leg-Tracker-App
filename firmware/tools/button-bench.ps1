@@ -56,6 +56,18 @@ $script:dryTranscript = @(
     '[dbg 18000] limits top=AT-LIMIT bottom=AT-LIMIT'
 )
 $script:dryIndex = 0
+$script:seenLines = [System.Collections.ArrayList]::new()
+
+# [TH] ลายเซ็นของเฟิร์มแวร์ที่ไม่ใช่ของโปรเจกต์นี้ ใช้บอกสาเหตุที่แท้จริงเมื่อขั้นแรกไม่ผ่าน
+# Signatures of firmware that is not ours. A board still carrying the factory
+# Espressif AT image fails step 1 for a reason no amount of rebuilding fixes, so
+# name it instead of blaming the build flag.
+$script:foreignFirmware = @(
+    @{ Pattern = 'at_customize';         What = "Espressif AT firmware (at_customize partition)" }
+    @{ Pattern = 'module_name:WROOM';    What = "Espressif AT firmware (AT banner)" }
+    @{ Pattern = 'AT version';           What = "Espressif AT firmware" }
+    @{ Pattern = 'No bootable app partitions'; What = "a stale partition table from a different scheme" }
+)
 
 $sp = $null
 if ($DryRun) {
@@ -122,6 +134,7 @@ function Wait-ForPatterns([string[]]$patterns, [int]$timeoutSec) {
         $line = $line.Trim()
         if (-not $line) { continue }
         Write-SerialLine $line
+        [void]$script:seenLines.Add($line)
         if ($line -match $pending.Peek()) {
             $hits += $line
             [void]$pending.Dequeue()
@@ -158,6 +171,7 @@ $steps = @(
         Do      = "nothing - just confirming the board is flashed with DEBUG_SERIAL=1"
         Expect  = @('debug prints ON')
         Hint    = "No banner: the image was built without the flag, or -NoReset skipped the reboot that prints it."
+        Fatal   = $true   # every later step reads that same debug output
     },
     [pscustomobject]@{
         Name    = "all three buttons at rest"
@@ -212,9 +226,32 @@ try {
             Write-Host "      PASS" -ForegroundColor Green
         } else {
             Write-Host "      FAIL - never saw: $($r.Missing -join ' | ')" -ForegroundColor Red
-            Write-Host "      $($step.Hint)" -ForegroundColor DarkYellow
+            # Name the real cause when the board is running somebody else's image:
+            # the generic hint would send you off rebuilding a flag that was never
+            # the problem.
+            $foreign = $null
+            foreach ($sig in $script:foreignFirmware) {
+                if (@($script:seenLines) -match $sig.Pattern) { $foreign = $sig.What; break }
+            }
+            if ($foreign) {
+                Write-Host "      This board is running $foreign, not pt-leg-controller." -ForegroundColor Yellow
+                Write-Host "      Erase it and flash the controller (see firmware/README.md):" -ForegroundColor Yellow
+                Write-Host "        esptool --chip esp32 --port $Port --baud 921600 erase_flash" -ForegroundColor Yellow
+                Write-Host "        arduino-cli compile --fqbn esp32:esp32:esp32:PartitionScheme=huge_app ``" -ForegroundColor Yellow
+                Write-Host "          --build-property compiler.cpp.extra_flags=-DDEBUG_SERIAL=1 --clean ``" -ForegroundColor Yellow
+                Write-Host "          --upload -p $Port firmware/pt-leg-controller" -ForegroundColor Yellow
+            } else {
+                Write-Host "      $($step.Hint)" -ForegroundColor DarkYellow
+            }
         }
         $results += [pscustomobject]@{ Step = $step.Name; Pass = $r.Ok; Missing = ($r.Missing -join ' | ') }
+        # Later steps all read the same debug stream, so once it is missing they
+        # would just burn the timeout each and bury the one failure that matters.
+        if (-not $r.Ok -and $step.Fatal) {
+            Write-Host ""
+            Write-Host "      stopping: the remaining $($steps.Count - $n) steps all need that debug output" -ForegroundColor Yellow
+            break
+        }
     }
 }
 finally {
