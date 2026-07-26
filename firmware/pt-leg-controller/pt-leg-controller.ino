@@ -118,7 +118,13 @@ static void debugTick(uint32_t nowMs, bool startEdge, bool stopEdge, bool resetE
                   top ? "AT-LIMIT" : "clear", bot ? "AT-LIMIT" : "clear");
   }
 
-  if (firstRun || gSession.phase() != lastPhase || gSession.reps() != lastReps) {
+  // A press always reprints the state, even when nothing moved. RESET pressed on
+  // an already-clear session changes neither phase nor reps, and a change-only
+  // print would leave the press looking like it did nothing at all.
+  // [TH] ทุกครั้งที่กดปุ่มจะพิมพ์สถานะซ้ำเสมอ แม้ค่าไม่เปลี่ยน เพราะกด RESET ตอนที่ค่าเป็นศูนย์อยู่แล้ว
+  //      จะไม่มีอะไรเปลี่ยน ถ้าพิมพ์เฉพาะตอนเปลี่ยนจะดูเหมือนการกดไม่มีผล
+  bool pressed = startEdge || stopEdge || resetEdge;
+  if (firstRun || pressed || gSession.phase() != lastPhase || gSession.reps() != lastReps) {
     lastPhase = gSession.phase();
     lastReps = gSession.reps();
     Serial.printf("[dbg %lu] phase=%s reps=%u elapsed=%lus\n", (unsigned long)nowMs,

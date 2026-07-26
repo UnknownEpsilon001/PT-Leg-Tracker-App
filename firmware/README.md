@@ -219,6 +219,23 @@ GND to stand in for the closed contact, and lift the jumper to press:
 | TOP limit    | 32 | not at limit | leg fully up   |
 | BOTTOM limit | 33 | not at limit | leg fully down |
 
+`firmware/tools/button-bench.ps1` walks that test as a pass/fail checklist: it
+opens the port, reboots the board, tells you which jumper to move next, and fails
+a step if the expected lines do not arrive within the timeout.
+
+```powershell
+.\firmware\tools\button-bench.ps1            # guided checklist, port auto-detected
+.\firmware\tools\button-bench.ps1 -Tail      # just stream the debug output
+.\firmware\tools\button-bench.ps1 -DryRun    # replay a canned transcript, no board
+```
+
+It matches patterns **in order**, because the firmware prints the button edge
+first and the resulting state right after it; unordered matching let a state line
+printed before the press satisfy a step nobody had performed yet. `-DryRun`
+replays a transcript copied from the sketch's own `printf` formats, so a pattern
+that drifts out of sync with the firmware fails at the desk rather than on the
+bench. Exit code is the number of failed steps.
+
 With both limit pins left floating the machine reads as "at both limits at once",
 so LIFT and LOWER complete instantly and the cycle becomes HOLD 10 s → REST 10 s
 → rep. Ground both instead and a stroke runs until the max-travel cap trips
