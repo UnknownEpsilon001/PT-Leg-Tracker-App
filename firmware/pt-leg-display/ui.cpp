@@ -926,6 +926,13 @@ static void buildFinish() {
   lv_obj_set_style_border_width(col, 0, 0);
   lv_obj_set_style_pad_row(col, 6, 0);
   lv_obj_clear_flag(col, LV_OBJ_FLAG_SCROLLABLE);
+  // The screen's white text colour does not reach through this container: LVGL's
+  // theme puts its own dark text colour on every plain object, and inheritance
+  // stops at the first ancestor that sets one. Labels below with no colour of
+  // their own came out near-black on navy. Set it here so children inherit it.
+  // [TH] สีข้อความสีขาวของหน้าจอส่งผ่านกล่องนี้ไม่ได้ เพราะธีมของ LVGL ตั้งสีเข้มไว้ที่ตัวกล่องเอง
+  //      และการสืบทอดสีจะหยุดที่ตัวแรกที่ตั้งค่าไว้ ป้ายที่ไม่ได้กำหนดสีจึงกลายเป็นสีเกือบดำบนพื้นน้ำเงิน
+  lv_obj_set_style_text_color(col, lv_color_hex(COL_TEXT), 0);
 
   lblFinWho = lv_label_create(col);
   lv_obj_set_style_text_font(lblFinWho, &thai20, 0);
@@ -937,10 +944,22 @@ static void buildFinish() {
   lv_obj_set_style_text_font(lblFinFault, &thai20, 0);
   lv_obj_set_style_text_color(lblFinFault, lv_color_hex(COL_FAULT), 0);
 
+  // Full-strength text at 20 px, not muted 14 px: whether the session reached the
+  // card is the one line on this screen a therapist must not misread, and the
+  // muted silver was too dim against the navy to read at arm's length.
+  // [TH] ใช้สีขาวเต็มและขนาด 20 แทนสีเทาขนาด 14 เพราะบรรทัดนี้บอกว่าบันทึกลงการ์ดแล้วหรือยัง
+  //      เป็นข้อความที่ต้องอ่านผิดไม่ได้ และสีเทาบนพื้นน้ำเงินอ่านยากเมื่อมองจากระยะห่าง
   lblFinSaved = lv_label_create(col);
-  lv_obj_set_style_text_font(lblFinSaved, &thai14, 0);
-  lv_obj_set_style_text_color(lblFinSaved, lv_color_hex(COL_MUTED), 0);
+  lv_obj_set_style_text_font(lblFinSaved, &thai20, 0);
+  lv_obj_set_style_text_color(lblFinSaved, lv_color_hex(COL_TEXT), 0);
 
+  // Touching this is optional: the panel's START button ends the summary too,
+  // because a starting session pulls the display back to the main screen from any
+  // sub-screen (see leaveSubScreenForRun). The button stays for the case where
+  // someone wants to dismiss the summary without starting another session.
+  // [TH] ปุ่มนี้ไม่จำเป็นต้องแตะก็ได้ เพราะกดปุ่ม START บนแผงก็ปิดหน้าสรุปเช่นกัน
+  //      เนื่องจากเมื่อเริ่มรอบใหม่ จอจะกลับไปหน้าหลักเองจากทุกหน้าจอย่อย
+  //      ปุ่มนี้มีไว้สำหรับกรณีที่ต้องการปิดหน้าสรุปโดยยังไม่เริ่มรอบใหม่
   lv_obj_t* ok = makeBtn(col, "ตกลง", COL_SURFACE, &thai20,
                          [](lv_event_t*) { lv_scr_load(scrMain); });
   lv_obj_set_size(ok, 120, 40);
