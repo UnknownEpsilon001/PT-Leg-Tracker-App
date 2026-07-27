@@ -9,7 +9,7 @@
 // [TH] โหมดทดสอบบนโต๊ะ: ต่อลิงก์ผ่านพอร์ต USB ให้พีซีสวมรอยเป็นคอนโทรลเลอร์ ทดสอบ UI ได้โดยไม่ต้องมีบอร์ดที่สอง
 //      ใช้เฉพาะตอนทดสอบ ห้าม commit ทั้งค่าเปิดไว้ ขับด้วย firmware/tools/fake-controller.ps1
 #ifndef LINK_OVER_USB
-#define LINK_OVER_USB 0
+#define LINK_OVER_USB 1
 #endif
 
 #include "ui.h"
@@ -186,6 +186,14 @@ void loop() {
     if (!storeCardPresent()) storeBegin();
     int before = sdlogRingDepth();
     sdlogFlushRing();
+    // Rows leaving the ring is the one moment worth a line: it is the proof that
+    // a session logged offline actually reached the card once it was pushed back
+    // in, and there is no other way to see it happen.
+    // [TH] จังหวะที่แถวค้างถูกเขียนลงการ์ดสำเร็จคือจุดเดียวที่ควรพิมพ์บอก
+    //      เพราะเป็นหลักฐานว่าผลรอบที่บันทึกไว้ตอนไม่มีการ์ดได้ลงการ์ดจริงแล้ว
+    if (sdlogRingDepth() < before)
+      Serial.printf("sd log: flushed %d row(s), %d waiting\n", before - sdlogRingDepth(),
+                    sdlogRingDepth());
     // Rows waiting and none drained: the mount is a leftover from a card that
     // has since been pulled. Throw it away; the next tick writes them for real.
     // [TH] มีแถวค้างแต่เขียนไม่ออกเลย แปลว่าการเมานต์ค้างจากการ์ดที่ถูกดึงออกไปแล้ว
