@@ -817,9 +817,14 @@ static void addSaveClicked(lv_event_t*) {
   // A row with no code cannot be identified later, in the CSV or on screen.
   // [TH] ถ้าไม่มีรหัส จะอ้างอิงแถวนี้ทีหลังไม่ได้ทั้งในไฟล์และบนจอ
   if (code.length() == 0) return;
-  if (cbAdd) cbAdd(code.c_str(), name.c_str(), age);
+  bool ok = cbAdd ? cbAdd(code.c_str(), name.c_str(), age) : false;
   hideAddKeyboard();
   uiOpenData();  // back to the list, now including the new row
+  // A card pulled after boot fails the write. Returning to a list that quietly
+  // lacks the row reads as "saved"; the title says otherwise instead.
+  // [TH] ถ้าการ์ดถูกดึงออกหลังเปิดเครื่อง การเขียนจะล้มเหลว การกลับมาที่รายการเฉยๆ
+  //      ทำให้เข้าใจว่าบันทึกแล้ว จึงบอกด้วยข้อความหัวเรื่องแทน
+  if (!ok) lv_label_set_text(lblDataTitle, "บันทึกไม่สำเร็จ");
 }
 
 static lv_obj_t* makeAddField(lv_obj_t* parent, const char* placeholder,

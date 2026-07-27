@@ -177,11 +177,20 @@ void loop() {
   // not in the slot, and the fix is someone pushing one in.
   // [TH] ผลรอบที่เขียนไม่สำเร็จค้างอยู่ในหน่วยความจำ ลองใหม่เป็นระยะ และลองเมานต์การ์ดก่อน
   //      เพราะสาเหตุที่พบบ่อยคือยังไม่ได้เสียบการ์ด พอเสียบแล้วก็เขียนได้
-  static uint32_t lastFlush = 0;
-  if (sdlogRingDepth() > 0 && now - lastFlush > 5000) {
-    lastFlush = now;
+  // Also runs with an empty ring while no card is mounted, so a card pushed in
+  // after boot shows up in the data menu without a reboot.
+  // [TH] ทำงานแม้ไม่มีแถวค้าง ถ้ายังไม่มีการ์ด เพื่อให้การ์ดที่เพิ่งเสียบใช้ได้ทันทีโดยไม่ต้องรีบูต
+  static uint32_t lastSd = 0;
+  if (now - lastSd > 5000 && (sdlogRingDepth() > 0 || !storeCardPresent())) {
+    lastSd = now;
     if (!storeCardPresent()) storeBegin();
+    int before = sdlogRingDepth();
     sdlogFlushRing();
+    // Rows waiting and none drained: the mount is a leftover from a card that
+    // has since been pulled. Throw it away; the next tick writes them for real.
+    // [TH] มีแถวค้างแต่เขียนไม่ออกเลย แปลว่าการเมานต์ค้างจากการ์ดที่ถูกดึงออกไปแล้ว
+    //      ทิ้งแล้วเมานต์ใหม่ รอบถัดไปจะเขียนได้จริง
+    if (before > 0 && sdlogRingDepth() == before) storeRemount();
   }
   delay(2);
 }

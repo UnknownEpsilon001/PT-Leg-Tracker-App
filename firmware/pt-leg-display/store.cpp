@@ -56,6 +56,18 @@ bool storeBegin() {
   return mounted;
 }
 
+// Pulling the card does not tell the SD driver anything, so `mounted` keeps
+// claiming a card that left the slot and every write fails forever. Whoever
+// sees the writes fail calls this to throw the mount away and start over.
+// [TH] ดึงการ์ดออกไม่มีสัญญาณบอกไดรเวอร์ ตัวแปร mounted จึงยังบอกว่ามีการ์ดอยู่
+//      และการเขียนจะล้มเหลวตลอด ฝั่งที่เห็นการเขียนล้มเหลวจึงเรียกฟังก์ชันนี้เพื่อเมานต์ใหม่
+void storeRemount() {
+  if (mounted) SD.end();
+  mounted = false;
+  patients.clear();
+  storeBegin();
+}
+
 bool storeCardPresent() { return mounted; }
 int storePatientCount() { return (int)patients.size(); }
 
