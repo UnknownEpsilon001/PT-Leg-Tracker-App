@@ -9,7 +9,7 @@
 // [TH] โหมดทดสอบบนโต๊ะ: ต่อลิงก์ผ่านพอร์ต USB ให้พีซีสวมรอยเป็นคอนโทรลเลอร์ ทดสอบ UI ได้โดยไม่ต้องมีบอร์ดที่สอง
 //      ใช้เฉพาะตอนทดสอบ ห้าม commit ทั้งค่าเปิดไว้ ขับด้วย firmware/tools/fake-controller.ps1
 #ifndef LINK_OVER_USB
-#define LINK_OVER_USB 1
+#define LINK_OVER_USB 0
 #endif
 
 #include "ui.h"
