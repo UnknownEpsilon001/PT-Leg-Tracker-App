@@ -51,13 +51,22 @@ static void touchCb(lv_indev_drv_t*, lv_indev_data_t* data) {
   uint16_t rx, ry;
   if (touchBBRead(rx, ry)) {
     // The old driver applied setRotation(1) itself and handed back landscape
-    // coordinates; these are unrotated panel counts, so the swap and the flip
-    // live here now. Panel Y grows towards screen X, and panel X grows the
-    // opposite way from screen Y.
-    // [TH] ไดรเวอร์เดิมหมุนภาพให้เองแล้วคืนพิกัดแนวนอนมา ค่าที่ได้ตรงนี้เป็นค่าดิบยังไม่หมุน
-    //      จึงต้องสลับแกนและกลับด้านเอง: แกน Y ของแผงวิ่งไปทางแกน X ของจอ ส่วนแกน X วิ่งกลับทางกับแกน Y
+    // coordinates; these are unrotated panel counts, so the axis swap lives here
+    // now. Both panel axes ascend with the screen's: panel Y grows towards screen
+    // X, panel X grows towards screen Y.
+    //
+    // The ranges below are measured, not guessed. Panel X read ~700 with a finger
+    // on the gear button, whose centre is y=24, and spans 336..3813 end to end;
+    // the first version of this line ran the map descending and put every press
+    // 240 pixels away from where the finger was, which looked exactly like a dead
+    // touch panel. Re-tune against a button of known position — corner taps are
+    // ambiguous once the display is rotated, and they mislead.
+    // [TH] ไดรเวอร์เดิมหมุนภาพให้เองแล้วคืนพิกัดแนวนอนมา ค่าที่ได้ตรงนี้เป็นค่าดิบยังไม่หมุน จึงต้องสลับแกนเอง
+    //      ค่าช่วงด้านล่างวัดจากเครื่องจริง ไม่ใช่ค่าเดา ตอนแตะปุ่มเฟือง (จุดกึ่งกลางที่ y=24) อ่านแกน X ของแผงได้ราว 700
+    //      รุ่นแรกของบรรทัดนี้แปลงค่าแบบกลับด้าน ทำให้จุดที่แตะเพี้ยนไป 240 พิกเซล ดูเหมือนทัชสกรีนเสีย
+    //      ถ้าต้องปรับใหม่ ให้อ้างอิงปุ่มที่รู้พิกัด อย่าใช้การแตะมุมจอเพราะกำกวมเมื่อจอถูกหมุน
     int sx = map(ry, 240, 3800, 0, 320);
-    int sy = map(rx, 3700, 200, 0, 240);
+    int sy = map(rx, 340, 3800, 0, 240);
     data->point.x = constrain(sx, 0, 319);
     data->point.y = constrain(sy, 0, 239);
     data->state = LV_INDEV_STATE_PRESSED;

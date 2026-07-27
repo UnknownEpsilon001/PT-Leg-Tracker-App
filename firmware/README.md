@@ -139,33 +139,30 @@ one `touch raw=..,.. -> x,y` line per press for exactly that purpose.
 [TH] ทัชสกรีนเปลี่ยนมาอ่านด้วยการกระตุกขาเอง เพราะการ์ด SD ต้องใช้บัส VSPI
      ค่าคาลิเบรตในตอนนี้เป็นค่าตั้งต้น ต้องปรับจูนกับเครื่องจริงอีกครั้ง
 
-### The first CYD's touch panel is dead — what was ruled out (2026-07-27)
+### The Y axis was inverted, which reads as "touch does not work" (2026-07-27)
 
-Nothing on that unit's screen responds to a press, and the calibration above was
-never reached because no press is ever detected. The bench pass ruled out the
-firmware entirely, so **do not debug `touch_bb.cpp` again from scratch**:
+Presses registered all along; they just landed in the wrong place, so no button
+ever received a click and the screen felt dead. Tapping the gear button — a known
+target at x≈288, y≈24 — produced `touch raw=~700,~3450 -> 285,207`: the X result
+was right and the Y result was 240 minus the truth. The `map()` for Y ran
+descending (`3700 -> 200`) when the panel counts ascend with screen Y.
 
-- `touchBBBegin()` runs, pins are configured, and nothing else on the board claims
-  GPIO 25/32/33/36/39.
-- PENIRQ (36) reads HIGH in every sample, pressed or not.
-- The chip reports no pressure: Z1 reads `0` and Z2 reads ~`4090` (the untouched
-  signature) while a finger is held on the panel.
-- Slowing the bit-bang clock to ~500 kHz changed no reading.
-- `XPT2046_Touchscreen` 1.4 on hardware SPI — a known-good reference driver, with
-  the library's own Z-pressure detection instead of PENIRQ — reads `z=0 x=0 y=0`
-  too, so this is not a bit-bang bug.
-- The other two pin sets a CYD revision might use (touch on the TFT bus,
-  CLK 14 / MOSI 13 / MISO 12, with CS 33 or 15) are equally silent.
-- An I2C scan on 33/32, 21/22, 32/33 and 27/22 finds no device, so it is not a
-  capacitive variant (CST816/CST820) wired to a different controller.
+Two traps to avoid when re-tuning this:
 
-Two drivers, three pin sets and an I2C sweep all get nothing: the touch
-controller is not answering on any interface this board could use. The remaining
-causes are physical — an unseated touch flex, or a faulty unit. Retest on a
-second CYD before touching the driver code.
-[TH] จอสัมผัสของบอร์ด CYD ตัวแรกไม่ตอบสนองเลย ตรวจแล้วว่าไม่ใช่ปัญหาจากเฟิร์มแวร์
-     ทั้งไดรเวอร์สองแบบ ชุดขาสามชุด และการสแกน I2C ล้วนไม่พบการตอบสนอง
-     สาเหตุที่เหลืออยู่คือทางกายภาพ เช่น สายแพหลุดหรือบอร์ดเสีย ให้ลองกับบอร์ดตัวที่สองก่อนแก้โค้ด
+- **Calibrate against on-screen targets, not "corners".** Corner taps are
+  ambiguous — the panel's idea of a corner and the rotated UI's idea need not
+  agree, and a corner sample sent this hunt off in the wrong direction for an
+  hour. The gear and list buttons have known coordinates; use those.
+- **A press only prints on the press edge**, so a serial capture started after the
+  tap shows nothing. An empty capture is not evidence that touch is dead.
+
+Ruled out along the way, so nobody repeats it: the driver reaches the chip on
+pins 25/32/33/36/39 (the other CYD pin sets, touch on the TFT bus at
+CLK 14 / MOSI 13 / MISO 12, are silent), and an I2C sweep finds no capacitive
+controller, so this board is the resistive XPT2046 variant it claims to be.
+[TH] อาการที่เหมือนทัชสกรีนเสียแท้จริงคือแกน Y กลับด้าน จุดที่แตะจึงไปตกคนละที่กับปุ่ม
+     ให้ปรับค่าโดยอ้างอิงปุ่มที่รู้พิกัดบนจอ ไม่ใช่การแตะที่มุมจอซึ่งกำกวมเพราะจอถูกหมุน
+     และการอ่านค่าจะพิมพ์เฉพาะตอนเริ่มกด ถ้าเก็บ log ไม่ทันจะดูเหมือนไม่มีการแตะเลย
 
 ## Shared files between the two sketches
 
