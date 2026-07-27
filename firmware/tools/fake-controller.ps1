@@ -15,6 +15,12 @@
 # Then (port auto-detected from the USB-serial chip; pass -Port COMx to override):
 #   .\firmware\tools\fake-controller.ps1
 #
+# Settings the display saves are kept for the rest of the run, standing in for the
+# controller's NVS, so an edit sticks instead of snapping back. They are not
+# written to disk: restart the script and the defaults below are back.
+# [TH] ค่าตั้งค่าที่จอบันทึกจะถูกจำไว้จนกว่าสคริปต์จะปิด แทนหน่วยความจำ NVS ของคอนโทรลเลอร์
+#      แต่ไม่ได้บันทึกลงไฟล์ ถ้าเริ่มสคริปต์ใหม่จะกลับเป็นค่าตั้งต้น
+#
 # It answers `hello` with a settings reply, then runs the device's real cycle:
 # LIFT -> HOLD 10 s -> LOWER -> REST 10 s, repeating. Ctrl+C stops, and the display
 # should fall back to NO LINK about 2.5 s later.
@@ -143,7 +149,14 @@ try {
             Write-Host "<- $line" -ForegroundColor DarkCyan
             if ($line -match '"t"\s*:\s*"hello"') { Send-Line $settings }
             elseif ($line -match '"t"\s*:\s*"settings"') {
-                Write-Host "   (display saved settings)" -ForegroundColor Yellow
+                # Keep what the display sent, the way the real controller keeps it
+                # in NVS, and answer with that from now on. Replying with the
+                # canned set instead made every edit snap back a moment after it
+                # was saved, which reads exactly like a broken save button.
+                # [TH] เก็บค่าที่จอส่งมาไว้ เหมือนที่คอนโทรลเลอร์จริงเก็บลง NVS แล้วตอบด้วยค่านั้นต่อไป
+                #      ถ้าตอบด้วยค่าตั้งต้นเดิม ค่าที่เพิ่งบันทึกจะเด้งกลับทันที ดูเหมือนปุ่มบันทึกเสีย
+                $settings = $line
+                Write-Host "   (kept the display's settings)" -ForegroundColor Yellow
                 Send-Line $settings
             }
             elseif ($line -match '"v"\s*:\s*"start"') {
