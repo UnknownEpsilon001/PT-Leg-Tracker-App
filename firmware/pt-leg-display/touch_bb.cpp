@@ -17,11 +17,24 @@
 #define CMD_X 0xD0
 #define CMD_Y 0x90
 
+// Half a clock period. The XPT2046 tops out at 2.5 MHz DCLK and back-to-back
+// digitalWrite calls can outrun that, so the bus is held near 500 kHz. This was
+// tried as a fix for the dead panel on the first CYD and did not change a single
+// reading — it is kept only because it is what the datasheet asks for, not
+// because it fixed anything. The cost is nothing: the panel is polled at LVGL
+// rate, not in a hot loop.
+// [TH] ชิป XPT2046 รับสัญญาณนาฬิกาได้สูงสุด 2.5 MHz การกระตุกขาติดกันอาจเร็วเกินไป
+//      จึงหน่วงให้เหลือราว 500 kHz เคยลองใช้แก้ปัญหาทัชสกรีนไม่ทำงานบนบอร์ดแรกแล้วไม่ได้ผล
+//      คงไว้เพราะเป็นค่าตามสเปกเท่านั้น และไม่กระทบความเร็วรวม
+#define TCLK_HALF_US 1
+
 static uint16_t transfer(uint8_t cmd) {
   digitalWrite(T_CS, LOW);
   for (int i = 7; i >= 0; i--) {  // command, MSB first — ส่งคำสั่งบิตสูงก่อน
     digitalWrite(T_MOSI, (cmd >> i) & 1);
+    delayMicroseconds(TCLK_HALF_US);
     digitalWrite(T_CLK, HIGH);
+    delayMicroseconds(TCLK_HALF_US);
     digitalWrite(T_CLK, LOW);
   }
   // 16 clocks: one busy bit, then the 12 data bits, then padding. Shifting by 3
@@ -32,8 +45,10 @@ static uint16_t transfer(uint8_t cmd) {
   uint16_t v = 0;
   for (int i = 0; i < 16; i++) {
     digitalWrite(T_CLK, HIGH);
+    delayMicroseconds(TCLK_HALF_US);
     v = (v << 1) | (digitalRead(T_MISO) ? 1 : 0);
     digitalWrite(T_CLK, LOW);
+    delayMicroseconds(TCLK_HALF_US);
   }
   digitalWrite(T_CS, HIGH);
   return v >> 3;

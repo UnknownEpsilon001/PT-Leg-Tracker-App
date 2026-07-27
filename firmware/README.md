@@ -139,6 +139,34 @@ one `touch raw=..,.. -> x,y` line per press for exactly that purpose.
 [TH] ทัชสกรีนเปลี่ยนมาอ่านด้วยการกระตุกขาเอง เพราะการ์ด SD ต้องใช้บัส VSPI
      ค่าคาลิเบรตในตอนนี้เป็นค่าตั้งต้น ต้องปรับจูนกับเครื่องจริงอีกครั้ง
 
+### The first CYD's touch panel is dead — what was ruled out (2026-07-27)
+
+Nothing on that unit's screen responds to a press, and the calibration above was
+never reached because no press is ever detected. The bench pass ruled out the
+firmware entirely, so **do not debug `touch_bb.cpp` again from scratch**:
+
+- `touchBBBegin()` runs, pins are configured, and nothing else on the board claims
+  GPIO 25/32/33/36/39.
+- PENIRQ (36) reads HIGH in every sample, pressed or not.
+- The chip reports no pressure: Z1 reads `0` and Z2 reads ~`4090` (the untouched
+  signature) while a finger is held on the panel.
+- Slowing the bit-bang clock to ~500 kHz changed no reading.
+- `XPT2046_Touchscreen` 1.4 on hardware SPI — a known-good reference driver, with
+  the library's own Z-pressure detection instead of PENIRQ — reads `z=0 x=0 y=0`
+  too, so this is not a bit-bang bug.
+- The other two pin sets a CYD revision might use (touch on the TFT bus,
+  CLK 14 / MOSI 13 / MISO 12, with CS 33 or 15) are equally silent.
+- An I2C scan on 33/32, 21/22, 32/33 and 27/22 finds no device, so it is not a
+  capacitive variant (CST816/CST820) wired to a different controller.
+
+Two drivers, three pin sets and an I2C sweep all get nothing: the touch
+controller is not answering on any interface this board could use. The remaining
+causes are physical — an unseated touch flex, or a faulty unit. Retest on a
+second CYD before touching the driver code.
+[TH] จอสัมผัสของบอร์ด CYD ตัวแรกไม่ตอบสนองเลย ตรวจแล้วว่าไม่ใช่ปัญหาจากเฟิร์มแวร์
+     ทั้งไดรเวอร์สองแบบ ชุดขาสามชุด และการสแกน I2C ล้วนไม่พบการตอบสนอง
+     สาเหตุที่เหลืออยู่คือทางกายภาพ เช่น สายแพหลุดหรือบอร์ดเสีย ให้ลองกับบอร์ดตัวที่สองก่อนแก้โค้ด
+
 ## Shared files between the two sketches
 
 `link.h`, `link.cpp`, `session.h` and `settings.h` exist in **both** sketch
