@@ -6,10 +6,11 @@
 # board on the desk. Speaks the same newline-delimited JSON as
 # firmware/link-protocol.md.
 #
-# Flash the display with the link routed to USB first:
+# Flash the display with the link routed to USB first. Flip LINK_OVER_USB to 1 in
+# the sketch source — NOT with --build-property, which leaves cached objects
+# compiled without the flag and has produced broken images (see firmware/README.md):
 #   arduino-cli compile --fqbn "esp32:esp32:esp32:PartitionScheme=huge_app" `
-#     --build-property compiler.cpp.extra_flags=-DLINK_OVER_USB=1 `
-#     --upload -p COM4 firmware/pt-leg-display
+#     --clean --upload -p COM4 firmware/pt-leg-display
 #
 # Then (port auto-detected from the USB-serial chip; pass -Port COMx to override):
 #   .\firmware\tools\fake-controller.ps1
@@ -38,7 +39,13 @@ param(
     # whose RTC is missing or unset, which is the case that logs a datetime of "?".
     # -Epoch -1 means "use the PC's clock", i.e. a controller with a good RTC.
     # [TH] เวลาที่ใส่ในข้อความ done ตอนจบรอบ: 0 = เหมือนไม่มีนาฬิกา, -1 = ใช้เวลาจริงของเครื่องพีซี
-    [long]$Epoch = -1
+    [long]$Epoch = -1,
+    # Ends the session with fault=true, the way the controller reports a session
+    # cut short by a limit switch. The finish screen should read the fault wording
+    # and the SD row should carry fault=1.
+    # [TH] จบรอบด้วย fault=true เหมือนตอนสวิตช์จำกัดระยะทำงาน หน้าสรุปต้องขึ้นข้อความเตือน
+    #      และแถวในไฟล์ต้องมี fault=1
+    [switch]$Fault
 )
 
 $ErrorActionPreference = "Stop"
@@ -96,7 +103,38 @@ if ($interactive) {
 $deadline = if ($Seconds -gt 0) { (Get-Date).AddSeconds($Seconds) } else { [datetime]::MaxValue }
 
 try {
-    while ((Get-Date) -lt $deadline) {
+    # The deadline stops the session the way a person would, then waits for the
+    # cycle to reach idle, so `done` is sent and the finish screen appears. Exiting
+    # the moment the clock runs out would leave the display stuck in RUNNING and no
+    # row would ever be logged, which is most of what a headless run is checking.
+    # [TH] เมื่อครบเวลาจะสั่งหยุดเหมือนคนกด แล้วรอให้รอบเดินจนว่าง ข้อความ done จึงถูกส่ง
+    #      ถ้าออกทันทีที่หมดเวลา จอจะค้างที่สถานะกำลังทำงานและไม่มีการบันทึกแถวใดเลย
+    $stopping = $false
+    while ($true) {
+        if (-not $stopping -and (Get-Date) -ge $deadline) {
+            $stopping = $true
+            if ($running -and $phase -ne 5) {
+                $phase = 5; $phaseLeft = $TravelSec
+                Write-Host "   STOP (deadline)" -ForegroundColor Green
+            }
+        }
+        if ($stopping -and -not $running) {
+            # The display answers `done` with its own log line (whether the row
+            # reached the card or went to the RAM ring), which arrives after the
+            # message is sent. Read for a moment more or the run ends blind.
+            # [TH] จอจะพิมพ์บรรทัดตอบกลับหลังได้รับ done ว่าบันทึกลงการ์ดหรือพักไว้ในหน่วยความจำ
+            #      ต้องรออ่านอีกครู่ ไม่งั้นจะไม่เห็นผลของรอบนั้นเลย
+            $drain = (Get-Date).AddSeconds(2)
+            while ((Get-Date) -lt $drain) {
+                while ($sp.BytesToRead -gt 0) {
+                    try { $l = $sp.ReadLine() } catch { break }
+                    if ($l) { Write-Host "<- $l" -ForegroundColor DarkCyan }
+                }
+                Start-Sleep -Milliseconds 50
+            }
+            break
+        }
+
         # answer anything the display asks for, and react to its buttons
         while ($sp.BytesToRead -gt 0) {
             $line = ""
@@ -173,8 +211,9 @@ try {
                         $running = $false; $phase = 0
                         $ep = if ($Epoch -lt 0) { [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() }
                               else { $Epoch }
-                        $done = '{{"t":"done","elapsed":{0},"reps":{1},"epoch":{2},"fault":false}}'
-                        Send-Line ([string]::Format($done, $elapsed, $reps, $ep))
+                        $done = '{{"t":"done","elapsed":{0},"reps":{1},"epoch":{2},"fault":{3}}}'
+                        Send-Line ([string]::Format($done, $elapsed, $reps, $ep,
+                                   $Fault.ToString().ToLower()))
                         $elapsed = 0
                     }
                 }
