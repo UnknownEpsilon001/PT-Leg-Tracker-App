@@ -18,6 +18,7 @@
 #include "settings.h"  // DeviceSettings cached from the controller — เก็บค่าตั้งค่าที่คอนโทรลเลอร์ส่งมา
 #include "store.h"     // patient roster on the SD card — ทะเบียนคนไข้บนการ์ด SD
 #include "sdlog.h"     // session rows written to the SD card — บันทึกผลแต่ละรอบลงการ์ด
+#include "settingsfile.h"  // /settings.json on the card — ค่าตั้งค่าบนการ์ด
 
 Link gLink;  // ลิงก์ UART ไปยังคอนโทรลเลอร์
 static bool uiRunning = false;
@@ -38,6 +39,13 @@ static bool uiWifi = false, uiServer = false;
 static DeviceSettings gLast = {"", "", "", "default", 8, 10, 10};
 static bool gSettingsKnown = false;
 static bool gLinkUp = false;
+
+// Did the card hold a readable settings file at boot? Decides which way the
+// first reconciliation runs: card wins if it did, controller wins if it did not.
+// [TH] ตอนบูตอ่านไฟล์ตั้งค่าจากการ์ดได้หรือไม่ ตัวแปรนี้ตัดสินว่ารอบแรกจะยึดค่าจากฝั่งไหน
+//      ถ้าอ่านได้ให้ยึดการ์ด ถ้าไม่ได้ให้ยึดค่าจากคอนโทรลเลอร์
+static bool gCardSettings = false;
+static bool gReconciled = false;  // the first controller reply has been handled
 
 // Which patient the next session belongs to. -1 until someone picks one, and it
 // stays -1 all day if nobody does: the machine must run for a walk-up patient
@@ -69,12 +77,43 @@ static void onSaveFromUi(const DeviceSettings& s) {
 }
 
 static void onLinkSettingsReply(const LinkSettings& s) {
+  // The card wins when it had a file, so a password edited on a PC actually
+  // takes effect. Push it once, then let later replies flow in normally — the
+  // controller echoes what it just stored, and fighting that would loop.
+  // [TH] ถ้าการ์ดมีไฟล์อยู่ให้ยึดค่าจากการ์ด รหัสผ่านที่แก้จากคอมพิวเตอร์จะได้มีผลจริง
+  //      ส่งให้คอนโทรลเลอร์ครั้งเดียว จากนั้นปล่อยให้การตอบกลับครั้งถัดไปทำงานตามปกติ
+  //      เพราะคอนโทรลเลอร์จะสะท้อนค่าที่เพิ่งบันทึกกลับมา ถ้าดันกันไปมาจะวนไม่จบ
+  if (gCardSettings && !gReconciled) {
+    gReconciled = true;
+    LinkSettings ls;
+    ls.ssid = gLast.wifiSsid; ls.pass = gLast.wifiPass; ls.server = gLast.serverUrl;
+    ls.code = gLast.deviceCode;
+    ls.maxTravel = gLast.maxTravelSec; ls.hold = gLast.holdSec; ls.rest = gLast.restSec;
+    gLink.sendSettings(ls);
+    Serial.println("settings: pushed the card's values to the controller");
+    gSettingsKnown = true;
+    uiSetSettingsKnown(true);
+    return;
+  }
+
   gLast.wifiSsid = s.ssid; gLast.wifiPass = s.pass; gLast.serverUrl = s.server;
   gLast.deviceCode = s.code;
   gLast.maxTravelSec = s.maxTravel; gLast.holdSec = s.hold; gLast.restSec = s.rest;
   uiSetDeviceCode(s.code.c_str());
   gSettingsKnown = true;
   uiSetSettingsKnown(true);  // the controller's real values are on screen now
+
+  // A card with no file seeds itself from the machine's current configuration,
+  // so a blank card put into a configured machine does not blank it.
+  // [TH] การ์ดที่ยังไม่มีไฟล์จะถูกสร้างไฟล์จากค่าที่เครื่องใช้อยู่จริง
+  //      การ์ดเปล่าที่เสียบเข้าเครื่องที่ตั้งค่าไว้แล้วจึงไม่ทำให้ค่าหาย
+  if (!gReconciled) {
+    gReconciled = true;
+    if (storeCardPresent() && !settingsFilePresent()) {
+      Serial.printf("settings: seeding the card from the controller: %s\n",
+                    settingsFileSave(gLast) ? "written" : "write failed");
+    }
+  }
 }
 
 // One row per finished session, arriving once from the controller — see the
@@ -127,6 +166,13 @@ void setup() {
   Serial.printf("sd card: %s, patients=%d\n", storeBegin() ? "mounted" : "absent",
                 storePatientCount());
   sdlogEnsureHeader();
+  // Read before the link comes up: the controller's reply is what triggers
+  // reconciliation, and this decides which side of it wins.
+  // [TH] อ่านไฟล์ก่อนที่ลิงก์จะพร้อม เพราะการตอบกลับของคอนโทรลเลอร์คือจุดที่เริ่มเทียบค่า
+  //      และค่าที่อ่านได้ตรงนี้เป็นตัวตัดสินว่าจะยึดฝั่งใด
+  gCardSettings = settingsFileLoad(gLast);
+  Serial.printf("settings source: %s\n", gCardSettings ? "sd card" : "controller nvs");
+  if (gCardSettings) uiSetDeviceCode(gLast.deviceCode.c_str());
   uiSetCallbacks(onOpenSettings, onOpenData);
   uiSetDataCallbacks(dataCount, dataGet, dataAdd, dataSetActive);
   uiSetSettingsSaved(onSaveFromUi);
