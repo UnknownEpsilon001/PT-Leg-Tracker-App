@@ -418,19 +418,40 @@ void uiSetSettingsKnown(bool known) {
 
 static lv_obj_t* lblSdStatus = nullptr;  // filled in by buildSettings
 
+// Read by saveClicked: a save that reached the card leaves the screen the way it
+// always has, a save that did not stays put so the red line is actually read.
+// Reporting into a screen being unloaded in the same frame shows nobody anything.
+// [TH] saveClicked อ่านค่านี้: ถ้าเขียนการ์ดได้ให้กลับหน้าหลักเหมือนเดิม ถ้าไม่ได้ให้ค้างหน้าเดิม
+//      ผู้ใช้จะได้อ่านข้อความสีแดงทัน การเขียนข้อความลงหน้าจอที่กำลังถูกปิดในเฟรมเดียวกันไม่มีใครเห็น
+static bool lastSaveToCard = true;
+
 void uiReportSettingsSaved(bool toCard) {
+  lastSaveToCard = toCard;
   if (!lblSdStatus) return;
   lv_label_set_text(lblSdStatus, toCard ? "SD: บันทึกแล้ว" : "SD: เขียนการ์ดไม่ได้");
   lv_obj_set_style_text_color(lblSdStatus, lv_color_hex(toCard ? COL_MUTED : COL_FAULT), 0);
 }
 
-void uiSetSdStatus(bool cardPresent, bool fileLoaded) {
+// Held rather than written straight to the label, because the caller reports the
+// card state before the screen exists: the settings screen is built on its first
+// open, so the very first report would land on a null label and be lost.
+// [TH] เก็บค่าไว้ก่อน ไม่เขียนลงป้ายทันที เพราะผู้เรียกรายงานสถานะการ์ดตั้งแต่ก่อนสร้างหน้าจอ
+//      หน้าตั้งค่าถูกสร้างตอนเปิดครั้งแรก ถ้าเขียนทันทีค่ารอบแรกจะหายไปกับป้ายที่ยังไม่มี
+static bool sdCardPresent = false, sdFileLoaded = false;
+
+static void applySdStatus() {
   if (!lblSdStatus) return;
-  const char* text = !cardPresent  ? "SD: ไม่มีการ์ด"
-                     : fileLoaded  ? "SD: ใช้ค่าจากการ์ด"
-                                   : "SD: การ์ดยังไม่มีไฟล์";
+  const char* text = !sdCardPresent  ? "SD: ไม่มีการ์ด"
+                     : sdFileLoaded  ? "SD: ใช้ค่าจากการ์ด"
+                                     : "SD: การ์ดยังไม่มีไฟล์";
   lv_label_set_text(lblSdStatus, text);
   lv_obj_set_style_text_color(lblSdStatus, lv_color_hex(COL_MUTED), 0);
+}
+
+void uiSetSdStatus(bool cardPresent, bool fileLoaded) {
+  sdCardPresent = cardPresent;
+  sdFileLoaded = fileLoaded;
+  applySdStatus();
 }
 
 // Reset goes through the ordinary save path on purpose: the defaults must reach
@@ -567,6 +588,7 @@ static void saveClicked(lv_event_t*) {
   s.restSec = (uint16_t)lv_spinbox_get_value(spinRest);
   if (cbSave) cbSave(s);
   hideKeyboard();
+  if (!lastSaveToCard) return;  // stay so "เขียนการ์ดไม่ได้" is seen — ค้างไว้ให้อ่านข้อความ
   lv_scr_load(scrMain);
 }
 
@@ -694,11 +716,6 @@ static void buildSettings() {
   lv_obj_align(btnSave, LV_ALIGN_RIGHT_MID, 8, 0);
   applySaveEnabled();
 
-  lblSdStatus = lv_label_create(bar);
-  lv_obj_set_style_text_font(lblSdStatus, &thai14, 0);
-  lv_obj_set_style_text_color(lblSdStatus, lv_color_hex(COL_MUTED), 0);
-  lv_obj_align(lblSdStatus, LV_ALIGN_CENTER, 0, 0);
-  lv_label_set_text(lblSdStatus, "");
 
   lv_obj_t* col = lv_obj_create(scrSettings);
   lv_obj_set_size(col, lv_pct(100), 196);
@@ -710,6 +727,18 @@ static void buildSettings() {
   lv_obj_set_style_border_width(col, 0, 0);
   lv_obj_add_event_cb(col, tapHidesKeyboard, LV_EVENT_CLICKED, nullptr);
   lv_obj_add_event_cb(col, scrollHidesKeyboard, LV_EVENT_SCROLL_BEGIN, nullptr);
+
+  // First row of the field list, not the top bar: กลับ (110 px) and บันทึก (90 px)
+  // leave about 120 px between them on a 320 px screen, and this text is wider
+  // than that — it overlapped the buttons. The list is scrolled to the top every
+  // time the screen opens, so the line is on show anyway.
+  // [TH] วางเป็นแถวแรกของรายการ ไม่ใช่บนแถบด้านบน เพราะปุ่มกลับกับบันทึกกินที่จนเหลือกลางจอ
+  //      ราว 120 พิกเซล ซึ่งแคบกว่าข้อความนี้ จึงเคยทับปุ่ม และรายการถูกเลื่อนขึ้นบนสุดทุกครั้งที่เปิดอยู่แล้ว
+  lblSdStatus = lv_label_create(col);
+  lv_obj_set_width(lblSdStatus, lv_pct(100));
+  lv_obj_set_style_text_font(lblSdStatus, &thai14, 0);
+  lv_obj_set_style_text_color(lblSdStatus, lv_color_hex(COL_MUTED), 0);
+  lv_label_set_text(lblSdStatus, "");
 
   lv_obj_t* scan = makeBtn(col, LV_SYMBOL_WIFI " ค้นหาเครือข่าย", COL_SURFACE,
                            &thai20, scanClicked);
@@ -779,6 +808,7 @@ void uiOpenSettings(const DeviceSettings& cur) {
   lv_spinbox_set_value(spinHold, cur.holdSec);
   lv_spinbox_set_value(spinRest, cur.restSec);
 
+  applySdStatus();  // the label exists only now, on the first open — ป้ายเพิ่งมีตัวตนตอนนี้
   hideKeyboard();
   lv_obj_add_flag(ddScan, LV_OBJ_FLAG_HIDDEN);  // stale scan results
   lv_obj_scroll_to_y(lv_obj_get_parent(taSsid), 0, LV_ANIM_OFF);
