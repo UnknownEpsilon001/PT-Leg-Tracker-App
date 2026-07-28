@@ -7,6 +7,7 @@
 #include <TFT_eSPI.h>
 #include "touch_bb.h"  // touch pins live there — ขาทัชสกรีนอยู่ในไฟล์นั้น
 #include <WiFi.h>  // settings screen scans for SSIDs — หน้าตั้งค่าใช้สแกนหา WiFi
+#include "settingsfile.h"  // settingsFileDefaults for RESET — ค่าตั้งต้นสำหรับปุ่มคืนค่า
 
 // App palette (matches the phone app's v4 rebrand)
 // [TH] ชุดสีของแอป ให้เข้ากับธีมของแอปบนมือถือ
@@ -432,6 +433,75 @@ void uiSetSdStatus(bool cardPresent, bool fileLoaded) {
   lv_obj_set_style_text_color(lblSdStatus, lv_color_hex(COL_MUTED), 0);
 }
 
+// Reset goes through the ordinary save path on purpose: the defaults must reach
+// the card and the controller exactly the way a typed change does, and writing a
+// defaults file beats deleting one — the file always exists and is always the
+// thing being read.
+// [TH] การคืนค่าใช้เส้นทางเดียวกับการบันทึกปกติ เพื่อให้ค่าตั้งต้นไปถึงทั้งการ์ดและคอนโทรลเลอร์
+//      เหมือนการแก้ค่าด้วยมือ และเขียนไฟล์ค่าตั้งต้นดีกว่าลบไฟล์ทิ้ง เพราะไฟล์จะมีอยู่เสมอ
+static void resetConfirmed(lv_event_t*) {
+  DeviceSettings d;
+  settingsFileDefaults(d);
+  lv_textarea_set_text(taSsid, d.wifiSsid.c_str());
+  lv_textarea_set_text(taPass, d.wifiPass.c_str());
+  lv_textarea_set_text(taServer, d.serverUrl.c_str());
+  lv_textarea_set_text(taCode, d.deviceCode.c_str());
+  lv_spinbox_set_value(spinMax, d.maxTravelSec);
+  lv_spinbox_set_value(spinHold, d.holdSec);
+  lv_spinbox_set_value(spinRest, d.restSec);
+  if (cbSave) cbSave(d);
+  lv_scr_load(scrSettings);
+}
+
+// Built once and reused, like every other screen. A dialog created per open
+// leaks ~9 KB of the 48 KB LVGL pool each time and freezes the device silently
+// on about the fifth open — this codebase has already shipped that bug once.
+// [TH] สร้างครั้งเดียวแล้วใช้ซ้ำเหมือนหน้าจออื่น ถ้าสร้างใหม่ทุกครั้งที่เปิด
+//      จะกินหน่วยความจำ LVGL ครั้งละราว 9 KB จาก 48 KB และค้างตายเงียบๆ ราวครั้งที่ห้า
+static lv_obj_t* scrConfirmReset = nullptr;
+
+static void buildConfirmReset() {
+  scrConfirmReset = lv_obj_create(nullptr);
+  styleScreen(scrConfirmReset);
+
+  lv_obj_t* col = lv_obj_create(scrConfirmReset);
+  lv_obj_set_size(col, lv_pct(100), lv_pct(100));
+  lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_flex_align(col, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
+                        LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_style_bg_opa(col, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(col, 0, 0);
+  lv_obj_set_style_pad_row(col, 10, 0);
+  lv_obj_clear_flag(col, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_style_text_color(col, lv_color_hex(COL_TEXT), 0);
+
+  lv_obj_t* q = lv_label_create(col);
+  lv_obj_set_style_text_font(q, &thai20, 0);
+  lv_label_set_text(q, "คืนค่าเริ่มต้นทั้งหมด");
+
+  lv_obj_t* warn = lv_label_create(col);
+  lv_obj_set_style_text_font(warn, &thai14, 0);
+  lv_obj_set_style_text_color(warn, lv_color_hex(COL_FAULT), 0);
+  lv_label_set_text(warn, "รหัสผ่าน WiFi จะถูกลบ");
+
+  lv_obj_t* row = lv_obj_create(col);
+  lv_obj_set_size(row, 300, 48);
+  lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
+                        LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_style_pad_column(row, 12, 0);
+  lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(row, 0, 0);
+  lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+
+  lv_obj_t* cancel = makeBtn(row, "ยกเลิก", COL_SURFACE, &thai20,
+                             [](lv_event_t*) { lv_scr_load(scrSettings); });
+  lv_obj_set_size(cancel, 120, 40);
+
+  lv_obj_t* ok = makeBtn(row, "คืนค่า", COL_FAULT, &thai20, resetConfirmed);
+  lv_obj_set_size(ok, 120, 40);
+}
+
 static void hideKeyboard() {
   if (!kb) return;
   lv_obj_add_flag(kb, LV_OBJ_FLAG_HIDDEN);
@@ -677,6 +747,13 @@ static void buildSettings() {
   spinMax = makeSpinRow(col, "เวลาเดินทางสูงสุด (วิ)", 8, 1, 20);
   spinHold = makeSpinRow(col, "ค้าง (วิ)", 10, 1, 60);
   spinRest = makeSpinRow(col, "พัก (วิ)", 10, 1, 60);
+
+  lv_obj_t* reset = makeBtn(col, "คืนค่าเริ่มต้น", COL_SURFACE, &thai20,
+                            [](lv_event_t*) {
+                              if (!scrConfirmReset) buildConfirmReset();
+                              lv_scr_load(scrConfirmReset);
+                            });
+  lv_obj_set_size(reset, lv_pct(100), 40);
 
   lv_obj_t* lblCredit = lv_label_create(col);
   lv_obj_set_style_text_color(lblCredit, lv_color_hex(COL_MUTED), 0);
