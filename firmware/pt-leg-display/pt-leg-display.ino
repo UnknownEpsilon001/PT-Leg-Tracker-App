@@ -121,7 +121,7 @@ static void onSaveFromUi(const DeviceSettings& s) {
   //      แต่ต้องไม่เงียบ ถ้าเขียนการ์ดไม่สำเร็จต้องบอกผู้ใช้
   bool toCard = settingsFileSave(s);
   Serial.printf("settings saved: controller yes, card %s\n", toCard ? "yes" : "no");
-  uiReportSettingsSaved(toCard);
+  uiReportSettingsSaved(toCard, storeCardPresent());
 }
 
 static void onLinkSettingsReply(const LinkSettings& s) {
@@ -273,7 +273,12 @@ void loop() {
   static uint32_t lastSd = 0;
   if (now - lastSd > 5000 && (sdlogRingDepth() > 0 || !storeCardPresent())) {
     lastSd = now;
-    if (!storeCardPresent()) storeBegin();
+    // A card arriving in an empty slot is a different card from whatever was
+    // read at boot, so what settingsfile remembers no longer describes what is
+    // in the machine. Forgetting makes the settings screen re-read it.
+    // [TH] การ์ดที่เพิ่งเสียบเข้าช่องที่ว่างอยู่ ย่อมไม่ใช่ใบเดิมที่อ่านไว้ตอนบูต
+    //      สิ่งที่โมดูลจำไว้จึงไม่ตรงกับการ์ดที่อยู่ในเครื่อง ต้องล้างเพื่อให้หน้าตั้งค่าอ่านใหม่
+    if (!storeCardPresent() && storeBegin()) settingsFileForget();
     int before = sdlogRingDepth();
     sdlogFlushRing();
     // Rows leaving the ring is the one moment worth a line: it is the proof that
@@ -288,7 +293,10 @@ void loop() {
     // has since been pulled. Throw it away; the next tick writes them for real.
     // [TH] มีแถวค้างแต่เขียนไม่ออกเลย แปลว่าการเมานต์ค้างจากการ์ดที่ถูกดึงออกไปแล้ว
     //      ทิ้งแล้วเมานต์ใหม่ รอบถัดไปจะเขียนได้จริง
-    if (before > 0 && sdlogRingDepth() == before) storeRemount();
+    if (before > 0 && sdlogRingDepth() == before) {
+      storeRemount();
+      settingsFileForget();  // same reasoning: the slot may hold a different card
+    }
   }
   delay(2);
 }

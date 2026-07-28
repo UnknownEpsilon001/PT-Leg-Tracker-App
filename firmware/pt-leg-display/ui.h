@@ -49,7 +49,13 @@ void uiSetSettingsKnown(bool known);
 // may not have been there, and the screen must not imply it was written.
 // [TH] ผลของการกดบันทึกครั้งล่าสุด ค่าจะถูกส่งให้คอนโทรลเลอร์เสมอ แต่การ์ดอาจไม่ได้เสียบอยู่
 //      หน้าจอต้องไม่ทำให้เข้าใจว่าเขียนลงการ์ดแล้ว
-void uiReportSettingsSaved(bool toCard);
+// cardPresent separates "the card refused the write" from "there is no card".
+// The first keeps the user on the screen to read the failure; the second is an
+// ordinary supported state and must not make SAVE look broken.
+// [TH] cardPresent แยกกรณี "การ์ดเขียนไม่ได้" ออกจาก "ไม่มีการ์ด"
+//      กรณีแรกต้องค้างหน้าจอไว้ให้อ่านข้อความ ส่วนกรณีหลังเป็นการใช้งานปกติ
+//      ต้องไม่ทำให้ปุ่มบันทึกดูเหมือนเสีย
+void uiReportSettingsSaved(bool toCard, bool cardPresent);
 // Where the settings on screen came from. A card carrying stale values wins over
 // the controller's NVS by design, so the screen has to say when that happened.
 // [TH] บอกว่าค่าที่แสดงอยู่มาจากไหน เพราะค่าจากการ์ดจะถูกใช้แทนค่าใน NVS เสมอ

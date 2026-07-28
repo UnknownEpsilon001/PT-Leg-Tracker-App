@@ -204,7 +204,10 @@ Three things caught us on the bench, all of them things a clinic tech would hit:
 | No card | Runs from NVS; saves reach the controller only, and say so |
 | File absent | Seeded from the controller's current settings, so a blank card does not blank the machine |
 | Malformed file | Renamed to `/settings.bad.json`, a fresh one written, machine runs |
-| Card pulled mid-save | Writes go to `/settings.tmp` and are renamed, so the old file is never truncated |
+| Card pulled mid-save | New values go to `/settings.tmp`; the previous file is moved to `/settings.old.json` and only deleted once the new one holds its name, so a settings file always exists |
+| Interrupted save found at boot | `/settings.old.json` is loaded and renamed back — the save is lost, the configuration is not |
+| Card swapped while running | The new card's file is read the next time the settings screen opens |
+| Out-of-range value in the file | Clamped to the settings screen's own limits (`maxTravelSec` 1-20, `holdSec`/`restSec` 1-60) and logged, because `maxTravelSec` is the relay safety cap |
 
 The Wi-Fi password is plaintext on removable media. That is inherent to editing
 it on a PC, and accepted for a clinic LAN.

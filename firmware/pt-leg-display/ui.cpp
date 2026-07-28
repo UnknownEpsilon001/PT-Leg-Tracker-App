@@ -394,20 +394,40 @@ void uiUpdateMain(bool running, Phase phase, uint32_t elapsedSec, uint16_t reps,
 #define SCAN_PLACEHOLDER "(เลือกเครือข่าย)"
 
 static lv_obj_t *scrSettings, *taSsid, *taPass, *taServer, *taCode, *kb, *ddScan;
-static lv_obj_t *spinMax, *spinHold, *spinRest, *btnSave;
+static lv_obj_t *spinMax, *spinHold, *spinRest, *btnSave, *btnReset;
 static void (*cbSave)(const DeviceSettings&) = nullptr;
 static bool settingsKnown = false;  // has the controller ever sent its settings?
 
 void uiSetSettingsSaved(void (*onSave)(const DeviceSettings&)) { cbSave = onSave; }
 
+// RESET is gated with SAVE, not left free. It reaches the card and the
+// controller through the same path a typed change does, so before the
+// controller has said what it actually holds, one confirmed tap writes blank
+// defaults over a card carrying a working configuration — and a readable card
+// beats controller NVS at the next boot, so both copies end up blank. A machine
+// whose link is merely down is exactly when someone reaches for it.
+// [TH] ปุ่มคืนค่าถูกกั้นพร้อมปุ่มบันทึก ไม่ปล่อยให้กดได้อิสระ
+//      เพราะมันเขียนถึงการ์ดและคอนโทรลเลอร์ด้วยเส้นทางเดียวกับการแก้ค่าด้วยมือ
+//      ถ้ากดก่อนที่คอนโทรลเลอร์จะบอกค่าจริง ค่าตั้งต้นที่ว่างเปล่าจะทับค่าที่ใช้งานได้บนการ์ด
+//      และรอบบูตถัดไปการ์ดจะชนะ ทำให้ค่าหายทั้งสองที่ ซึ่งมักเกิดตอนสายเชื่อมต่อหลุดพอดี
 static void applySaveEnabled() {
-  if (!btnSave) return;
-  if (settingsKnown) {
-    lv_obj_clear_state(btnSave, LV_STATE_DISABLED);
-    lv_obj_set_style_bg_color(btnSave, lv_color_hex(COL_BG), 0);
-  } else {
-    lv_obj_add_state(btnSave, LV_STATE_DISABLED);
-    lv_obj_set_style_bg_color(btnSave, lv_color_hex(COL_MUTED), LV_STATE_DISABLED);
+  if (btnSave) {
+    if (settingsKnown) {
+      lv_obj_clear_state(btnSave, LV_STATE_DISABLED);
+      lv_obj_set_style_bg_color(btnSave, lv_color_hex(COL_BG), 0);
+    } else {
+      lv_obj_add_state(btnSave, LV_STATE_DISABLED);
+      lv_obj_set_style_bg_color(btnSave, lv_color_hex(COL_MUTED), LV_STATE_DISABLED);
+    }
+  }
+  if (btnReset) {
+    if (settingsKnown) {
+      lv_obj_clear_state(btnReset, LV_STATE_DISABLED);
+      lv_obj_set_style_bg_color(btnReset, lv_color_hex(COL_SURFACE), 0);
+    } else {
+      lv_obj_add_state(btnReset, LV_STATE_DISABLED);
+      lv_obj_set_style_bg_color(btnReset, lv_color_hex(COL_MUTED), LV_STATE_DISABLED);
+    }
   }
 }
 
@@ -424,11 +444,15 @@ static lv_obj_t* lblSdStatus = nullptr;  // filled in by buildSettings
 // [TH] saveClicked อ่านค่านี้: ถ้าเขียนการ์ดได้ให้กลับหน้าหลักเหมือนเดิม ถ้าไม่ได้ให้ค้างหน้าเดิม
 //      ผู้ใช้จะได้อ่านข้อความสีแดงทัน การเขียนข้อความลงหน้าจอที่กำลังถูกปิดในเฟรมเดียวกันไม่มีใครเห็น
 static bool lastSaveToCard = true;
+static bool lastSaveCardPresent = false;
 
-void uiReportSettingsSaved(bool toCard) {
+void uiReportSettingsSaved(bool toCard, bool cardPresent) {
   lastSaveToCard = toCard;
+  lastSaveCardPresent = cardPresent;
   if (!lblSdStatus) return;
-  lv_label_set_text(lblSdStatus, toCard ? "SD: บันทึกแล้ว" : "SD: เขียนการ์ดไม่ได้");
+  lv_label_set_text(lblSdStatus, toCard          ? "SD: บันทึกแล้ว"
+                                 : cardPresent   ? "SD: เขียนการ์ดไม่ได้"
+                                                 : "SD: ไม่มีการ์ด");
   lv_obj_set_style_text_color(lblSdStatus, lv_color_hex(toCard ? COL_MUTED : COL_FAULT), 0);
 }
 
@@ -461,6 +485,12 @@ void uiSetSdStatus(bool cardPresent, bool fileLoaded) {
 // [TH] การคืนค่าใช้เส้นทางเดียวกับการบันทึกปกติ เพื่อให้ค่าตั้งต้นไปถึงทั้งการ์ดและคอนโทรลเลอร์
 //      เหมือนการแก้ค่าด้วยมือ และเขียนไฟล์ค่าตั้งต้นดีกว่าลบไฟล์ทิ้ง เพราะไฟล์จะมีอยู่เสมอ
 static void resetConfirmed(lv_event_t*) {
+  // Belt and braces, matching saveClicked: the button is disabled in this state,
+  // but defaults must never reach the card before the controller's real values
+  // are known.
+  // [TH] กันพลาดสองชั้นเหมือนปุ่มบันทึก: ปุ่มถูกปิดอยู่แล้ว
+  //      แต่ค่าตั้งต้นต้องไม่ถูกเขียนลงการ์ดก่อนที่จะรู้ค่าจริงจากคอนโทรลเลอร์
+  if (!settingsKnown) { lv_scr_load(scrSettings); return; }
   DeviceSettings d;
   settingsFileDefaults(d);
   lv_textarea_set_text(taSsid, d.wifiSsid.c_str());
@@ -588,7 +618,12 @@ static void saveClicked(lv_event_t*) {
   s.restSec = (uint16_t)lv_spinbox_get_value(spinRest);
   if (cbSave) cbSave(s);
   hideKeyboard();
-  if (!lastSaveToCard) return;  // stay so "เขียนการ์ดไม่ได้" is seen — ค้างไว้ให้อ่านข้อความ
+  // Stay only when a card was in the slot and refused the write — that is a
+  // failure worth reading. Running with no card is a supported configuration, so
+  // it returns to the main screen the way a normal save does.
+  // [TH] ค้างหน้าจอไว้เฉพาะตอนที่มีการ์ดอยู่แต่เขียนไม่ได้ ซึ่งเป็นความผิดพลาดที่ต้องให้อ่าน
+  //      ส่วนการใช้งานโดยไม่มีการ์ดถือเป็นเรื่องปกติ ให้กลับหน้าหลักเหมือนการบันทึกทั่วไป
+  if (!lastSaveToCard && lastSaveCardPresent) return;
   lv_scr_load(scrMain);
 }
 
@@ -777,12 +812,13 @@ static void buildSettings() {
   spinHold = makeSpinRow(col, "ค้าง (วิ)", 10, 1, 60);
   spinRest = makeSpinRow(col, "พัก (วิ)", 10, 1, 60);
 
-  lv_obj_t* reset = makeBtn(col, "คืนค่าเริ่มต้น", COL_SURFACE, &thai20,
-                            [](lv_event_t*) {
-                              if (!scrConfirmReset) buildConfirmReset();
-                              lv_scr_load(scrConfirmReset);
-                            });
-  lv_obj_set_size(reset, lv_pct(100), 40);
+  btnReset = makeBtn(col, "คืนค่าเริ่มต้น", COL_SURFACE, &thai20,
+                     [](lv_event_t*) {
+                       if (!scrConfirmReset) buildConfirmReset();
+                       lv_scr_load(scrConfirmReset);
+                     });
+  lv_obj_set_size(btnReset, lv_pct(100), 40);
+  applySaveEnabled();  // the reset button exists only now — ปุ่มคืนค่าเพิ่งถูกสร้างตรงนี้
 
   lv_obj_t* lblCredit = lv_label_create(col);
   lv_obj_set_style_text_color(lblCredit, lv_color_hex(COL_MUTED), 0);

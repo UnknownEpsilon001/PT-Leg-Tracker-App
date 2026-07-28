@@ -19,3 +19,4 @@ void settingsFileDefaults(DeviceSettings& s);   // ค่าตั้งต้�
 bool settingsFileLoad(DeviceSettings& s);       // false: no card / no file / malformed
 bool settingsFilePresent();                     // a valid file was read or written this boot
 bool settingsFileSave(const DeviceSettings& s); // temp + rename; false on write failure
+void settingsFileForget();                      // card swapped: drop what was read from the old one

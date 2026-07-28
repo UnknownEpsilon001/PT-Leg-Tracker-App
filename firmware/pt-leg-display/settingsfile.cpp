@@ -5,6 +5,7 @@
 
 static const char* PATH = "/settings.json";
 static const char* TMP = "/settings.tmp";
+static const char* OLD = "/settings.old.json";
 static const char* BAD = "/settings.bad.json";
 
 static bool filePresent = false;
@@ -24,10 +25,28 @@ void settingsFileDefaults(DeviceSettings& s) {
   s.restSec = 10;
 }
 
-bool settingsFileLoad(DeviceSettings& s) {
-  filePresent = false;
-  if (!storeCardPresent()) return false;
-  File f = SD.open(PATH, FILE_READ);
+// Values a person typed into a text editor get the same range the spinboxes on
+// the settings screen enforce. maxTravelSec is the safety cap on how long a
+// relay may stay energized with no end-of-travel switch closing, and a typed 0
+// or 600 goes straight to the controller unchallenged otherwise. A missing key
+// takes its default; a present but silly one is pulled back to the edge.
+// [TH] ค่าที่พิมพ์มาจากคอมพิวเตอร์ต้องอยู่ในช่วงเดียวกับที่หน้าตั้งค่าบังคับไว้
+//      maxTravelSec คือเพดานเวลาที่รีเลย์จ่ายไฟได้โดยไม่มีสวิตช์ปลายทางปิด
+//      ถ้าพิมพ์ 0 หรือ 600 มาแล้วส่งต่อให้คอนโทรลเลอร์ตรงๆ จะอันตราย จึงต้องดึงกลับเข้าช่วง
+static uint16_t clampU16(uint16_t v, uint16_t lo, uint16_t hi, const char* key) {
+  if (v >= lo && v <= hi) return v;
+  uint16_t c = v < lo ? lo : hi;
+  Serial.printf("settings: %s=%u is outside %u-%u, using %u\n", key, v, lo, hi, c);
+  return c;
+}
+
+// Reads and parses one file. quarantine decides what happens to a file that
+// will not parse: the real settings file is kept under settings.bad.json for
+// the person who broke it, the recovery copy is simply dropped.
+// [TH] อ่านและแปลงไฟล์หนึ่งไฟล์ ถ้าไฟล์เสีย quarantine เป็นตัวกำหนดว่าจะทำอย่างไร
+//      ไฟล์ตั้งค่าจริงจะถูกเก็บไว้ในชื่อ settings.bad.json ส่วนไฟล์สำรองจะลบทิ้งไปเลย
+static bool loadFrom(const char* path, DeviceSettings& s, bool quarantine) {
+  File f = SD.open(path, FILE_READ);
   if (!f) return false;
 
   // Windows editors happily save "UTF-8 with BOM", which puts EF BB BF in front
@@ -54,8 +73,12 @@ bool settingsFileLoad(DeviceSettings& s) {
     // straight after. Deleting would destroy the only copy of their password.
     // [TH] ไฟล์ที่เสียหรือถูกแก้จนผิดรูปแบบจะถูกเปลี่ยนชื่อเก็บไว้ ไม่ลบทิ้ง
     //      เพราะเจ้าของอาจอยากดูของเดิม และตัวเรียกจะเขียนไฟล์ใหม่ให้ทันที
-    SD.remove(BAD);
-    SD.rename(PATH, BAD);
+    if (quarantine) {
+      SD.remove(BAD);
+      SD.rename(path, BAD);
+    } else {
+      SD.remove(path);
+    }
     return false;
   }
 
@@ -68,16 +91,53 @@ bool settingsFileLoad(DeviceSettings& s) {
   out.wifiPass = d["wifiPass"] | "";
   out.serverUrl = d["serverUrl"] | "";
   out.deviceCode = d["deviceCode"] | "default";
-  out.maxTravelSec = d["maxTravelSec"] | (uint16_t)8;
-  out.holdSec = d["holdSec"] | (uint16_t)10;
-  out.restSec = d["restSec"] | (uint16_t)10;
+  // The ranges are the settings screen's spinbox limits, kept in step by hand.
+  // [TH] ช่วงตัวเลขตรงกับที่หน้าตั้งค่ากำหนดไว้ ต้องแก้ให้ตรงกันเองถ้ามีการเปลี่ยน
+  out.maxTravelSec = clampU16(d["maxTravelSec"] | (uint16_t)8, 1, 20, "maxTravelSec");
+  out.holdSec = clampU16(d["holdSec"] | (uint16_t)10, 1, 60, "holdSec");
+  out.restSec = clampU16(d["restSec"] | (uint16_t)10, 1, 60, "restSec");
 
   s = out;
-  filePresent = true;
   return true;
 }
 
+bool settingsFileLoad(DeviceSettings& s) {
+  filePresent = false;
+  if (!storeCardPresent()) return false;
+
+  if (loadFrom(PATH, s, true)) {
+    filePresent = true;
+    return true;
+  }
+
+  // The real file is missing or was just quarantined. A save interrupted between
+  // its two renames leaves the previous copy parked under settings.old.json —
+  // take it and put it back, rather than reporting a card with no settings and
+  // letting the controller's values overwrite it.
+  // [TH] ไฟล์จริงหายไปหรือเพิ่งถูกย้ายเพราะเสีย ถ้าการบันทึกถูกขัดจังหวะระหว่างเปลี่ยนชื่อสองครั้ง
+  //      ไฟล์เดิมจะค้างอยู่ในชื่อ settings.old.json ให้เอากลับมาใช้และตั้งชื่อคืน
+  //      ดีกว่ารายงานว่าการ์ดไม่มีค่าตั้งค่าแล้วปล่อยให้ค่าจากคอนโทรลเลอร์เขียนทับ
+  if (loadFrom(OLD, s, false)) {
+    SD.remove(PATH);
+    if (SD.rename(OLD, PATH)) {
+      Serial.println("settings: recovered the previous file after an interrupted save");
+      filePresent = true;
+      return true;
+    }
+  }
+  return false;
+}
+
 bool settingsFilePresent() { return filePresent; }
+
+// Called when the card is mounted again, which on this machine means a card was
+// swapped. The flag says "a file has been read this boot", and after a swap that
+// is a claim about a card which is no longer in the slot: the screen would show
+// the old card's values, and a save would write them onto the new card.
+// [TH] เรียกเมื่อมีการเมานต์การ์ดใหม่ ซึ่งบนเครื่องนี้แปลว่ามีการสลับการ์ด
+//      ตัวแปรนี้บอกว่า "อ่านไฟล์แล้วในรอบบูตนี้" ซึ่งหลังสลับการ์ดจะกลายเป็นการอ้างถึงการ์ดที่ถอดออกไปแล้ว
+//      หน้าจอจะโชว์ค่าของการ์ดใบเก่า และการบันทึกจะเขียนค่านั้นทับการ์ดใบใหม่
+void settingsFileForget() { filePresent = false; }
 
 bool settingsFileSave(const DeviceSettings& s) {
   if (!storeCardPresent()) return false;
@@ -106,8 +166,24 @@ bool settingsFileSave(const DeviceSettings& s) {
     return false;
   }
 
-  SD.remove(PATH);
-  if (!SD.rename(TMP, PATH)) return false;
+  // The previous file is moved aside, not deleted, before the new one takes its
+  // name. Deleting first leaves a window with no settings file at all: a card
+  // pulled inside it costs the whole configuration, which is the one thing this
+  // feature exists to prevent. If the file cannot be moved aside, the save fails
+  // and the old values stay — never delete without a copy in hand.
+  // [TH] ไฟล์เดิมจะถูกย้ายไปเก็บก่อน ไม่ใช่ลบทิ้ง แล้วค่อยให้ไฟล์ใหม่ใช้ชื่อแทน
+  //      ถ้าลบก่อนจะมีช่วงที่ไม่มีไฟล์ตั้งค่าเลย ถ้าการ์ดถูกดึงตอนนั้นจะเสียค่าทั้งหมด
+  //      ซึ่งเป็นสิ่งที่ฟีเจอร์นี้ตั้งใจป้องกัน ถ้าย้ายไม่ได้ให้ถือว่าบันทึกไม่สำเร็จและคงค่าเดิมไว้
+  SD.remove(OLD);
+  if (SD.exists(PATH) && !SD.rename(PATH, OLD)) {
+    SD.remove(TMP);
+    return false;
+  }
+  if (!SD.rename(TMP, PATH)) {
+    SD.rename(OLD, PATH);  // put the previous file back under its own name
+    return false;
+  }
+  SD.remove(OLD);
   filePresent = true;
   return true;
 }
