@@ -415,6 +415,14 @@ void uiSetSettingsKnown(bool known) {
   applySaveEnabled();
 }
 
+static lv_obj_t* lblSdStatus = nullptr;  // filled in by buildSettings
+
+void uiReportSettingsSaved(bool toCard) {
+  if (!lblSdStatus) return;
+  lv_label_set_text(lblSdStatus, toCard ? "SD: บันทึกแล้ว" : "SD: เขียนการ์ดไม่ได้");
+  lv_obj_set_style_text_color(lblSdStatus, lv_color_hex(toCard ? COL_MUTED : COL_FAULT), 0);
+}
+
 static void hideKeyboard() {
   if (!kb) return;
   lv_obj_add_flag(kb, LV_OBJ_FLAG_HIDDEN);

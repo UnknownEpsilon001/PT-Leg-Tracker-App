@@ -45,3 +45,8 @@ void uiSetSettingsSaved(void (*onSave)(const DeviceSettings&));
 // [TH] ปุ่ม SAVE ถูกปิดไว้จนกว่าคอนโทรลเลอร์จะส่งค่าตั้งค่ามาอย่างน้อยหนึ่งครั้ง
 //      กันไม่ให้ค่าตัวอย่างบนหน้าจอไปเขียนทับค่าจริงใน NVS
 void uiSetSettingsKnown(bool known);
+// Result of the last SAVE. The controller always receives the values; the card
+// may not have been there, and the screen must not imply it was written.
+// [TH] ผลของการกดบันทึกครั้งล่าสุด ค่าจะถูกส่งให้คอนโทรลเลอร์เสมอ แต่การ์ดอาจไม่ได้เสียบอยู่
+//      หน้าจอต้องไม่ทำให้เข้าใจว่าเขียนลงการ์ดแล้ว
+void uiReportSettingsSaved(bool toCard);

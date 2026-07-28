@@ -74,6 +74,14 @@ static void onSaveFromUi(const DeviceSettings& s) {
   ls.maxTravel = s.maxTravelSec; ls.hold = s.holdSec; ls.rest = s.restSec;
   gLink.sendSettings(ls);
   uiSetDeviceCode(s.deviceCode.c_str());
+
+  // The controller gets the values either way; the card is best-effort. Settings
+  // are never silently dropped, so a failed card write is reported, not hidden.
+  // [TH] คอนโทรลเลอร์ได้รับค่าเสมอ ส่วนการ์ดเขียนได้ก็ดี ไม่ได้ก็ไม่เป็นไร
+  //      แต่ต้องไม่เงียบ ถ้าเขียนการ์ดไม่สำเร็จต้องบอกผู้ใช้
+  bool toCard = settingsFileSave(s);
+  Serial.printf("settings saved: controller yes, card %s\n", toCard ? "yes" : "no");
+  uiReportSettingsSaved(toCard);
 }
 
 static void onLinkSettingsReply(const LinkSettings& s) {
