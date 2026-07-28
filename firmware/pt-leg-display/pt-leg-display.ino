@@ -54,12 +54,44 @@ static bool gReconciled = false;  // the first controller reply has been handled
 //      เครื่องต้องใช้งานได้แม้ไม่มีใครลงทะเบียน แค่บันทึกโดยไม่มีชื่อ
 static int gActivePatient = -1;
 
+// Card values go to the controller the moment they are known, because the card
+// is the master copy wherever it was read — at boot or hours later.
+// [TH] ค่าจากการ์ดจะถูกส่งให้คอนโทรลเลอร์ทันทีที่รู้ค่า เพราะการ์ดคือค่าหลักเสมอ
+//      ไม่ว่าจะอ่านได้ตอนบูตหรืออ่านได้ทีหลัง
+static void pushSettingsToController(const DeviceSettings& s) {
+  LinkSettings ls;
+  ls.ssid = s.wifiSsid; ls.pass = s.wifiPass; ls.server = s.serverUrl; ls.code = s.deviceCode;
+  ls.maxTravel = s.maxTravelSec; ls.hold = s.holdSec; ls.rest = s.restSec;
+  gLink.sendSettings(ls);
+}
+
 static void onOpenSettings() {
   Serial.println("touch: settings");
-  // A card pushed in after boot is picked up by the retry loop in loop(); this
-  // just reports whatever the current state is when the screen opens.
-  // [TH] การ์ดที่เพิ่งเสียบหลังบูตจะถูกเมานต์โดยลูปที่ทำงานเป็นระยะอยู่แล้ว
-  //      ตรงนี้เพียงรายงานสถานะปัจจุบันตอนเปิดหน้าจอ
+  // The card is only read at boot, so a card carried from a PC to a running
+  // machine went unnoticed until someone power-cycled it — which is exactly the
+  // trip this whole feature exists to make. The mount retry in loop() does not
+  // help: it reloads the roster, not the settings. Re-read here, once, when the
+  // slot has a card whose file has not been read this boot.
+  // [TH] เดิมอ่านไฟล์เฉพาะตอนบูต การ์ดที่เพิ่งแก้จากคอมพิวเตอร์แล้วเสียบเข้าเครื่องที่เปิดอยู่จึงไม่มีผล
+  //      จนกว่าจะปิดเปิดเครื่องใหม่ ทั้งที่นี่คือการใช้งานหลักของฟีเจอร์นี้
+  //      ลูปเมานต์ใหม่ช่วยไม่ได้ เพราะมันโหลดแค่ทะเบียนคนไข้ ไม่ใช่ค่าตั้งค่า จึงอ่านซ้ำตรงนี้
+  if (storeCardPresent() && !settingsFilePresent()) {
+    if (settingsFileLoad(gLast)) {
+      gCardSettings = true;
+      uiSetDeviceCode(gLast.deviceCode.c_str());
+      pushSettingsToController(gLast);
+      Serial.println("settings: read the card late and pushed it to the controller");
+    } else if (gSettingsKnown) {
+      // No file, or one that just got quarantined. Seed it the way boot does, so
+      // a card is never left with nothing to read. Only once the controller's
+      // real values are known — a fresh card must not be given placeholders.
+      // [TH] ไม่มีไฟล์ หรือไฟล์เพิ่งถูกย้ายเพราะเสีย ให้สร้างไฟล์ใหม่เหมือนตอนบูต
+      //      การ์ดจะได้ไม่ถูกทิ้งไว้โดยไม่มีอะไรให้อ่าน และทำเฉพาะเมื่อรู้ค่าจริงจากคอนโทรลเลอร์แล้ว
+      //      การ์ดใหม่ต้องไม่ได้รับค่าตัวอย่าง
+      Serial.printf("settings: card had no usable file, wrote a fresh one: %s\n",
+                    settingsFileSave(gLast) ? "written" : "write failed");
+    }
+  }
   uiSetSdStatus(storeCardPresent(), settingsFilePresent());
   uiOpenSettings(gLast);
 }
@@ -101,11 +133,7 @@ static void onLinkSettingsReply(const LinkSettings& s) {
   //      เพราะคอนโทรลเลอร์จะสะท้อนค่าที่เพิ่งบันทึกกลับมา ถ้าดันกันไปมาจะวนไม่จบ
   if (gCardSettings && !gReconciled) {
     gReconciled = true;
-    LinkSettings ls;
-    ls.ssid = gLast.wifiSsid; ls.pass = gLast.wifiPass; ls.server = gLast.serverUrl;
-    ls.code = gLast.deviceCode;
-    ls.maxTravel = gLast.maxTravelSec; ls.hold = gLast.holdSec; ls.rest = gLast.restSec;
-    gLink.sendSettings(ls);
+    pushSettingsToController(gLast);
     Serial.println("settings: pushed the card's values to the controller");
     gSettingsKnown = true;
     uiSetSettingsKnown(true);
