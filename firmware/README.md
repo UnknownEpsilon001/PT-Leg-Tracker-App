@@ -187,6 +187,18 @@ Missing keys take their default; unknown keys are ignored. The settings screen
 states which source is in use, because a stale card reconfigures a working
 machine by design.
 
+Three things caught us on the bench, all of them things a clinic tech would hit:
+
+- **The name must be exactly `settings.json`.** With Explorer hiding known
+  extensions, renaming the file by hand produces `settings..json`, and the
+  display then reports `SD: การ์ดยังไม่มีไฟล์` and quietly keeps its old
+  configuration. Turn extensions on before editing, or edit in place.
+- **A UTF-8 BOM is fine.** Notepad's "UTF-8 with BOM" used to be quarantined as a
+  malformed file; the loader now steps over the three bytes.
+- **A card can go in while the machine is running.** The settings are re-read
+  when the settings screen is opened, so edit on a PC, insert, tap the gear — no
+  power cycle. A card inserted and never looked at is not read.
+
 | Situation | Behaviour |
 |---|---|
 | No card | Runs from NVS; saves reach the controller only, and say so |
