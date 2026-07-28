@@ -54,7 +54,15 @@ static bool gReconciled = false;  // the first controller reply has been handled
 //      เครื่องต้องใช้งานได้แม้ไม่มีใครลงทะเบียน แค่บันทึกโดยไม่มีชื่อ
 static int gActivePatient = -1;
 
-static void onOpenSettings() { Serial.println("touch: settings"); uiOpenSettings(gLast); }
+static void onOpenSettings() {
+  Serial.println("touch: settings");
+  // A card pushed in after boot is picked up by the retry loop in loop(); this
+  // just reports whatever the current state is when the screen opens.
+  // [TH] การ์ดที่เพิ่งเสียบหลังบูตจะถูกเมานต์โดยลูปที่ทำงานเป็นระยะอยู่แล้ว
+  //      ตรงนี้เพียงรายงานสถานะปัจจุบันตอนเปิดหน้าจอ
+  uiSetSdStatus(storeCardPresent(), settingsFilePresent());
+  uiOpenSettings(gLast);
+}
 static void onOpenData() { Serial.println("touch: data"); uiOpenData(); }
 
 // -1 tells the UI "no card", which reads differently from an empty roster.

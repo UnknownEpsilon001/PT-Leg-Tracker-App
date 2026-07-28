@@ -50,3 +50,8 @@ void uiSetSettingsKnown(bool known);
 // [TH] ผลของการกดบันทึกครั้งล่าสุด ค่าจะถูกส่งให้คอนโทรลเลอร์เสมอ แต่การ์ดอาจไม่ได้เสียบอยู่
 //      หน้าจอต้องไม่ทำให้เข้าใจว่าเขียนลงการ์ดแล้ว
 void uiReportSettingsSaved(bool toCard);
+// Where the settings on screen came from. A card carrying stale values wins over
+// the controller's NVS by design, so the screen has to say when that happened.
+// [TH] บอกว่าค่าที่แสดงอยู่มาจากไหน เพราะค่าจากการ์ดจะถูกใช้แทนค่าใน NVS เสมอ
+//      ถ้าการ์ดมีค่าเก่าค้างอยู่ ผู้ใช้ต้องเห็นว่ากำลังใช้ค่าจากการ์ด
+void uiSetSdStatus(bool cardPresent, bool fileLoaded);

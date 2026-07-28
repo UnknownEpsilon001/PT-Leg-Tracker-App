@@ -423,6 +423,15 @@ void uiReportSettingsSaved(bool toCard) {
   lv_obj_set_style_text_color(lblSdStatus, lv_color_hex(toCard ? COL_MUTED : COL_FAULT), 0);
 }
 
+void uiSetSdStatus(bool cardPresent, bool fileLoaded) {
+  if (!lblSdStatus) return;
+  const char* text = !cardPresent  ? "SD: ไม่มีการ์ด"
+                     : fileLoaded  ? "SD: ใช้ค่าจากการ์ด"
+                                   : "SD: การ์ดยังไม่มีไฟล์";
+  lv_label_set_text(lblSdStatus, text);
+  lv_obj_set_style_text_color(lblSdStatus, lv_color_hex(COL_MUTED), 0);
+}
+
 static void hideKeyboard() {
   if (!kb) return;
   lv_obj_add_flag(kb, LV_OBJ_FLAG_HIDDEN);
@@ -614,6 +623,12 @@ static void buildSettings() {
   lv_obj_set_size(btnSave, 90, 34);
   lv_obj_align(btnSave, LV_ALIGN_RIGHT_MID, 8, 0);
   applySaveEnabled();
+
+  lblSdStatus = lv_label_create(bar);
+  lv_obj_set_style_text_font(lblSdStatus, &thai14, 0);
+  lv_obj_set_style_text_color(lblSdStatus, lv_color_hex(COL_MUTED), 0);
+  lv_obj_align(lblSdStatus, LV_ALIGN_CENTER, 0, 0);
+  lv_label_set_text(lblSdStatus, "");
 
   lv_obj_t* col = lv_obj_create(scrSettings);
   lv_obj_set_size(col, lv_pct(100), 196);
