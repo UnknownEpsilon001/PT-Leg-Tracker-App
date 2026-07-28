@@ -164,6 +164,42 @@ controller, so this board is the resistive XPT2046 variant it claims to be.
      ให้ปรับค่าโดยอ้างอิงปุ่มที่รู้พิกัดบนจอ ไม่ใช่การแตะที่มุมจอซึ่งกำกวมเพราะจอถูกหมุน
      และการอ่านค่าจะพิมพ์เฉพาะตอนเริ่มกด ถ้าเก็บ log ไม่ทันจะดูเหมือนไม่มีการแตะเลย
 
+## Device settings live on the card (`/settings.json`)
+
+Settings are stored twice: as JSON on the CYD's microSD card, and in the
+controller's NVS. The card is the master copy — a readable file is pushed to the
+controller at boot — so a Wi-Fi password can be typed on a PC rather than on the
+touchscreen, and a controller board can be swapped without retyping anything.
+
+```json
+{
+  "wifiSsid": "ClinicWiFi",
+  "wifiPass": "hunter2",
+  "serverUrl": "http://192.168.0.12:8000",
+  "deviceCode": "default",
+  "maxTravelSec": 8,
+  "holdSec": 10,
+  "restSec": 10
+}
+```
+
+Missing keys take their default; unknown keys are ignored. The settings screen
+states which source is in use, because a stale card reconfigures a working
+machine by design.
+
+| Situation | Behaviour |
+|---|---|
+| No card | Runs from NVS; saves reach the controller only, and say so |
+| File absent | Seeded from the controller's current settings, so a blank card does not blank the machine |
+| Malformed file | Renamed to `/settings.bad.json`, a fresh one written, machine runs |
+| Card pulled mid-save | Writes go to `/settings.tmp` and are renamed, so the old file is never truncated |
+
+The Wi-Fi password is plaintext on removable media. That is inherent to editing
+it on a PC, and accepted for a clinic LAN.
+[TH] ค่าตั้งค่าเก็บสองที่: ไฟล์ JSON บนการ์ด SD ของจอ และ NVS ของคอนโทรลเลอร์
+     โดยยึดค่าจากการ์ดเป็นหลัก แก้รหัสผ่าน WiFi จากคอมพิวเตอร์ได้ และเปลี่ยนบอร์ดคอนโทรลเลอร์
+     ได้โดยไม่ต้องพิมพ์ใหม่ รหัสผ่านเก็บเป็นข้อความธรรมดาบนการ์ด ยอมรับได้สำหรับเครือข่ายในคลินิก
+
 ## Shared files between the two sketches
 
 `link.h`, `link.cpp`, `session.h` and `settings.h` exist in **both** sketch
