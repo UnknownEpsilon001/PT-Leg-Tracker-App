@@ -58,6 +58,13 @@
 #define PIN_RTC_SDA 21
 #define PIN_RTC_SCL 19
 
+// Pairing code a machine answers to before anyone configures one. Matches the
+// phone app's zero-setup default, so a fresh machine and a fresh app find each
+// other with no typing. An empty code would pair with nothing.
+// [TH] รหัสจับคู่ตั้งต้นของเครื่องก่อนตั้งค่าใดๆ ตรงกับค่าเริ่มต้นของแอปบนมือถือ
+//      เครื่องใหม่กับแอปใหม่จึงจับคู่กันได้เลยโดยไม่ต้องพิมพ์ ถ้าเป็นค่าว่างจะจับคู่ไม่ได้เลย
+#define DEFAULT_DEVICE_CODE "default"
+
 // safety cap: max time a stroke (LIFT/LOWER/SAFE-LOWER) may drive before FAULT
 // [TH] เพดานความปลอดภัย: เวลาสูงสุดที่มอเตอร์วิ่งได้ต่อจังหวะก่อนขึ้นสถานะ FAULT
 #define DEFAULT_MAX_TRAVEL_SEC 8

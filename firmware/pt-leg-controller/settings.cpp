@@ -13,7 +13,7 @@ void settingsLoad(DeviceSettings& s) {
   s.wifiSsid = p.getString("ssid", "");
   s.wifiPass = p.getString("pass", "");
   s.serverUrl = p.getString("server", "");
-  s.deviceCode = p.getString("code", "");
+  s.deviceCode = p.getString("code", DEFAULT_DEVICE_CODE);
   s.maxTravelSec = p.getUShort("maxtravel", DEFAULT_MAX_TRAVEL_SEC);
   s.holdSec = p.getUShort("hold", DEFAULT_HOLD_SEC);
   s.restSec = p.getUShort("rest", DEFAULT_REST_SEC);
