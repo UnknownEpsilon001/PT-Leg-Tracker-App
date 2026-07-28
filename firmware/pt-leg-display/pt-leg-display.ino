@@ -47,6 +47,13 @@ static bool gLinkUp = false;
 static bool gCardSettings = false;
 static bool gReconciled = false;  // the first controller reply has been handled
 
+// Was a card in the slot at the previous SD tick? Only the absent-to-present
+// edge means "somebody put a card in", which is the moment the settings on it
+// have to be read again.
+// [TH] รอบตรวจการ์ดครั้งก่อนมีการ์ดอยู่หรือไม่ เฉพาะจังหวะที่เปลี่ยนจากไม่มีเป็นมีเท่านั้น
+//      ที่แปลว่ามีคนเพิ่งเสียบการ์ด ซึ่งเป็นจังหวะที่ต้องอ่านค่าตั้งค่าบนการ์ดใหม่
+static bool gCardWasPresent = false;
+
 // Which patient the next session belongs to. -1 until someone picks one, and it
 // stays -1 all day if nobody does: the machine must run for a walk-up patient
 // with no roster at all, the row just logs without a name.
@@ -209,6 +216,7 @@ void setup() {
   //      ทะเบียนจะว่าง ผลรอบจะพักไว้ในหน่วยความจำ และเครื่องยังทำงานได้ตามปกติ
   Serial.printf("sd card: %s, patients=%d\n", storeBegin() ? "mounted" : "absent",
                 storePatientCount());
+  gCardWasPresent = storeCardPresent();  // boot state, so the first tick is not read as an insertion
   sdlogEnsureHeader();
   // Read before the link comes up: the controller's reply is what triggers
   // reconciliation, and this decides which side of it wins.
@@ -273,12 +281,7 @@ void loop() {
   static uint32_t lastSd = 0;
   if (now - lastSd > 5000 && (sdlogRingDepth() > 0 || !storeCardPresent())) {
     lastSd = now;
-    // A card arriving in an empty slot is a different card from whatever was
-    // read at boot, so what settingsfile remembers no longer describes what is
-    // in the machine. Forgetting makes the settings screen re-read it.
-    // [TH] การ์ดที่เพิ่งเสียบเข้าช่องที่ว่างอยู่ ย่อมไม่ใช่ใบเดิมที่อ่านไว้ตอนบูต
-    //      สิ่งที่โมดูลจำไว้จึงไม่ตรงกับการ์ดที่อยู่ในเครื่อง ต้องล้างเพื่อให้หน้าตั้งค่าอ่านใหม่
-    if (!storeCardPresent() && storeBegin()) settingsFileForget();
+    if (!storeCardPresent()) storeBegin();
     int before = sdlogRingDepth();
     sdlogFlushRing();
     // Rows leaving the ring is the one moment worth a line: it is the proof that
@@ -293,10 +296,24 @@ void loop() {
     // has since been pulled. Throw it away; the next tick writes them for real.
     // [TH] มีแถวค้างแต่เขียนไม่ออกเลย แปลว่าการเมานต์ค้างจากการ์ดที่ถูกดึงออกไปแล้ว
     //      ทิ้งแล้วเมานต์ใหม่ รอบถัดไปจะเขียนได้จริง
-    if (before > 0 && sdlogRingDepth() == before) {
-      storeRemount();
-      settingsFileForget();  // same reasoning: the slot may hold a different card
-    }
+    if (before > 0 && sdlogRingDepth() == before) storeRemount();
+
+    // A card that goes from absent to present is a card someone just pushed in,
+    // and it need not be the one read at boot: what settingsfile remembers would
+    // then describe a card that has left the building, so the settings screen has
+    // to read the new one. Keyed on the transition rather than on remounting,
+    // because storeRemount() also runs when a card that never moved simply
+    // refuses writes — a full card is not a swapped card.
+    // Known gap: a swap completed between two ticks, with no failed write in
+    // between, never shows an absent state and is not caught here.
+    // [TH] การ์ดที่เปลี่ยนจาก "ไม่มี" เป็น "มี" คือการ์ดที่เพิ่งถูกเสียบ และอาจไม่ใช่ใบเดิมที่อ่านตอนบูต
+    //      สิ่งที่โมดูลจำไว้จะกลายเป็นข้อมูลของการ์ดที่ถอดออกไปแล้ว หน้าตั้งค่าจึงต้องอ่านใบใหม่
+    //      ใช้จังหวะเปลี่ยนสถานะเป็นตัวตัดสิน ไม่ใช้การเมานต์ใหม่ เพราะการ์ดที่ไม่ได้ถูกถอดแต่เขียนไม่ได้
+    //      ก็ทำให้เมานต์ใหม่เหมือนกัน การ์ดเต็มไม่ใช่การ์ดที่ถูกสลับ
+    //      ข้อจำกัดที่รู้อยู่: ถ้าสลับการ์ดจบภายในช่วงระหว่างสองรอบตรวจ จะไม่เห็นสถานะ "ไม่มีการ์ด" และจับไม่ได้
+    bool cardNow = storeCardPresent();
+    if (cardNow && !gCardWasPresent) settingsFileForget();
+    gCardWasPresent = cardNow;
   }
   delay(2);
 }

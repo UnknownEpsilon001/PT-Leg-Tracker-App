@@ -106,6 +106,14 @@ bool settingsFileLoad(DeviceSettings& s) {
   if (!storeCardPresent()) return false;
 
   if (loadFrom(PATH, s, true)) {
+    // The recovery copy has done its job the moment the real file reads cleanly.
+    // Leaving it means a stale one can be resurrected months later, when someone
+    // finally mangles settings.json — and nothing downstream can tell a copy from
+    // thirty seconds ago from one from thirty days ago.
+    // [TH] เมื่ออ่านไฟล์จริงได้แล้ว ไฟล์สำรองก็หมดหน้าที่ ต้องลบทิ้ง
+    //      ถ้าปล่อยไว้ วันหนึ่งที่ไฟล์จริงเสีย ระบบจะกู้ไฟล์สำรองเก่าค้างปีขึ้นมาใช้
+    //      โดยไม่มีอะไรบอกได้ว่าสำเนานั้นเก่าแค่ไหน
+    SD.remove(OLD);
     filePresent = true;
     return true;
   }
@@ -117,10 +125,16 @@ bool settingsFileLoad(DeviceSettings& s) {
   // [TH] ไฟล์จริงหายไปหรือเพิ่งถูกย้ายเพราะเสีย ถ้าการบันทึกถูกขัดจังหวะระหว่างเปลี่ยนชื่อสองครั้ง
   //      ไฟล์เดิมจะค้างอยู่ในชื่อ settings.old.json ให้เอากลับมาใช้และตั้งชื่อคืน
   //      ดีกว่ารายงานว่าการ์ดไม่มีค่าตั้งค่าแล้วปล่อยให้ค่าจากคอนโทรลเลอร์เขียนทับ
-  if (loadFrom(OLD, s, false)) {
+  // Read into a scratch copy, not the caller's struct: a false return has to mean
+  // nothing was read, and the rename below can still fail.
+  // [TH] อ่านลงตัวแปรชั่วคราว ไม่ใช่ของผู้เรียกโดยตรง เพราะการคืนค่า false ต้องแปลว่าไม่ได้อ่านอะไรเลย
+  //      และการเปลี่ยนชื่อด้านล่างยังล้มเหลวได้
+  DeviceSettings recovered;
+  if (loadFrom(OLD, recovered, false)) {
     SD.remove(PATH);
     if (SD.rename(OLD, PATH)) {
       Serial.println("settings: recovered the previous file after an interrupted save");
+      s = recovered;
       filePresent = true;
       return true;
     }
@@ -159,9 +173,19 @@ bool settingsFileSave(const DeviceSettings& s) {
   SD.remove(TMP);
   File f = SD.open(TMP, FILE_WRITE);
   if (!f) return false;
+  size_t want = measureJsonPretty(d);
   size_t written = serializeJsonPretty(d, f);
   f.close();
-  if (written == 0) {
+  // A short write is a failed write. Checking only for zero lets a half-written
+  // file through on a card that is full or leaving the slot, and the rename below
+  // would then put that truncated file where the good one was and delete the
+  // copy — turning the one thing this sequence prevents into the thing it does.
+  // [TH] เขียนได้ไม่ครบถือว่าล้มเหลว ถ้าตรวจแค่ว่าเขียนได้ศูนย์ไบต์หรือไม่
+  //      ไฟล์ครึ่งๆ กลางๆ จะผ่านไปได้ตอนการ์ดเต็มหรือกำลังถูกดึงออก
+  //      แล้วขั้นเปลี่ยนชื่อด้านล่างจะเอาไฟล์เสียไปแทนไฟล์ดีและลบสำเนาทิ้ง
+  if (written != want) {
+    Serial.printf("settings: wrote %u of %u bytes, keeping the old file\n", (unsigned)written,
+                  (unsigned)want);
     SD.remove(TMP);
     return false;
   }
