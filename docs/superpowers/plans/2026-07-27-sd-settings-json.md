@@ -645,7 +645,7 @@ the device silently, which this codebase has shipped once already."
 
 Prereq: CYD flashed, microSD in the slot, a PC card reader. Items 3, 6 and 7 need the controller board; run everything else first and note what was deferred.
 
-- [ ] **Step 1: No card** — boot with an empty slot. Expected: machine runs, `settings source: controller nvs`, settings screen shows `SD: ไม่มีการ์ด`, SAVE still reaches the controller and reports the card was not written.
+- [x] **Step 1: No card** — boot with an empty slot. Expected: machine runs, `settings source: controller nvs`, settings screen shows `SD: ไม่มีการ์ด`, SAVE still reaches the controller and reports the card was not written.
 
 - [x] **Step 2: Blank card** — boot with a card holding no `/settings.json`. Expected: `settings: seeding the card from the controller: written`; pull the card and confirm the file's contents match what the screen shows.
 
