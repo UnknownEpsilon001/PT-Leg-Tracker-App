@@ -30,6 +30,20 @@ bool settingsFileLoad(DeviceSettings& s) {
   File f = SD.open(PATH, FILE_READ);
   if (!f) return false;
 
+  // Windows editors happily save "UTF-8 with BOM", which puts EF BB BF in front
+  // of the '{'. The JSON parser reads that as garbage and the file gets thrown in
+  // the quarantine bin, so a tech who picked the wrong dropdown in Notepad would
+  // silently lose the settings they just typed. Step over it if it is there.
+  // [TH] โปรแกรมแก้ไขข้อความบนวินโดวส์มักบันทึกแบบ UTF-8 ที่มี BOM คือมีไบต์ EF BB BF นำหน้า
+  //      ตัวอ่าน JSON จะมองว่าไฟล์เสียแล้วย้ายไปเป็นไฟล์เสีย ค่าที่เพิ่งพิมพ์จะหายไปเงียบๆ
+  //      ถ้าเจอ BOM ให้ข้ามไปสามไบต์
+  if (f.size() >= 3) {
+    uint8_t bom[3];
+    if (f.read(bom, 3) != 3 || bom[0] != 0xEF || bom[1] != 0xBB || bom[2] != 0xBF) {
+      f.seek(0);
+    }
+  }
+
   JsonDocument d;
   DeserializationError err = deserializeJson(d, f);
   f.close();
