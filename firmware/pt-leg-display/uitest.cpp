@@ -4,6 +4,7 @@
 
 #include <Arduino.h>
 #include <SD.h>
+#include "ui.h"  // uiSetSettingsKnown, for the "known" command
 
 // A second pointer device beside the real touchscreen, fed by serial commands
 // instead of by a finger. It reports coordinates in screen space, so it bypasses
@@ -22,6 +23,17 @@ static uint32_t pressUntil = 0;
 // [TH] การกดต้องค้างข้ามรอบ lv_timer_handler อย่างน้อยหนึ่งรอบจึงจะถูกมองเห็น
 //      และการคลิกต้องมีจังหวะปล่อยด้วย ใช้ 60 มิลลิวินาทีก็พอสำหรับทุกอัตราเฟรมที่เป็นไปได้
 static const uint32_t PRESS_MS = 60;
+
+// A swipe is a press that travels. Scrolling a list cannot be done with taps:
+// LVGL decides between a click and a scroll by how far the pointer moves while
+// down, so the position has to change across several lv_timer_handler passes.
+// [TH] การปัดคือการกดแล้วลากไปด้วย การเลื่อนรายการทำด้วยการแตะเฉยๆ ไม่ได้
+//      เพราะ LVGL ตัดสินว่าเป็นการคลิกหรือการเลื่อนจากระยะที่นิ้วขยับระหว่างกดอยู่
+//      ตำแหน่งจึงต้องเปลี่ยนไปเรื่อยๆ ข้ามหลายรอบของ lv_timer_handler
+static bool swiping = false;
+static int16_t swipeFromX, swipeFromY, swipeToX, swipeToY;
+static uint32_t swipeStart = 0;
+static const uint32_t SWIPE_MS = 250;
 
 static void readCb(lv_indev_drv_t*, lv_indev_data_t* data) {
   data->point.x = px;
@@ -129,6 +141,25 @@ static void handle(String cmd) {
     return;
   }
 
+  if (cmd.startsWith("swipe ")) {
+    int v[4], n = 0, from = 6;
+    while (n < 4 && from < (int)cmd.length()) {
+      int sp = cmd.indexOf(' ', from);
+      if (sp < 0) sp = cmd.length();
+      v[n++] = cmd.substring(from, sp).toInt();
+      from = sp + 1;
+    }
+    if (n != 4) { Serial.println("test: swipe needs X1 Y1 X2 Y2"); return; }
+    swipeFromX = (int16_t)v[0]; swipeFromY = (int16_t)v[1];
+    swipeToX = (int16_t)v[2];   swipeToY = (int16_t)v[3];
+    px = swipeFromX; py = swipeFromY;
+    swipeStart = millis();
+    swiping = true;
+    pressed = true;
+    Serial.printf("test: swipe %d,%d -> %d,%d\n", v[0], v[1], v[2], v[3]);
+    return;
+  }
+
   if (cmd.startsWith("type ")) {
     lv_obj_t* ta = uiTestTextarea();
     if (!ta) { Serial.println("test: type: no keyboard is showing"); return; }
@@ -152,6 +183,19 @@ static void handle(String cmd) {
   if (cmd == "ta") {
     lv_obj_t* ta = uiTestTextarea();
     Serial.printf("test: ta=%s\n", ta ? lv_textarea_get_text(ta) : "(none)");
+    return;
+  }
+
+  // Unlocks SAVE and RESET without a controller on the desk. Both are gated on
+  // the controller having reported its settings at least once, which is right on
+  // a real machine and makes the reset dialog — the one screen with a history of
+  // eating the LVGL pool — untestable on a bench with only the display attached.
+  // [TH] ปลดล็อกปุ่มบันทึกและปุ่มคืนค่าโดยไม่ต้องมีคอนโทรลเลอร์ต่ออยู่
+  //      ปกติปุ่มทั้งสองจะถูกกั้นไว้จนกว่าคอนโทรลเลอร์จะส่งค่าตั้งค่ามาอย่างน้อยหนึ่งครั้ง ซึ่งถูกต้องสำหรับเครื่องจริง
+  //      แต่ทำให้หน้าต่างคืนค่า ซึ่งเป็นหน้าที่เคยกินหน่วยความจำ LVGL จนหมด ทดสอบไม่ได้ถ้ามีแต่จอ
+  if (cmd == "known") {
+    uiSetSettingsKnown(true);
+    Serial.println("test: settings marked known — SAVE and RESET unlocked");
     return;
   }
 
@@ -208,7 +252,21 @@ static void handle(String cmd) {
 }
 
 void uitestPoll() {
-  if (pressed && (int32_t)(millis() - pressUntil) >= 0) pressed = false;
+  if (swiping) {
+    uint32_t el = millis() - swipeStart;
+    if (el >= SWIPE_MS) {
+      px = swipeToX;
+      py = swipeToY;
+      swiping = false;
+      pressed = false;  // the release is what ends the gesture
+    } else {
+      px = (int16_t)(swipeFromX + (int32_t)(swipeToX - swipeFromX) * (int32_t)el / (int32_t)SWIPE_MS);
+      py = (int16_t)(swipeFromY + (int32_t)(swipeToY - swipeFromY) * (int32_t)el / (int32_t)SWIPE_MS);
+      pressed = true;
+    }
+  } else if (pressed && (int32_t)(millis() - pressUntil) >= 0) {
+    pressed = false;
+  }
 
   static String line;
   while (Serial.available()) {
