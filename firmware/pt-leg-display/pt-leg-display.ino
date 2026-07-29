@@ -213,9 +213,24 @@ static void onLinkState(const LinkState& s) {
 
 void setup() {
   // [TH] เริ่มพอร์ตดีบัก, ตั้งลิงก์ UART ไปคอนโทรลเลอร์, เริ่ม UI แล้วทักทายขอค่าตั้งค่า/สถานะ
+#if UI_TEST_HOOK
+  // A screenshot pushes about 200 KB through this port in one go. The stock 256
+  // byte transmit buffer means the sender blocks almost continuously; a larger
+  // one lets whole rows queue and keeps the stalls short.
+  // [TH] การจับภาพหน้าจอส่งข้อมูลราว 200 กิโลไบต์รวดเดียว บัฟเฟอร์ส่งขนาด 256 ไบต์ตามค่าเริ่มต้น
+  //      ทำให้ฝั่งส่งค้างแทบตลอดเวลา ถ้าขยายให้ใหญ่ขึ้นจะพักข้อมูลได้ทีละแถวและค้างสั้นลง
+  Serial.setTxBufferSize(4096);
+#endif
   Serial.begin(115200);
   delay(200);  // UART0 settles after begin(); without this the first line is lost — รอ UART0 นิ่ง ไม่งั้นบรรทัดแรกหาย
-  Serial.println("pt-leg-display boot");
+  // Why the chip started. A machine that reboots on its own is otherwise a
+  // guessing game between a bad cable, a sagging supply and a firmware fault,
+  // and the three have completely different fixes: 1 is a real power-on, 3 is
+  // the reset line, 4 is the task watchdog, 5 a panic, 9 the brownout detector.
+  // [TH] บอกสาเหตุที่ชิปเริ่มทำงานใหม่ ถ้าเครื่องรีบูตเองโดยไม่มีข้อมูลนี้ จะเดาไม่ออกว่าเป็นเพราะ
+  //      สายไม่ดี ไฟตก หรือเฟิร์มแวร์ผิดพลาด ซึ่งแก้คนละทางกันหมด
+  //      1 คือเปิดเครื่องปกติ 3 คือกดรีเซ็ต 4 คือ watchdog 5 คือโปรแกรมพัง 9 คือไฟตก
+  Serial.printf("pt-leg-display boot (reset reason %d)\n", (int)esp_reset_reason());
   Serial2.begin(115200, SERIAL_8N1, 22, 27);  // UART to controller (CYD free pins) — สาย UART ไปคอนโทรลเลอร์ (ขาว่างของ CYD)
   uiBegin();
   // A missing or unreadable card is not an error worth stopping for: the roster

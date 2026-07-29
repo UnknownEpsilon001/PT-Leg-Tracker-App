@@ -81,6 +81,18 @@ void uitestCaptureStrip(const lv_area_t* area, lv_color_t* pixels) {
     b64Out((const uint8_t*)row, (size_t)(x2 - x1 + 1) * sizeof(lv_color_t));
     Serial.println();
     shotSent += (uint32_t)(x2 - x1 + 1);
+
+    // This runs inside the display flush callback, with lv_disp_flush_ready not
+    // yet called. A row is about 900 bytes of base64, so on a 115200 line the
+    // write blocks for tens of milliseconds once the transmit buffer fills — do
+    // that 240 times without letting anything else run and the task watchdog
+    // reboots the board mid-screenshot. Yielding hands the idle task its turn,
+    // which is what feeds the watchdog.
+    // [TH] โค้ดนี้ทำงานอยู่ในฟังก์ชันผลักพิกเซล ซึ่งยังไม่ได้แจ้ง lv_disp_flush_ready
+    //      หนึ่งแถวมีข้อมูลราว 900 ไบต์ บนสายความเร็ว 115200 การเขียนจะค้างหลายสิบมิลลิวินาทีเมื่อบัฟเฟอร์เต็ม
+    //      ถ้าทำแบบนั้น 240 รอบโดยไม่ปล่อยให้งานอื่นทำงานเลย ตัวเฝ้าระวังจะรีบูตบอร์ดกลางคัน
+    //      การ yield คือการปล่อยให้งานว่างได้ทำงาน ซึ่งเป็นสิ่งที่เลี้ยงตัวเฝ้าระวังไว้
+    yield();
   }
 
   if (shotSent >= shotTotal) {
