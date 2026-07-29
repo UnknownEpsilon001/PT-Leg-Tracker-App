@@ -15,3 +15,10 @@
 // [TH] เรียกครั้งเดียวต่อแป้นพิมพ์หนึ่งตัว หลังสร้างแป้นพิมพ์เสร็จ
 //      startThai กำหนดว่าจะเปิดมาเป็นภาษาไทยหรืออังกฤษ ชื่อคนไข้ใช้ไทย ส่วนหน้าตั้งค่าใช้อังกฤษ
 void thaiKbApply(lv_obj_t* kb, bool startThai);
+
+// Put the keyboard back on its screen's own script. The mode survives the
+// screen being closed, so without this a form opens on whatever script was last
+// used, anywhere in the UI.
+// [TH] ตั้งแป้นพิมพ์กลับเป็นภาษาประจำหน้าจอนั้น เพราะโหมดยังค้างอยู่แม้ปิดหน้าจอไปแล้ว
+//      ถ้าไม่ตั้งใหม่ ฟอร์มจะเปิดมาเป็นภาษาที่ใช้ล่าสุดจากหน้าไหนก็ได้
+void thaiKbSetScript(lv_obj_t* kb, bool thai);

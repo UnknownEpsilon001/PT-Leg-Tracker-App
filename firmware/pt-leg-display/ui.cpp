@@ -9,6 +9,7 @@
 #include <WiFi.h>  // settings screen scans for SSIDs — หน้าตั้งค่าใช้สแกนหา WiFi
 #include "settingsfile.h"  // settingsFileDefaults for RESET — ค่าตั้งต้นสำหรับปุ่มคืนค่า
 #include "thai_kb.h"       // Thai key pages for both keyboards — แป้นไทยของทั้งสองแป้นพิมพ์
+#include "uitest.h"        // UI_TEST_HOOK and the two accessors below — โหมดทดสอบผ่านสาย
 
 // App palette (matches the phone app's v4 rebrand)
 // [TH] ชุดสีของแอป ให้เข้ากับธีมของแอปบนมือถือ
@@ -578,6 +579,7 @@ static void leaveSubScreenForRun() {
 static void taFocused(lv_event_t* e) {
   lv_obj_t* ta = (lv_obj_t*)lv_event_get_target(e);
   lv_keyboard_set_textarea(kb, ta);
+  thaiKbSetScript(kb, false);  // these fields are ASCII — ช่องเหล่านี้ใช้อักษรอังกฤษ
   lv_obj_clear_flag(kb, LV_OBJ_FLAG_HIDDEN);
   lv_obj_scroll_to_view(ta, LV_ANIM_ON);  // keep the focused field above the keys
 }
@@ -863,6 +865,7 @@ void uiOpenSettings(const DeviceSettings& cur) {
   lv_spinbox_set_value(spinRest, cur.restSec);
 
   applySdStatus();  // the label exists only now, on the first open — ป้ายเพิ่งมีตัวตนตอนนี้
+  thaiKbSetScript(kb, false);  // same reason as the add form — ด้วยเหตุผลเดียวกับฟอร์มลงทะเบียน
   hideKeyboard();
   lv_obj_add_flag(ddScan, LV_OBJ_FLAG_HIDDEN);  // stale scan results
   lv_obj_scroll_to_y(lv_obj_get_parent(taSsid), 0, LV_ANIM_OFF);
@@ -1000,6 +1003,12 @@ static void hideAddKeyboard() {
 static void addFieldFocused(lv_event_t* e) {
   lv_obj_t* ta = (lv_obj_t*)lv_event_get_target(e);
   lv_keyboard_set_textarea(kbAdd, ta);
+  // Back to Thai on every field tap: this is the form Thai names get typed into,
+  // and the keyboard's mode outlives the screen, so one trip to Latin would
+  // otherwise make it a Latin form for good.
+  // [TH] กลับเป็นภาษาไทยทุกครั้งที่แตะช่องกรอก เพราะฟอร์มนี้มีไว้พิมพ์ชื่อไทย
+  //      และโหมดแป้นพิมพ์ค้างอยู่แม้ปิดหน้าจอ ถ้าเคยสลับไปอังกฤษครั้งเดียวจะกลายเป็นฟอร์มอังกฤษถาวร
+  thaiKbSetScript(kbAdd, true);
   lv_obj_clear_flag(kbAdd, LV_OBJ_FLAG_HIDDEN);
 }
 
@@ -1058,7 +1067,14 @@ static void buildAddForm() {
   lv_obj_align(save, LV_ALIGN_RIGHT_MID, 8, 0);
 
   lv_obj_t* col = lv_obj_create(scrAdd);
-  lv_obj_set_size(col, lv_pct(100), 80);
+  // 80 px held two of the three fields: the age box started at y=120 and fell
+  // outside the container, so it could only be reached by scrolling a column
+  // that gives no sign it scrolls. The screen below the top bar is 196 px, and
+  // the keyboard overlaps the lower half only while it is showing.
+  // [TH] ความสูง 80 พิกเซลใส่ได้แค่สองช่องจากสามช่อง ช่องอายุเริ่มที่ y=120 ซึ่งเลยขอบกล่องออกไป
+  //      ต้องเลื่อนถึงจะเห็น ทั้งที่กล่องไม่มีอะไรบอกว่าเลื่อนได้ พื้นที่ใต้แถบด้านบนมี 196 พิกเซล
+  //      ส่วนแป้นพิมพ์จะบังครึ่งล่างเฉพาะตอนที่เปิดอยู่เท่านั้น
+  lv_obj_set_size(col, lv_pct(100), 196);
   lv_obj_align(col, LV_ALIGN_TOP_MID, 0, 44);
   lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
   lv_obj_set_style_pad_all(col, 8, 0);
@@ -1071,6 +1087,16 @@ static void buildAddForm() {
   // fine, it is only the keyboard that cannot produce them.
   // [TH] แป้นพิมพ์บนจอมีแต่ตัวอักษรละติน ชื่อที่พิมพ์ตรงนี้จึงเป็นละติน
   //      ถ้าต้องการชื่อไทย ให้แก้ไฟล์ /patients.csv จากคอมพิวเตอร์ จอแสดงผลภาษาไทยได้ปกติ
+  // Tapping the form outside a field puts the keyboard away, the way the
+  // settings screen already does. Without it the keyboard covers from y=120 and
+  // the third field ends up behind it, so the age box cannot be reached once the
+  // name has been typed — there was no way to dismiss the keys at all.
+  // [TH] แตะบริเวณฟอร์มที่ไม่ใช่ช่องกรอกแล้วแป้นพิมพ์จะถูกซ่อน เหมือนที่หน้าตั้งค่าทำอยู่แล้ว
+  //      ถ้าไม่มีสิ่งนี้ แป้นพิมพ์จะบังตั้งแต่ y=120 ลงไป ช่องที่สามจึงอยู่ใต้แป้นพิมพ์
+  //      พิมพ์ชื่อเสร็จแล้วจะกดช่องอายุไม่ได้เลย เพราะไม่มีวิธีปิดแป้นพิมพ์
+  lv_obj_add_event_cb(col, [](lv_event_t*) { hideAddKeyboard(); }, LV_EVENT_CLICKED, nullptr);
+  lv_obj_add_event_cb(bar, [](lv_event_t*) { hideAddKeyboard(); }, LV_EVENT_CLICKED, nullptr);
+
   makeAddField(col, "รหัสคนไข้ (P001)", nullptr, &taPCode);
   makeAddField(col, "นาม", nullptr, &taPName);
   makeAddField(col, "อายุ", "0123456789", &taPAge);
@@ -1095,6 +1121,12 @@ static void openAddForm() {
   lv_textarea_set_text(taPCode, "");
   lv_textarea_set_text(taPName, "");
   lv_textarea_set_text(taPAge, "");
+  // Also here, not only in addFieldFocused: LVGL fires FOCUSED when focus
+  // changes, so tapping the field that already had focus never resets anything
+  // and the form would open in whatever script was left behind last time.
+  // [TH] ต้องตั้งตรงนี้ด้วย ไม่ใช่แค่ใน addFieldFocused เพราะ LVGL ส่งเหตุการณ์ FOCUSED เฉพาะตอนที่โฟกัสเปลี่ยน
+  //      ถ้าแตะช่องเดิมที่โฟกัสอยู่แล้วจะไม่มีการตั้งค่าใหม่ ฟอร์มจะเปิดมาเป็นภาษาที่ค้างไว้จากครั้งก่อน
+  thaiKbSetScript(kbAdd, true);
   hideAddKeyboard();
   lv_scr_load(scrAdd);
 }
@@ -1174,6 +1206,31 @@ void uiShowFinish(const char* patientName, uint32_t durationSec, uint16_t reps,
 }
 
 void uiLoop() { lv_timer_handler(); }
+
+#if UI_TEST_HOOK
+// The bench harness needs two things this file alone knows: which screen is up,
+// and which textarea a typed string should land in. Everything else it can do
+// through synthetic taps. Compiled away entirely when the hook is off.
+// [TH] ตัวช่วยทดสอบต้องรู้สองอย่างที่มีแต่ไฟล์นี้รู้ คือหน้าจอไหนกำลังแสดงอยู่
+//      และข้อความที่พิมพ์ควรลงในช่องกรอกไหน ที่เหลือสั่งผ่านการแตะจำลองได้หมด
+//      ถ้าปิดโหมดทดสอบ โค้ดส่วนนี้จะไม่ถูกคอมไพล์เลย
+lv_obj_t* uiTestTextarea() {
+  if (kbAdd && !lv_obj_has_flag(kbAdd, LV_OBJ_FLAG_HIDDEN)) return lv_keyboard_get_textarea(kbAdd);
+  if (kb && !lv_obj_has_flag(kb, LV_OBJ_FLAG_HIDDEN)) return lv_keyboard_get_textarea(kb);
+  return nullptr;
+}
+
+const char* uiTestScreenName() {
+  lv_obj_t* s = lv_scr_act();
+  if (s == scrMain) return "main";
+  if (s == scrSettings) return "settings";
+  if (s == scrData) return "data";
+  if (s == scrAdd) return "add";
+  if (s == scrFinish) return "finish";
+  if (s == scrConfirmReset) return "confirm";
+  return "unknown";
+}
+#endif
 
 
 

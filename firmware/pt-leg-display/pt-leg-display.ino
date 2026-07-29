@@ -19,6 +19,14 @@
 #include "store.h"     // patient roster on the SD card — ทะเบียนคนไข้บนการ์ด SD
 #include "sdlog.h"     // session rows written to the SD card — บันทึกผลแต่ละรอบลงการ์ด
 #include "settingsfile.h"  // /settings.json on the card — ค่าตั้งค่าบนการ์ด
+#include "uitest.h"        // bench-only serial control of the UI — โหมดทดสอบผ่านสาย
+
+// Both drive the USB serial port, so enabling both means two readers fighting
+// over the same bytes and neither working.
+// [TH] ทั้งสองโหมดใช้พอร์ตยูเอสบีเดียวกัน ถ้าเปิดพร้อมกันจะแย่งกันอ่านและพังทั้งคู่
+#if UI_TEST_HOOK && LINK_OVER_USB
+#error "UI_TEST_HOOK and LINK_OVER_USB both take the USB serial port; enable only one"
+#endif
 
 Link gLink;  // ลิงก์ UART ไปยังคอนโทรลเลอร์
 static bool uiRunning = false;
@@ -225,6 +233,7 @@ void setup() {
   gCardSettings = settingsFileLoad(gLast);
   Serial.printf("settings source: %s\n", gCardSettings ? "sd card" : "controller nvs");
   if (gCardSettings) uiSetDeviceCode(gLast.deviceCode.c_str());
+  uitestBegin();  // no-op unless UI_TEST_HOOK — ไม่ทำอะไรเลยถ้าไม่ได้เปิดโหมดทดสอบ
   uiSetCallbacks(onOpenSettings, onOpenData);
   uiSetDataCallbacks(dataCount, dataGet, dataAdd, dataSetActive);
   uiSetSettingsSaved(onSaveFromUi);
@@ -315,6 +324,7 @@ void loop() {
     if (cardNow && !gCardWasPresent) settingsFileForget();
     gCardWasPresent = cardNow;
   }
+  uitestPoll();  // no-op unless UI_TEST_HOOK — ไม่ทำอะไรเลยถ้าไม่ได้เปิดโหมดทดสอบ
   delay(2);
 }
 

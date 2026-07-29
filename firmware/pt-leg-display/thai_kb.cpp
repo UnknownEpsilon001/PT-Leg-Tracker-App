@@ -54,6 +54,36 @@ static const lv_btnmatrix_ctrl_t CTRL_TH2[] = {
   2, 2, 6, 2
 };
 
+// The Latin pages are ours too, because LVGL's stock ones have no globe key:
+// its bottom row is close / left / space / right / OK, so a keyboard switched to
+// Latin could never get back to Thai — and the mode outlives the screen, so
+// reopening the form did not rescue it either. Ten columns here, phone-shaped;
+// the Thai pages need twelve only because Kedmanee has twelve.
+// [TH] แป้นภาษาอังกฤษก็ต้องทำเองด้วย เพราะแป้นที่มากับ LVGL ไม่มีปุ่มลูกโลก
+//      แถวล่างของมันคือปิด/ซ้าย/เว้นวรรค/ขวา/ตกลง เมื่อสลับเป็นอังกฤษแล้วจะกลับมาเป็นไทยไม่ได้เลย
+//      และโหมดยังค้างอยู่แม้ปิดหน้าจอไปแล้ว เปิดใหม่ก็ไม่ช่วย
+//      แป้นอังกฤษใช้สิบคอลัมน์แบบโทรศัพท์ ส่วนแป้นไทยต้องใช้สิบสองเพราะผังเกษมณีมีสิบสอง
+static const char* MAP_EN1[] = {
+  "q", "w", "e", "r", "t", "y", "u", "i", "o", "p", "\n",
+  "a", "s", "d", "f", "g", "h", "j", "k", "l", "\n",
+  LV_SYMBOL_UP, "z", "x", "c", "v", "b", "n", "m", LV_SYMBOL_BACKSPACE, "\n",
+  "?123", LV_SYMBOL_KEYBOARD, " ", LV_SYMBOL_OK, ""
+};
+
+static const char* MAP_EN2[] = {
+  "Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P", "\n",
+  "A", "S", "D", "F", "G", "H", "J", "K", "L", "\n",
+  LV_SYMBOL_UP, "Z", "X", "C", "V", "B", "N", "M", LV_SYMBOL_BACKSPACE, "\n",
+  "?123", LV_SYMBOL_KEYBOARD, " ", LV_SYMBOL_OK, ""
+};
+
+static const lv_btnmatrix_ctrl_t CTRL_EN[] = {
+  1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+  1, 1, 1, 1, 1, 1, 1, 1, 1,
+  1, 1, 1, 1, 1, 1, 1, 1, 1,
+  2, 2, 4, 2
+};
+
 // LVGL's own keyboard handler knows only the keys in its own maps. A "?123" or
 // globe key defined in a user map is not one of them, so the stock handler types
 // the label into the textarea instead of switching pages — a patient called
@@ -72,9 +102,14 @@ static void thaiKbEvent(lv_event_t* e) {
   // Page and script switching.
   // [TH] การสลับหน้าแป้นและสลับภาษา
   if (strcmp(txt, LV_SYMBOL_UP) == 0) {
-    lv_keyboard_mode_t m = lv_keyboard_get_mode(kb);
-    lv_keyboard_set_mode(kb, m == LV_KEYBOARD_MODE_USER_1 ? LV_KEYBOARD_MODE_USER_2
-                                                          : LV_KEYBOARD_MODE_USER_1);
+    // Shift means "the other half of this script", whichever script is showing.
+    // [TH] ปุ่ม Shift หมายถึงสลับไปอีกครึ่งหนึ่งของภาษาที่กำลังใช้อยู่ ไม่ว่าจะเป็นภาษาใด
+    switch (lv_keyboard_get_mode(kb)) {
+      case LV_KEYBOARD_MODE_USER_1: lv_keyboard_set_mode(kb, LV_KEYBOARD_MODE_USER_2); break;
+      case LV_KEYBOARD_MODE_USER_2: lv_keyboard_set_mode(kb, LV_KEYBOARD_MODE_USER_1); break;
+      case LV_KEYBOARD_MODE_TEXT_UPPER: lv_keyboard_set_mode(kb, LV_KEYBOARD_MODE_TEXT_LOWER); break;
+      default: lv_keyboard_set_mode(kb, LV_KEYBOARD_MODE_TEXT_UPPER); break;
+    }
     return;
   }
   if (strcmp(txt, LV_SYMBOL_KEYBOARD) == 0) {
@@ -114,7 +149,18 @@ static void thaiKbEvent(lv_event_t* e) {
 void thaiKbApply(lv_obj_t* kb, bool startThai) {
   lv_keyboard_set_map(kb, LV_KEYBOARD_MODE_USER_1, MAP_TH1, CTRL_TH1);
   lv_keyboard_set_map(kb, LV_KEYBOARD_MODE_USER_2, MAP_TH2, CTRL_TH2);
+  lv_keyboard_set_map(kb, LV_KEYBOARD_MODE_TEXT_LOWER, MAP_EN1, CTRL_EN);
+  lv_keyboard_set_map(kb, LV_KEYBOARD_MODE_TEXT_UPPER, MAP_EN2, CTRL_EN);
   lv_obj_remove_event_cb(kb, lv_keyboard_def_event_cb);
   lv_obj_add_event_cb(kb, thaiKbEvent, LV_EVENT_VALUE_CHANGED, NULL);
-  if (startThai) lv_keyboard_set_mode(kb, LV_KEYBOARD_MODE_USER_1);
+  thaiKbSetScript(kb, startThai);
+}
+
+// The mode outlives the screen: a keyboard left on Latin is still on Latin the
+// next time the form opens, which makes the add-patient form quietly stop being
+// a Thai form after one visit. Callers reset it when they show the keyboard.
+// [TH] โหมดของแป้นพิมพ์ค้างอยู่แม้ปิดหน้าจอไปแล้ว ถ้าเคยสลับเป็นอังกฤษไว้ เปิดฟอร์มครั้งถัดไปก็ยังเป็นอังกฤษ
+//      ฟอร์มลงทะเบียนคนไข้จะเลิกเป็นฟอร์มภาษาไทยไปเงียบๆ หลังใช้ครั้งเดียว ตัวเรียกจึงต้องตั้งค่าใหม่ทุกครั้งที่เปิด
+void thaiKbSetScript(lv_obj_t* kb, bool thai) {
+  lv_keyboard_set_mode(kb, thai ? LV_KEYBOARD_MODE_USER_1 : LV_KEYBOARD_MODE_TEXT_LOWER);
 }
