@@ -215,6 +215,66 @@ it on a PC, and accepted for a clinic LAN.
      โดยยึดค่าจากการ์ดเป็นหลัก แก้รหัสผ่าน WiFi จากคอมพิวเตอร์ได้ และเปลี่ยนบอร์ดคอนโทรลเลอร์
      ได้โดยไม่ต้องพิมพ์ใหม่ รหัสผ่านเก็บเป็นข้อความธรรมดาบนการ์ด ยอมรับได้สำหรับเครือข่ายในคลินิก
 
+## Thai keyboard
+
+Both on-screen keyboards carry Thai, defined in `pt-leg-display/thai_kb.cpp` and
+installed into LVGL's `USER_1` (unshifted) and `USER_2` (shifted) modes. The
+layout is Kedmanee in the row order a Thai keyboard has — number row first, then
+the three letter rows — at twelve columns and 26 px keys. Ten wide columns were
+tried first for bigger keys and rejected: moving บ and ล off the end of the first
+row shifts every key after them, and the layout stops matching the one in the
+typist's hands.
+
+The add-patient keyboard opens on Thai for the name field and on Latin for the
+code and age fields; the age field accepts digits only, so a Thai keyboard there
+types nothing at all. The settings keyboard opens on Latin, because `deviceCode`
+is matched byte-for-byte by the server and `serverUrl` must resolve.
+
+Three things here are not obvious and were each found the hard way:
+
+- **The stock LVGL handler cannot be kept.** `lv_keyboard_def_event_cb`
+  recognises only the control keys in its own maps and types anything else into
+  the textarea, so a page-switch key from a user map lands inside the patient's
+  name. `thaiKbApply` removes it, says so on the serial line if the removal
+  fails, and installs a replacement that owns every control key.
+- **The Latin pages are ours too.** LVGL's stock bottom row is
+  close/left/space/right/OK with no globe key, so a keyboard switched to Latin
+  could never get back to Thai — and the mode outlives the screen, so reopening
+  the form did not rescue it either.
+- **Combining marks need a base on their key.** Kanit gives `ิ ี ่ ้ ุ ึ` and the
+  rest `adv_w 0` and a negative `ofs_x`, so alone on a key they are drawn left of
+  the label box and clipped away — every mark key rendered blank. Their labels
+  carry **two** leading spaces (one is not wide enough) and the handler types
+  only the mark.
+
+Combining marks stack correctly at thai14, which is what the roster and the text
+fields use. At thai20/28 the marks share a baseline and overlap — see
+`docs/superpowers/specs/2026-07-28-thai-keyboard-design.md` for the measurements.
+[TH] แป้นพิมพ์ไทยอยู่ในโหมด USER_1 และ USER_2 ของ LVGL ผังแบบเกษมณี สิบสองคอลัมน์ ปุ่มกว้าง 26 พิกเซล
+     ฟอร์มลงทะเบียนเปิดเป็นไทยเฉพาะช่องชื่อ ส่วนช่องรหัสและอายุเป็นอังกฤษ หน้าตั้งค่าเปิดเป็นอังกฤษ
+     ปุ่มสระและวรรณยุกต์ต้องมีช่องว่างนำหน้าสองช่อง ไม่งั้นจะถูกวาดนอกกรอบและปุ่มจะว่างเปล่า
+
+## Driving the UI from a PC (`UI_TEST_HOOK`)
+
+`pt-leg-display/uitest.h` carries a flag that is `0` in every commit. Set it to
+`1` for a bench run and the display takes commands on the USB serial line:
+`tap X Y`, `type TEXT`, `clear`, `ta`, `screen`, `mem`, `cat PATH`, `shot`,
+`shot x1 y1 x2 y2`, `reset`. Taps use screen coordinates and bypass the touch
+panel's calibration, so a scripted run repeats exactly.
+
+`shot` streams the screen back as one base64 line per pixel row — there is no
+framebuffer to read, so the display flush callback tees each strip out as LVGL
+draws it. A full frame is about 200 KB and takes roughly twenty seconds at
+115200; a rectangle is much quicker and is the way to inspect one label.
+
+It cannot be enabled alongside `LINK_OVER_USB` — both own the port, and the build
+fails with an `#error` if you try. And it cannot see anything the firmware does
+not know: a field holding `เกิ่น` reads the same whether the glyphs drew or came
+out as boxes. That is what `shot` is for.
+[TH] แฟล็กในไฟล์ uitest.h ต้องเป็น 0 ทุกครั้งที่ commit เปิดเป็น 1 เฉพาะตอนทดสอบ
+     แล้วสั่งงานจอผ่านสาย USB ได้ ทั้งแตะ พิมพ์ อ่านค่า ดูหน่วยความจำ ดึงไฟล์ และจับภาพหน้าจอ
+     เปิดพร้อม LINK_OVER_USB ไม่ได้ เพราะใช้พอร์ตเดียวกัน
+
 ## Shared files between the two sketches
 
 `link.h`, `link.cpp`, `session.h` and `settings.h` exist in **both** sketch
