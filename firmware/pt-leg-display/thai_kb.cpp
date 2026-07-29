@@ -1,4 +1,5 @@
 #include "thai_kb.h"
+#include <Arduino.h>  // Serial, for the one failure worth shouting about
 #include <string.h>
 
 // Kedmanee, in the row order a Thai keyboard actually has: the number row, then
@@ -151,7 +152,15 @@ void thaiKbApply(lv_obj_t* kb, bool startThai) {
   lv_keyboard_set_map(kb, LV_KEYBOARD_MODE_USER_2, MAP_TH2, CTRL_TH2);
   lv_keyboard_set_map(kb, LV_KEYBOARD_MODE_TEXT_LOWER, MAP_EN1, CTRL_EN);
   lv_keyboard_set_map(kb, LV_KEYBOARD_MODE_TEXT_UPPER, MAP_EN2, CTRL_EN);
-  lv_obj_remove_event_cb(kb, lv_keyboard_def_event_cb);
+  // Everything here rests on the stock handler being gone. If it is not, both
+  // run, and the one that does not recognise a user map's control keys appends
+  // their labels to the textarea — a patient saved as "สมชาย?123", silently, onto
+  // the card. Too quiet a failure to leave unreported.
+  // [TH] ทั้งหมดนี้ตั้งอยู่บนเงื่อนไขว่าตัวจัดการเดิมถูกถอดออกแล้ว ถ้าไม่ถูกถอด จะทำงานพร้อมกันทั้งคู่
+  //      ตัวที่ไม่รู้จักปุ่มควบคุมของแป้นที่เราสร้างเองจะพิมพ์ข้อความบนปุ่มลงในช่องกรอก
+  //      กลายเป็นชื่อคนไข้ "สมชาย?123" บันทึกลงการ์ดไปเงียบๆ จึงต้องรายงานถ้าถอดไม่สำเร็จ
+  if (!lv_obj_remove_event_cb(kb, lv_keyboard_def_event_cb))
+    Serial.println("thai_kb: could not remove LVGL's keyboard handler — keys will double-handle");
   lv_obj_add_event_cb(kb, thaiKbEvent, LV_EVENT_VALUE_CHANGED, NULL);
   thaiKbSetScript(kb, startThai);
 }

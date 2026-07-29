@@ -883,7 +883,7 @@ static bool (*cbAdd)(const char*, const char*, int) = nullptr;
 static void (*cbSetActive)(int) = nullptr;
 
 static lv_obj_t *scrData, *lblDataTitle, *lstPatients;
-static lv_obj_t *scrAdd, *taPCode, *taPName, *taPAge, *kbAdd;
+static lv_obj_t *scrAdd, *taPCode, *taPName, *taPAge, *kbAdd, *colAdd;
 
 void uiSetDataCallbacks(int (*count)(), const Patient* (*get)(int),
                         bool (*add)(const char*, const char*, int),
@@ -997,19 +997,34 @@ static String sanitize(const char* s) {
 static void hideAddKeyboard() {
   if (!kbAdd) return;
   lv_obj_add_flag(kbAdd, LV_OBJ_FLAG_HIDDEN);
+  // The column gets its full height back, so all three fields are on screen
+  // whenever the keys are not.
+  // [TH] คืนความสูงเต็มให้กล่องช่องกรอก ทั้งสามช่องจะได้เห็นครบตอนที่ไม่มีแป้นพิมพ์บัง
+  if (colAdd) lv_obj_set_height(colAdd, 196);
   lv_keyboard_set_textarea(kbAdd, nullptr);
 }
 
 static void addFieldFocused(lv_event_t* e) {
   lv_obj_t* ta = (lv_obj_t*)lv_event_get_target(e);
   lv_keyboard_set_textarea(kbAdd, ta);
-  // Back to Thai on every field tap: this is the form Thai names get typed into,
-  // and the keyboard's mode outlives the screen, so one trip to Latin would
-  // otherwise make it a Latin form for good.
-  // [TH] กลับเป็นภาษาไทยทุกครั้งที่แตะช่องกรอก เพราะฟอร์มนี้มีไว้พิมพ์ชื่อไทย
-  //      และโหมดแป้นพิมพ์ค้างอยู่แม้ปิดหน้าจอ ถ้าเคยสลับไปอังกฤษครั้งเดียวจะกลายเป็นฟอร์มอังกฤษถาวร
-  thaiKbSetScript(kbAdd, true);
+
+  // Thai for the name, Latin for the other two. Forcing Thai on all three made
+  // the age box unusable: it accepts only 0-9, so LVGL dropped every Thai key
+  // press and the keyboard looked alive while typing nothing. The patient code
+  // is Latin by convention for the same reason.
+  // [TH] ช่องชื่อใช้ภาษาไทย อีกสองช่องใช้ภาษาอังกฤษ ถ้าบังคับเป็นไทยทั้งสามช่อง ช่องอายุจะใช้ไม่ได้เลย
+  //      เพราะรับเฉพาะตัวเลข 0-9 อักษรไทยที่กดจะถูกทิ้งทั้งหมด แป้นดูเหมือนทำงานแต่พิมพ์อะไรไม่ออก
+  //      ส่วนรหัสคนไข้ก็ใช้อักษรอังกฤษตามที่ใช้กันมา
+  thaiKbSetScript(kbAdd, ta == taPName);
+
+  // Shrink the field column to the strip above the keyboard before scrolling the
+  // focused field into it, so the box being typed into is never underneath the
+  // keys that the same tap just raised.
+  // [TH] ย่อความสูงของกล่องช่องกรอกให้เหลือเฉพาะส่วนเหนือแป้นพิมพ์ก่อน แล้วค่อยเลื่อนช่องที่โฟกัสเข้ามา
+  //      ช่องที่กำลังพิมพ์จะได้ไม่ไปอยู่ใต้แป้นพิมพ์ที่เพิ่งถูกเปิดจากการแตะครั้งเดียวกัน
+  lv_obj_set_height(colAdd, 76);
   lv_obj_clear_flag(kbAdd, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_scroll_to_view(ta, LV_ANIM_ON);
 }
 
 static void addSaveClicked(lv_event_t*) {
@@ -1040,7 +1055,13 @@ static lv_obj_t* makeAddField(lv_obj_t* parent, const char* placeholder,
   lv_obj_set_style_bg_color(ta, lv_color_hex(COL_SURFACE), 0);
   lv_obj_set_style_text_color(ta, lv_color_hex(COL_TEXT), 0);
   lv_obj_set_style_border_width(ta, 0, 0);
+  // CLICKED as well as FOCUSED: FOCUSED fires only when focus moves, so tapping
+  // the field that already had focus would otherwise leave the keyboard on
+  // whatever script the last field wanted.
+  // [TH] ผูกทั้ง CLICKED และ FOCUSED เพราะ FOCUSED เกิดเฉพาะตอนที่โฟกัสย้ายที่
+  //      ถ้าแตะช่องที่โฟกัสอยู่แล้ว แป้นพิมพ์จะค้างเป็นภาษาของช่องก่อนหน้า
   lv_obj_add_event_cb(ta, addFieldFocused, LV_EVENT_FOCUSED, nullptr);
+  lv_obj_add_event_cb(ta, addFieldFocused, LV_EVENT_CLICKED, nullptr);
   *out = ta;
   return ta;
 }
@@ -1066,7 +1087,7 @@ static void buildAddForm() {
   lv_obj_set_size(save, 90, 34);
   lv_obj_align(save, LV_ALIGN_RIGHT_MID, 8, 0);
 
-  lv_obj_t* col = lv_obj_create(scrAdd);
+  lv_obj_t* col = colAdd = lv_obj_create(scrAdd);
   // 80 px held two of the three fields: the age box started at y=120 and fell
   // outside the container, so it could only be reached by scrolling a column
   // that gives no sign it scrolls. The screen below the top bar is 196 px, and
@@ -1083,10 +1104,10 @@ static void buildAddForm() {
   lv_obj_set_style_border_width(col, 0, 0);
 
   // The on-screen keyboard is Latin-only, so names typed here are Latin. Thai
-  // names can still be put in /patients.csv from a PC — the screen renders them
-  // fine, it is only the keyboard that cannot produce them.
-  // [TH] แป้นพิมพ์บนจอมีแต่ตัวอักษรละติน ชื่อที่พิมพ์ตรงนี้จึงเป็นละติน
-  //      ถ้าต้องการชื่อไทย ให้แก้ไฟล์ /patients.csv จากคอมพิวเตอร์ จอแสดงผลภาษาไทยได้ปกติ
+  // The name field takes Thai from the on-screen keyboard; the code and age
+  // fields stay Latin, and the age field accepts digits only.
+  // [TH] ช่องชื่อพิมพ์ภาษาไทยจากแป้นพิมพ์บนจอได้ ส่วนช่องรหัสและอายุใช้อักษรอังกฤษ
+  //      และช่องอายุรับเฉพาะตัวเลข
   // Tapping the form outside a field puts the keyboard away, the way the
   // settings screen already does. Without it the keyboard covers from y=120 and
   // the third field ends up behind it, so the age box cannot be reached once the
