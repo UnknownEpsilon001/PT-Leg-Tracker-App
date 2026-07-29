@@ -294,7 +294,7 @@ Prereq: CYD flashed, microSD in the slot, a PC card reader for step 2.
 
 - [x] **Step 4: Latin still works** — open the settings screen, tap เครือข่าย WiFi. Expected: the keyboard opens Latin, typing works, บันทึก still reaches the controller and the card.
 
-- [ ] **Step 5: Page flips do not leak** — flip ⇧, the globe and `?123` 20+ times across both keyboards. Expected: no freeze. Optional temporary print in `loop()`:
+- [x] **Step 5: Page flips do not leak** — flip ⇧, the globe and `?123` 20+ times across both keyboards. Expected: no freeze. Optional temporary print in `loop()`:
 
 ```cpp
   lv_mem_monitor_t m; lv_mem_monitor(&m);
@@ -303,9 +303,9 @@ Prereq: CYD flashed, microSD in the slot, a PC card reader for step 2.
 
 Free bytes flat across all flips, not trending down. Remove the print before committing.
 
-- [ ] **Step 6: Key accuracy** — type all four character rows on both Thai pages. Expected: the character you meant is the character you get. 32 px keys on a resistive panel are the least certain part of this design; if a row misses consistently, note which and stop — that is a calibration question, not a keyboard one.
+- [x] **Step 6: Key accuracy** — type all four character rows on both Thai pages. Expected: the character you meant is the character you get. 32 px keys on a resistive panel are the least certain part of this design; if a row misses consistently, note which and stop — that is a calibration question, not a keyboard one.
 
-- [ ] **Step 7: Document it in `firmware/README.md`** — add a section after the settings section:
+- [x] **Step 7: Document it in `firmware/README.md`** — add a section after the settings section:
 
 ````markdown
 ## Thai keyboard
@@ -337,7 +337,7 @@ text that may carry a vowel and a tone mark on one consonant.
      ต้องเป็นอักษรอังกฤษ ไม่มีการกดค้างเลือกตัวอักษร ทุกตัวจึงต้องอยู่ในสองหน้านี้
 ````
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add firmware/README.md
