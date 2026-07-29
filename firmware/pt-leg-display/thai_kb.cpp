@@ -12,10 +12,10 @@
 //      เพราะ บ กับ ล จะหลุดไปแถวอื่น แล้วปุ่มถัดจากนั้นเลื่อนตามกันหมด ผังจึงไม่ตรงกับที่คนพิมพ์จำได้
 //      ใช้สิบสองคอลัมน์ ปุ่มกว้าง 26 พิกเซล ถือเป็นราคาที่ต้องจ่ายเพื่อความถูกต้องของผัง
 static const char* MAP_TH1[] = {
-  "ๅ", "/", "_", "ภ", "ถ", "ุ", "ึ", "ค", "ต", "จ", "ข", "ช", "\n",
-  "ๆ", "ไ", "ำ", "พ", "ะ", "ั", "ี", "ร", "น", "ย", "บ", "ล", "\n",
-  "ฟ", "ห", "ก", "ด", "เ", "้", "่", "า", "ส", "ว", "ง", "ฃ", "\n",
-  LV_SYMBOL_UP, "ผ", "ป", "แ", "อ", "ิ", "ื", "ท", "ม", "ใ", "ฝ", LV_SYMBOL_BACKSPACE, "\n",
+  "ๅ", "/", "_", "ภ", "ถ", "  ุ", "  ึ", "ค", "ต", "จ", "ข", "ช", "\n",
+  "ๆ", "ไ", "ำ", "พ", "ะ", "  ั", "  ี", "ร", "น", "ย", "บ", "ล", "\n",
+  "ฟ", "ห", "ก", "ด", "เ", "  ้", "  ่", "า", "ส", "ว", "ง", "ฃ", "\n",
+  LV_SYMBOL_UP, "ผ", "ป", "แ", "อ", "  ิ", "  ื", "ท", "ม", "ใ", "ฝ", LV_SYMBOL_BACKSPACE, "\n",
   "?123", LV_SYMBOL_KEYBOARD, " ", LV_SYMBOL_OK, ""
 };
 
@@ -27,10 +27,10 @@ static const char* MAP_TH1[] = {
 //      เพราะปุ่มของ LVGL ไม่มีการกดค้างเพื่อเลือกตัวอักษรอื่น จึงไม่มีที่เก็บตัวที่ใช้น้อยไว้ที่อื่น
 //      ส่วนเลขไทยใส่ไว้ในแถวตัวเลขตามผังเกษมณี เพราะแถวนี้มีอยู่แล้ว
 static const char* MAP_TH2[] = {
-  "+", "๑", "๒", "๓", "๔", "ู", "฿", "๕", "๖", "๗", "๘", "๙", "\n",
-  "๐", "\"", "ฎ", "ฑ", "ธ", "ํ", "๊", "ณ", "ฯ", "ญ", "ฐ", ",", "\n",
-  "ฤ", "ฆ", "ฏ", "โ", "ฌ", "็", "๋", "ษ", "ศ", "ซ", ".", "ฅ", "\n",
-  LV_SYMBOL_UP, "(", ")", "ฉ", "ฮ", "ฺ", "์", "?", "ฒ", "ฬ", "ฦ", LV_SYMBOL_BACKSPACE, "\n",
+  "+", "๑", "๒", "๓", "๔", "  ู", "฿", "๕", "๖", "๗", "๘", "๙", "\n",
+  "๐", "\"", "ฎ", "ฑ", "ธ", "  ํ", "  ๊", "ณ", "ฯ", "ญ", "ฐ", ",", "\n",
+  "ฤ", "ฆ", "ฏ", "โ", "ฌ", "  ็", "  ๋", "ษ", "ศ", "ซ", ".", "ฅ", "\n",
+  LV_SYMBOL_UP, "(", ")", "ฉ", "ฮ", "  ฺ", "  ์", "?", "ฒ", "ฬ", "ฦ", LV_SYMBOL_BACKSPACE, "\n",
   "?123", LV_SYMBOL_KEYBOARD, " ", LV_SYMBOL_OK, ""
 };
 
@@ -140,6 +140,22 @@ static void thaiKbEvent(lv_event_t* e) {
   }
   if (strcmp(txt, LV_SYMBOL_LEFT) == 0) { if (ta) lv_textarea_cursor_left(ta); return; }
   if (strcmp(txt, LV_SYMBOL_RIGHT) == 0) { if (ta) lv_textarea_cursor_right(ta); return; }
+
+  // A combining mark's key carries a leading space, and only the mark is typed.
+  // Kanit gives these marks adv_w 0 and a negative ofs_x, so they are drawn to
+  // the left of wherever the pen is: alone on a key, that is outside the label
+  // box, and the key face comes out blank. The space gives the mark something to
+  // sit on. Caught by screenshotting the keyboard — every mark key was empty.
+  // [TH] ปุ่มของสระและวรรณยุกต์มีช่องว่างนำหน้า และตอนพิมพ์จะตัดช่องว่างออก ใส่เฉพาะตัวเครื่องหมาย
+  //      ฟอนต์ Kanit ให้เครื่องหมายเหล่านี้มีความกว้าง 0 และเลื่อนไปทางซ้าย จึงถูกวาดก่อนตำแหน่งปากกา
+  //      ถ้าอยู่ลำพังบนปุ่มก็จะตกนอกกรอบข้อความ ปุ่มเลยว่างเปล่า ช่องว่างทำให้มีที่ให้เกาะ
+  //      พบจากการจับภาพหน้าจอแป้นพิมพ์ ซึ่งเห็นว่าปุ่มเครื่องหมายทุกปุ่มว่างหมด
+  if (txt[0] == ' ' && txt[1] != '\0') {
+    const char* mark = txt;
+    while (*mark == ' ') mark++;  // two spaces: one is not wide enough to hold the mark
+    if (ta) lv_textarea_add_text(ta, mark);
+    return;
+  }
 
   // Anything else is a character. lv_textarea_add_text takes a UTF-8 string, so
   // a three-byte Thai character arrives intact.

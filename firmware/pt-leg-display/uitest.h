@@ -39,6 +39,12 @@ void uitestPoll();   // read one command line, release a finished tap — อ่
 lv_obj_t* uiTestTextarea();      // textarea of whichever keyboard is showing, or null
 const char* uiTestScreenName();  // "main" / "settings" / "data" / "add" / "finish" / "confirm"
 
+// Called from the display flush callback with every strip LVGL draws. Does
+// nothing unless a screenshot is in progress.
+// [TH] ถูกเรียกจากฟังก์ชันผลักพิกเซลลงจอ พร้อมแถบภาพทุกแถบที่ LVGL วาด
+//      ถ้าไม่ได้กำลังจับภาพอยู่ ฟังก์ชันนี้จะไม่ทำอะไรเลย
+void uitestCaptureStrip(const lv_area_t* area, lv_color_t* pixels);
+
 #else
 
 static inline void uitestBegin() {}

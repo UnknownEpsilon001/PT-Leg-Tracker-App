@@ -45,6 +45,16 @@ static void flushCb(lv_disp_drv_t* disp, const lv_area_t* area, lv_color_t* pixe
   //      ถ้าสลับซ้ำตรงนี้สีจะเพี้ยนและมีขอบสีรอบตัวอักษร
   tft.pushColors((uint16_t*)&pixels->full, w * h, false);
   tft.endWrite();
+#if UI_TEST_HOOK
+  // The same strip goes out of the serial port when a screenshot is running.
+  // There is no framebuffer to read back — 320x240 at 16 bpp is 150 KB and this
+  // board draws in strips of 100 lines — so the only place a whole frame exists
+  // is right here, one piece at a time.
+  // [TH] ตอนกำลังจับภาพหน้าจอ แถบพิกเซลชุดเดียวกันนี้จะถูกส่งออกทางพอร์ตอนุกรมด้วย
+  //      บอร์ดนี้ไม่มีบัฟเฟอร์เก็บทั้งหน้าจอ เพราะ 320x240 ที่ 16 บิตต่อพิกเซลกินถึง 150 กิโลไบต์
+  //      และวาดทีละแถบ 100 บรรทัด จุดเดียวที่เห็นภาพครบคือตรงนี้ ทีละชิ้น
+  uitestCaptureStrip(area, pixels);
+#endif
   lv_disp_flush_ready(disp);
 }
 

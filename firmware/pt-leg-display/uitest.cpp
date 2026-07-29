@@ -37,6 +37,58 @@ void uitestBegin() {
   Serial.println("test: ready — tap X Y | type TEXT | clear | ta | screen | mem | cat PATH | reset");
 }
 
+// Screenshot state. A frame is captured by asking LVGL to redraw everything and
+// letting the flush callback hand each strip over as it goes past.
+// [TH] สถานะการจับภาพหน้าจอ วิธีจับคือสั่งให้ LVGL วาดใหม่ทั้งหมด
+//      แล้วรับแถบภาพจากฟังก์ชันผลักพิกเซลทีละแถบขณะที่มันวาด
+static bool shooting = false;
+static lv_area_t shotArea;
+static uint32_t shotSent = 0, shotTotal = 0;
+
+static const char B64[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+// Base64 rather than hex: half the bytes on a 115200 line, where a full frame is
+// already 150 KB and takes about twenty seconds.
+// [TH] ใช้ Base64 แทนเลขฐานสิบหก เพราะข้อมูลน้อยลงครึ่งหนึ่งบนสายความเร็ว 115200
+//      ภาพเต็มหน้าจอมีขนาดราว 150 กิโลไบต์ และใช้เวลาส่งประมาณยี่สิบวินาทีอยู่แล้ว
+static void b64Out(const uint8_t* d, size_t n) {
+  for (size_t i = 0; i < n; i += 3) {
+    uint32_t v = (uint32_t)d[i] << 16;
+    if (i + 1 < n) v |= (uint32_t)d[i + 1] << 8;
+    if (i + 2 < n) v |= d[i + 2];
+    Serial.write(B64[(v >> 18) & 63]);
+    Serial.write(B64[(v >> 12) & 63]);
+    Serial.write(i + 1 < n ? B64[(v >> 6) & 63] : '=');
+    Serial.write(i + 2 < n ? B64[v & 63] : '=');
+  }
+}
+
+void uitestCaptureStrip(const lv_area_t* area, lv_color_t* pixels) {
+  if (!shooting) return;
+
+  uint32_t w = area->x2 - area->x1 + 1;
+  for (int32_t y = area->y1; y <= area->y2; y++) {
+    if (y < shotArea.y1 || y > shotArea.y2) continue;
+    // One serial line per pixel row, tagged with its own y and x range, so a
+    // dropped or garbled line costs that row and not the whole frame.
+    // [TH] ส่งทีละแถวพิกเซล พร้อมบอกตำแหน่ง y และช่วง x ของแถวนั้น
+    //      ถ้าบรรทัดใดหายหรือเพี้ยน จะเสียแค่แถวนั้น ไม่เสียทั้งภาพ
+    int32_t x1 = area->x1 > shotArea.x1 ? area->x1 : shotArea.x1;
+    int32_t x2 = area->x2 < shotArea.x2 ? area->x2 : shotArea.x2;
+    if (x2 < x1) continue;
+    lv_color_t* row = pixels + (uint32_t)(y - area->y1) * w + (x1 - area->x1);
+    Serial.printf("SHOT %d %d %d ", (int)y, (int)x1, (int)x2);
+    b64Out((const uint8_t*)row, (size_t)(x2 - x1 + 1) * sizeof(lv_color_t));
+    Serial.println();
+    shotSent += (uint32_t)(x2 - x1 + 1);
+  }
+
+  if (shotSent >= shotTotal) {
+    shooting = false;
+    Serial.println("SHOT END");
+  }
+}
+
 static void dumpFile(const char* path) {
   File f = SD.open(path, FILE_READ);
   if (!f) {
@@ -104,6 +156,35 @@ static void handle(String cmd) {
     lv_mem_monitor(&m);
     Serial.printf("test: lvgl free=%u frag=%u%% biggest=%u\n", (unsigned)m.free_size,
                   (unsigned)m.frag_pct, (unsigned)m.free_biggest_size);
+    return;
+  }
+
+  // shot            — the whole screen
+  // shot x1 y1 x2 y2 — one rectangle, which is the fast way to look at a label
+  // [TH] shot คือจับทั้งหน้าจอ ส่วน shot พร้อมพิกัดสี่ตัวคือจับเฉพาะกรอบที่ระบุ
+  //      ซึ่งเร็วกว่ามากเวลาต้องการดูแค่ข้อความบรรทัดเดียว
+  if (cmd == "shot" || cmd.startsWith("shot ")) {
+    shotArea.x1 = 0; shotArea.y1 = 0; shotArea.x2 = 319; shotArea.y2 = 239;
+    if (cmd.startsWith("shot ")) {
+      int v[4], n = 0, from = 5;
+      while (n < 4 && from < (int)cmd.length()) {
+        int sp = cmd.indexOf(' ', from);
+        if (sp < 0) sp = cmd.length();
+        v[n++] = cmd.substring(from, sp).toInt();
+        from = sp + 1;
+      }
+      if (n == 4) {
+        shotArea.x1 = v[0]; shotArea.y1 = v[1]; shotArea.x2 = v[2]; shotArea.y2 = v[3];
+      }
+    }
+    shotSent = 0;
+    shotTotal = (uint32_t)(shotArea.x2 - shotArea.x1 + 1) * (shotArea.y2 - shotArea.y1 + 1);
+    shooting = true;
+    Serial.printf("SHOT BEGIN %d %d %d %d\n", (int)shotArea.x1, (int)shotArea.y1,
+                  (int)shotArea.x2, (int)shotArea.y2);
+    // Redraw everything: LVGL only flushes what changed, and nothing has.
+    // [TH] สั่งวาดใหม่ทั้งหมด เพราะปกติ LVGL จะผลักเฉพาะส่วนที่เปลี่ยน ซึ่งตอนนี้ไม่มีอะไรเปลี่ยน
+    lv_obj_invalidate(lv_scr_act());
     return;
   }
 
