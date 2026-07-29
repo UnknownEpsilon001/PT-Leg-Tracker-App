@@ -26,7 +26,7 @@
 // [TH] ต้องเป็น 0 ทุกครั้งที่ commit เปิดเป็น 1 เฉพาะตอนทดสอบบนโต๊ะ กติกาเดียวกับ LINK_OVER_USB
 //      และเปิดพร้อมกันทั้งสองไม่ได้ เพราะแย่งใช้พอร์ตยูเอสบีเดียวกัน
 #ifndef UI_TEST_HOOK
-#define UI_TEST_HOOK 1
+#define UI_TEST_HOOK 0
 #endif
 
 #if UI_TEST_HOOK
