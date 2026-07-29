@@ -8,6 +8,7 @@
 #include "touch_bb.h"  // touch pins live there — ขาทัชสกรีนอยู่ในไฟล์นั้น
 #include <WiFi.h>  // settings screen scans for SSIDs — หน้าตั้งค่าใช้สแกนหา WiFi
 #include "settingsfile.h"  // settingsFileDefaults for RESET — ค่าตั้งต้นสำหรับปุ่มคืนค่า
+#include "thai_kb.h"       // Thai key pages for both keyboards — แป้นไทยของทั้งสองแป้นพิมพ์
 
 // App palette (matches the phone app's v4 rebrand)
 // [TH] ชุดสีของแอป ให้เข้ากับธีมของแอปบนมือถือ
@@ -654,13 +655,20 @@ static lv_obj_t* makeField(lv_obj_t* parent, const char* label, const char* plac
   lv_obj_set_style_text_color(l, lv_color_hex(COL_MUTED), 0);
   lv_label_set_text(l, label);
 
-  // The textarea keeps the default Montserrat: everything typed into it (SSID,
-  // password, server URL, device code) is Latin, and so is the on-screen keyboard.
+  // Thai font, even though these fields are meant for Latin. The keyboard on this
+  // screen can reach Thai through its globe key, and a textarea left on Montserrat
+  // draws every Thai character as an empty box — the text is stored correctly and
+  // looks broken, which is the worst of both. Latin still renders through this
+  // font's Montserrat fallback.
+  // [TH] ใช้ฟอนต์ไทย แม้ช่องเหล่านี้ตั้งใจให้กรอกอักษรอังกฤษ
+  //      เพราะแป้นพิมพ์หน้านี้กดปุ่มลูกโลกสลับเป็นภาษาไทยได้ ถ้าใช้ฟอนต์เดิมอักษรไทยจะกลายเป็นสี่เหลี่ยมว่าง
+  //      ข้อความถูกเก็บถูกต้องแต่ดูเหมือนเสีย ซึ่งแย่ที่สุด ส่วนอักษรอังกฤษยังแสดงได้ผ่านฟอนต์สำรอง
   lv_obj_t* ta = lv_textarea_create(parent);
   lv_textarea_set_one_line(ta, true);
   lv_textarea_set_placeholder_text(ta, placeholder);
   lv_textarea_set_password_mode(ta, password);
   lv_obj_set_width(ta, lv_pct(100));
+  lv_obj_set_style_text_font(ta, &thai14, 0);
   lv_obj_set_style_bg_color(ta, lv_color_hex(COL_SURFACE), 0);
   lv_obj_set_style_text_color(ta, lv_color_hex(COL_TEXT), 0);
   lv_obj_set_style_border_width(ta, 0, 0);
@@ -831,6 +839,16 @@ static void buildSettings() {
   lv_obj_add_event_cb(kb, kbDone, LV_EVENT_READY, nullptr);   // OK key
   lv_obj_add_event_cb(kb, kbDone, LV_EVENT_CANCEL, nullptr);  // X key
   lv_obj_add_flag(kb, LV_OBJ_FLAG_HIDDEN);
+
+  // Latin on open: this screen's fields are ASCII by protocol. deviceCode is
+  // matched byte-for-byte by the server and serverUrl has to resolve, so a Thai
+  // character in either means the machine silently never pairs. Thai stays one
+  // tap away rather than being where a finger lands first.
+  // [TH] เปิดมาเป็นภาษาอังกฤษ เพราะช่องในหน้านี้ต้องเป็นอักษรอังกฤษตามข้อกำหนด
+  //      รหัสอุปกรณ์ถูกเทียบแบบตรงตัวที่เซิร์ฟเวอร์ และที่อยู่เซิร์ฟเวอร์ต้องแปลงเป็นที่อยู่จริงได้
+  //      ถ้ามีอักษรไทยปนจะจับคู่ไม่ได้โดยไม่มีข้อความเตือน ภาษาไทยจึงอยู่ถัดไปหนึ่งปุ่ม
+  lv_obj_set_style_text_font(kb, &thai20, 0);
+  thaiKbApply(kb, false);
 }
 
 void uiOpenSettings(const DeviceSettings& cur) {
@@ -1063,6 +1081,13 @@ static void buildAddForm() {
   lv_obj_add_event_cb(kbAdd, [](lv_event_t*) { hideAddKeyboard(); }, LV_EVENT_READY, nullptr);
   lv_obj_add_event_cb(kbAdd, [](lv_event_t*) { hideAddKeyboard(); }, LV_EVENT_CANCEL, nullptr);
   lv_obj_add_flag(kbAdd, LV_OBJ_FLAG_HIDDEN);
+
+  // Thai on open: this keyboard exists for ชื่อผู้ป่วย, and the code and age
+  // fields beside it are short enough to reach Latin in one tap.
+  // [TH] เปิดมาเป็นภาษาไทย เพราะแป้นนี้มีไว้พิมพ์ชื่อผู้ป่วย
+  //      ส่วนช่องรหัสและอายุกดสลับไปภาษาอังกฤษได้ในปุ่มเดียว
+  lv_obj_set_style_text_font(kbAdd, &thai20, 0);
+  thaiKbApply(kbAdd, true);
 }
 
 static void openAddForm() {

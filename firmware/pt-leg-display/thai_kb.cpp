@@ -1,48 +1,57 @@
 #include "thai_kb.h"
 #include <string.h>
 
-// Ten columns, because 320 px / 10 gives 32 px keys. A PC Kedmanee layout wants
-// twelve, and 26 px keys on a resistive panel are hard to hit.
-// [TH] ใช้สิบคอลัมน์ เพราะ 320 หารสิบได้ปุ่มกว้าง 32 พิกเซล
-//      ถ้าเรียงแบบแป้นพิมพ์คอมพิวเตอร์ต้องใช้สิบสองคอลัมน์ ปุ่มจะเหลือ 26 พิกเซล ซึ่งกดยากบนจอสัมผัสแบบต้านทาน
+// Kedmanee, in the row order a Thai keyboard actually has: the number row, then
+// the three letter rows. Reflowing it into ten wide columns was tried first and
+// rejected on sight — it moves บ and ล off the end of the first row and every
+// key after them shifts, so the layout stops matching the one in the typist's
+// hands. Twelve columns means 26 px keys, which is the price of that fidelity.
+// [TH] ผังแบบเกษมณีเรียงแถวเหมือนแป้นพิมพ์ไทยจริง คือแถวตัวเลขแล้วตามด้วยแถวตัวอักษรสามแถว
+//      เคยลองจัดใหม่ให้เหลือสิบคอลัมน์เพื่อให้ปุ่มใหญ่ขึ้น แต่ใช้ไม่ได้
+//      เพราะ บ กับ ล จะหลุดไปแถวอื่น แล้วปุ่มถัดจากนั้นเลื่อนตามกันหมด ผังจึงไม่ตรงกับที่คนพิมพ์จำได้
+//      ใช้สิบสองคอลัมน์ ปุ่มกว้าง 26 พิกเซล ถือเป็นราคาที่ต้องจ่ายเพื่อความถูกต้องของผัง
 static const char* MAP_TH1[] = {
-  "ๆ", "ไ", "ำ", "พ", "ะ", "ั", "ี", "ร", "น", "ย", "\n",
-  "บ", "ล", "ฟ", "ห", "ก", "ด", "เ", "้", "่", "า", "\n",
-  "ส", "ว", "ง", "ผ", "ป", "แ", "อ", "ิ", "ื", "ท", "\n",
-  LV_SYMBOL_UP, "ม", "ใ", "ฝ", "ถ", "ุ", "ึ", "ค", "ต", LV_SYMBOL_BACKSPACE, "\n",
+  "ๅ", "/", "_", "ภ", "ถ", "ุ", "ึ", "ค", "ต", "จ", "ข", "ช", "\n",
+  "ๆ", "ไ", "ำ", "พ", "ะ", "ั", "ี", "ร", "น", "ย", "บ", "ล", "\n",
+  "ฟ", "ห", "ก", "ด", "เ", "้", "่", "า", "ส", "ว", "ง", "ฃ", "\n",
+  LV_SYMBOL_UP, "ผ", "ป", "แ", "อ", "ิ", "ื", "ท", "ม", "ใ", "ฝ", LV_SYMBOL_BACKSPACE, "\n",
   "?123", LV_SYMBOL_KEYBOARD, " ", LV_SYMBOL_OK, ""
 };
 
-// The characters page 1 has no room for. Every Thai character must be reachable
-// from one of the two pages: LVGL's button matrix has no long-press popup, so
-// there is no third way to get at a rare consonant.
-// [TH] ตัวอักษรที่หน้าแรกใส่ไม่พอ ทุกตัวต้องกดถึงได้จากสองหน้านี้
-//      เพราะปุ่มของ LVGL ไม่มีการกดค้างเพื่อเลือกตัวอักษรอื่น
+// The shifted layer, also Kedmanee. Every Thai character has to be on one of the
+// two pages: LVGL's button matrix has no long-press popup, so there is no third
+// place to put a rare consonant. Thai numerals ride along on the number row
+// because Kedmanee puts them there and the row exists either way.
+// [TH] ชั้นที่กด Shift ก็เรียงแบบเกษมณีเช่นกัน ตัวอักษรไทยทุกตัวต้องอยู่ในสองหน้านี้
+//      เพราะปุ่มของ LVGL ไม่มีการกดค้างเพื่อเลือกตัวอักษรอื่น จึงไม่มีที่เก็บตัวที่ใช้น้อยไว้ที่อื่น
+//      ส่วนเลขไทยใส่ไว้ในแถวตัวเลขตามผังเกษมณี เพราะแถวนี้มีอยู่แล้ว
 static const char* MAP_TH2[] = {
-  "ข", "ช", "ฃ", "ฅ", "ฆ", "จ", "ฉ", "ซ", "ฌ", "ญ", "\n",
-  "ฎ", "ฏ", "ฐ", "ฑ", "ฒ", "ณ", "ธ", "ภ", "ศ", "ษ", "\n",
-  "ฬ", "ฮ", "ฤ", "ฦ", "โ", "ู", "็", "๊", "๋", "์", "\n",
-  LV_SYMBOL_UP, "ํ", "ฯ", "ฺ", "฿", "๏", "๚", "๛", LV_SYMBOL_BACKSPACE, "\n",
+  "+", "๑", "๒", "๓", "๔", "ู", "฿", "๕", "๖", "๗", "๘", "๙", "\n",
+  "๐", "\"", "ฎ", "ฑ", "ธ", "ํ", "๊", "ณ", "ฯ", "ญ", "ฐ", ",", "\n",
+  "ฤ", "ฆ", "ฏ", "โ", "ฌ", "็", "๋", "ษ", "ศ", "ซ", ".", "ฅ", "\n",
+  LV_SYMBOL_UP, "(", ")", "ฉ", "ฮ", "ฺ", "์", "?", "ฒ", "ฬ", "ฦ", LV_SYMBOL_BACKSPACE, "\n",
   "?123", LV_SYMBOL_KEYBOARD, " ", LV_SYMBOL_OK, ""
 };
 
-// The low bits of a control entry are the key's relative width, so the bottom
-// row reads 2 + 2 + 4 + 2 = ten units, matching the ten columns above it.
-// [TH] บิตล่างของค่าควบคุมคือความกว้างของปุ่ม แถวล่างจึงรวมได้ 2+2+4+2 = สิบหน่วย เท่ากับสิบคอลัมน์ด้านบน
+// The low bits of a control entry are the key's relative width, and widths are
+// relative within their own row, so the bottom row's 2 + 2 + 6 + 2 spans the
+// same width as the twelve single-width keys above it.
+// [TH] บิตล่างของค่าควบคุมคือความกว้างของปุ่ม และความกว้างคิดเทียบกันเฉพาะภายในแถวเดียวกัน
+//      แถวล่างจึงใช้ 2+2+6+2 ซึ่งกว้างเท่ากับปุ่มขนาดหนึ่งหน่วยสิบสองปุ่มในแถวบน
 static const lv_btnmatrix_ctrl_t CTRL_TH1[] = {
-  1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-  1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-  1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-  1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-  2, 2, 4, 2
+  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+  2, 2, 6, 2
 };
 
 static const lv_btnmatrix_ctrl_t CTRL_TH2[] = {
-  1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-  1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-  1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-  2, 1, 1, 1, 1, 1, 1, 1, 1,
-  2, 2, 4, 2
+  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+  2, 2, 6, 2
 };
 
 // LVGL's own keyboard handler knows only the keys in its own maps. A "?123" or
