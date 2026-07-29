@@ -43,7 +43,7 @@ Task 1 is self-contained and compiles alone. Task 2 wires it in and is the first
 - Consumes: LVGL only. No project headers, no SD, no fonts — the caller owns the font.
 - Produces, consumed by Task 2: `void thaiKbApply(lv_obj_t* kb, bool startThai)`.
 
-- [ ] **Step 1: Write `thai_kb.h`**
+- [x] **Step 1: Write `thai_kb.h`**
 
 ```cpp
 #pragma once
@@ -65,7 +65,7 @@ Task 1 is self-contained and compiles alone. Task 2 wires it in and is the first
 void thaiKbApply(lv_obj_t* kb, bool startThai);
 ```
 
-- [ ] **Step 2: Write the key maps in `thai_kb.cpp`**
+- [x] **Step 2: Write the key maps in `thai_kb.cpp`**
 
 ```cpp
 #include "thai_kb.h"
@@ -116,7 +116,7 @@ static const lv_btnmatrix_ctrl_t CTRL_TH2[] = {
 };
 ```
 
-- [ ] **Step 3: Write the replacement event handler, below the maps**
+- [x] **Step 3: Write the replacement event handler, below the maps**
 
 ```cpp
 // LVGL's own keyboard handler knows only the keys in its own maps. A "?123" or
@@ -185,12 +185,12 @@ void thaiKbApply(lv_obj_t* kb, bool startThai) {
 }
 ```
 
-- [ ] **Step 4: Compile**
+- [x] **Step 4: Compile**
 
 Run: `arduino-cli compile --fqbn "esp32:esp32:esp32:PartitionScheme=huge_app" firmware/pt-leg-display`
 Expected: success. The module is unused until Task 2, so only compilation is proven here. If `lv_keyboard_def_event_cb` is reported undeclared, the LVGL pin has drifted off 8.4.0 — reinstall the pin rather than porting.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add firmware/pt-leg-display/thai_kb.h firmware/pt-leg-display/thai_kb.cpp
@@ -219,13 +219,13 @@ a user map would end up inside the patient's name."
 
 Both keyboards already exist and are built once inside their screen builders. This task adds two calls and the Thai font; it changes no sizes, positions or show/hide logic.
 
-- [ ] **Step 1: Include the module** — beside the other local includes at the top of `ui.cpp`:
+- [x] **Step 1: Include the module** — beside the other local includes at the top of `ui.cpp`:
 
 ```cpp
 #include "thai_kb.h"  // Thai key pages for both keyboards — แป้นไทยของทั้งสองแป้นพิมพ์
 ```
 
-- [ ] **Step 2: Apply it to the settings keyboard** — in `buildSettings`, immediately after the `lv_obj_add_flag(kb, LV_OBJ_FLAG_HIDDEN);` line:
+- [x] **Step 2: Apply it to the settings keyboard** — in `buildSettings`, immediately after the `lv_obj_add_flag(kb, LV_OBJ_FLAG_HIDDEN);` line:
 
 ```cpp
   // Latin on open: this screen's fields are ASCII by protocol. deviceCode is
@@ -239,7 +239,7 @@ Both keyboards already exist and are built once inside their screen builders. Th
   thaiKbApply(kb, false);
 ```
 
-- [ ] **Step 3: Apply it to the add-patient keyboard** — immediately after the `lv_obj_add_flag(kbAdd, LV_OBJ_FLAG_HIDDEN);` line:
+- [x] **Step 3: Apply it to the add-patient keyboard** — immediately after the `lv_obj_add_flag(kbAdd, LV_OBJ_FLAG_HIDDEN);` line:
 
 ```cpp
   // Thai on open: this keyboard exists for ชื่อผู้ป่วย, and the code and age
@@ -250,12 +250,12 @@ Both keyboards already exist and are built once inside their screen builders. Th
   thaiKbApply(kbAdd, true);
 ```
 
-- [ ] **Step 4: Compile**
+- [x] **Step 4: Compile**
 
 Run: `arduino-cli compile --fqbn "esp32:esp32:esp32:PartitionScheme=huge_app" firmware/pt-leg-display`
 Expected: success, around 50% program storage.
 
-- [ ] **Step 5: Flash and smoke-test**
+- [x] **Step 5: Flash and smoke-test**
 
 ```bash
 arduino-cli compile --fqbn "esp32:esp32:esp32:PartitionScheme=huge_app" --upload -p COM4 firmware/pt-leg-display
@@ -263,7 +263,7 @@ arduino-cli compile --fqbn "esp32:esp32:esp32:PartitionScheme=huge_app" --upload
 
 Open ข้อมูล → ลงทะเบียน, tap the name field. Expected: the keyboard appears showing Thai. Type one character and confirm it lands in the field rather than a `?`. Tap the globe and confirm Latin appears. If a key's label prints into the field instead of switching pages, the default handler was not removed.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add firmware/pt-leg-display/ui.cpp
@@ -286,13 +286,13 @@ silently. Both keep every existing size, position and event."
 
 Prereq: CYD flashed, microSD in the slot, a PC card reader for step 2.
 
-- [ ] **Step 1: Type a stack-heavy name** — add a patient named `เกิ่น`, age 30, and save. Expected: every character appears as typed, the marks stack the way they do in the roster.
+- [x] **Step 1: Type a stack-heavy name** — add a patient named `เกิ่น`, age 30, and save. Expected: every character appears as typed, the marks stack the way they do in the roster.
 
-- [ ] **Step 2: Check what reached the card** — card into a PC reader, open `patients.csv`. Expected: the row reads `<code>,เกิ่น,30`, the file is UTF-8 with no BOM, and no other row changed.
+- [x] **Step 2: Check what reached the card** — card into a PC reader, open `patients.csv`. Expected: the row reads `<code>,เกิ่น,30`, the file is UTF-8 with no BOM, and no other row changed.
 
 - [ ] **Step 3: Check the roster and finish screen** — reinsert, open ข้อมูล. Expected: the name renders correctly in the list. Select the patient, run a session with the fake controller, and confirm the finish screen shows it — that screen draws at a larger font where stacks overlap, so note how it looks.
 
-- [ ] **Step 4: Latin still works** — open the settings screen, tap เครือข่าย WiFi. Expected: the keyboard opens Latin, typing works, บันทึก still reaches the controller and the card.
+- [x] **Step 4: Latin still works** — open the settings screen, tap เครือข่าย WiFi. Expected: the keyboard opens Latin, typing works, บันทึก still reaches the controller and the card.
 
 - [ ] **Step 5: Page flips do not leak** — flip ⇧, the globe and `?123` 20+ times across both keyboards. Expected: no freeze. Optional temporary print in `loop()`:
 
