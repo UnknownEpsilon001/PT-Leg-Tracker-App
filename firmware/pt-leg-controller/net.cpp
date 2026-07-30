@@ -37,6 +37,32 @@ void netBegin(const DeviceSettings& s) {
 bool netWifiUp() { return WiFi.status() == WL_CONNECTED; }
 bool netServerUp() { return serverOk; }
 
+// The device code is typed on a touchscreen or hand-edited into settings.json on
+// the card, and neither path forbids a quote, a backslash, a space or an
+// ampersand. Pasted straight into a JSON body it produces a malformed request
+// the server rejects, and pasted into a query string it truncates or splits the
+// parameter — either way events and heartbeats stop arriving and the only signal
+// is the server showing as down, which reads as a network fault.
+// [TH] รหัสอุปกรณ์พิมพ์จากหน้าจอหรือแก้ในไฟล์บนการ์ดได้ ทั้งสองทางไม่ได้ห้ามอักขระพิเศษ
+//      ถ้าเอาไปต่อสตริงใส่ JSON ตรงๆ จะได้ข้อความผิดรูปแบบที่เซิร์ฟเวอร์ปฏิเสธ
+//      ถ้าใส่ใน query string ก็จะถูกตัดหรือแยกพารามิเตอร์ ผลคือข้อมูลไม่ถึงเซิร์ฟเวอร์
+//      และสิ่งเดียวที่เห็นคือสถานะเซิร์ฟเวอร์ดับ ซึ่งดูเหมือนปัญหาเครือข่าย
+static String urlEncode(const String& s) {
+  static const char* HEXDIG = "0123456789ABCDEF";
+  String out;
+  for (size_t i = 0; i < s.length(); i++) {
+    char c = s[i];
+    if (isalnum((unsigned char)c) || c == '-' || c == '_' || c == '.' || c == '~') {
+      out += c;
+    } else {
+      out += '%';
+      out += HEXDIG[(c >> 4) & 0x0F];
+      out += HEXDIG[c & 0x0F];
+    }
+  }
+  return out;
+}
+
 static bool post(const String& path, const String& body) {
   // Not reachable -> not "up". Returning without clearing serverOk left it frozen
   // at the last success, so the UI showed a live server while WiFi was down.
@@ -62,7 +88,7 @@ String netPollCommand() {
   http.setConnectTimeout(400);
   http.setTimeout(400);
   String url = baseUrl + "/api/device/command";
-  if (devCode.length()) url += "?deviceId=" + devCode;
+  if (devCode.length()) url += "?deviceId=" + urlEncode(devCode);
   http.begin(url);
   int code = http.GET();
   String cmd = "";
@@ -90,8 +116,16 @@ void netQueueEvent(const char* type, uint32_t elapsedSec, uint16_t reps) {
 static void tryFlushEvent() {
   if (evCount == 0) return;
   const Ev& e = evq[evHead];  // FIFO: preserve start-before-stop ordering
-  String body = String("{\"type\":\"") + e.type + "\",\"elapsedSec\":" + e.elapsed +
-                ",\"reps\":" + e.reps + ",\"deviceId\":\"" + devCode + "\"}";
+  // Serialised, not concatenated: ArduinoJson escapes whatever the device code
+  // contains. See urlEncode above for why that matters.
+  // [TH] ใช้ตัวสร้าง JSON แทนการต่อสตริง เพราะไลบรารีจะใส่อักขระหลีกให้เอง
+  JsonDocument d;
+  d["type"] = e.type;
+  d["elapsedSec"] = e.elapsed;
+  d["reps"] = e.reps;
+  d["deviceId"] = devCode;
+  String body;
+  serializeJson(d, body);
   if (post("/api/device/event", body)) {
     evHead = (evHead + 1) % EV_MAX;
     evCount--;
@@ -100,8 +134,13 @@ static void tryFlushEvent() {
 
 void netHeartbeat(const char* state, uint32_t elapsedSec, uint16_t reps) {
   // [TH] สัญญาณชีพ: บอกเซิร์ฟเวอร์ว่าอุปกรณ์ยังทำงานและอยู่สถานะใด (ส่งแล้วไม่รอผล)
-  String body = String("{\"state\":\"") + state + "\",\"elapsedSec\":" + elapsedSec +
-                ",\"reps\":" + reps + ",\"deviceId\":\"" + devCode + "\"}";
+  JsonDocument d;
+  d["state"] = state;
+  d["elapsedSec"] = elapsedSec;
+  d["reps"] = reps;
+  d["deviceId"] = devCode;
+  String body;
+  serializeJson(d, body);
   post("/api/device/heartbeat", body);
 }
 
