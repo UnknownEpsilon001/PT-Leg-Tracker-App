@@ -233,6 +233,21 @@ static void handle(String cmd) {
         shotArea.x1 = v[0]; shotArea.y1 = v[1]; shotArea.x2 = v[2]; shotArea.y2 = v[3];
       }
     }
+
+    // Clamped to the panel, and ordered. Capture ends when the pixel count is
+    // reached, so a rectangle reaching past the screen — or given backwards —
+    // sets a target no redraw can ever meet: SHOT END never comes, and every
+    // later frame keeps pouring pixel rows into the command stream until reset.
+    // [TH] จำกัดกรอบให้อยู่ในหน้าจอและเรียงลำดับให้ถูก การจับภาพจบเมื่อครบจำนวนพิกเซล
+    //      ถ้ากรอบเกินขอบจอหรือใส่กลับด้าน จำนวนเป้าหมายจะไม่มีวันครบ
+    //      สัญญาณจบจะไม่ถูกส่ง และทุกเฟรมหลังจากนั้นจะเทข้อมูลพิกเซลใส่ช่องคำสั่งจนกว่าจะรีเซ็ต
+    if (shotArea.x1 > shotArea.x2) { lv_coord_t t = shotArea.x1; shotArea.x1 = shotArea.x2; shotArea.x2 = t; }
+    if (shotArea.y1 > shotArea.y2) { lv_coord_t t = shotArea.y1; shotArea.y1 = shotArea.y2; shotArea.y2 = t; }
+    lv_coord_t maxX = lv_disp_get_hor_res(NULL) - 1, maxY = lv_disp_get_ver_res(NULL) - 1;
+    if (shotArea.x1 < 0) shotArea.x1 = 0;
+    if (shotArea.y1 < 0) shotArea.y1 = 0;
+    if (shotArea.x2 > maxX) shotArea.x2 = maxX;
+    if (shotArea.y2 > maxY) shotArea.y2 = maxY;
     shotSent = 0;
     shotTotal = (uint32_t)(shotArea.x2 - shotArea.x1 + 1) * (shotArea.y2 - shotArea.y1 + 1);
     shooting = true;

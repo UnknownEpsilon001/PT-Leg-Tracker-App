@@ -39,13 +39,25 @@ void sdlogEnsureHeader() {
 }
 
 bool sdlogWrite(const SessionRow& r) {
-  sdlogEnsureHeader();
   File f = SD.open(SESSIONS, FILE_APPEND);
   if (!f) return false;
-  f.printf("%s,%s,%s,%lu,%u,%u\n", isoLocal(r.epoch).c_str(), r.patientCode.c_str(),
-           r.patientName.c_str(), (unsigned long)r.durationSec, r.reps, r.fault ? 1 : 0);
+
+  // Built first, then written in one call and checked: printf's return value was
+  // being thrown away, so a card that accepted the open but not the bytes — a
+  // full one — reported success. sdlogFlushRing believed it and dropped the row,
+  // losing the only copy of a finished session, and half a line left behind
+  // corrupts whatever is appended next.
+  // [TH] สร้างข้อความให้ครบก่อน แล้วเขียนครั้งเดียวและตรวจผล เดิมทิ้งค่าที่ printf คืนมา
+  //      การ์ดที่เปิดไฟล์ได้แต่เขียนไม่ได้ เช่นการ์ดเต็ม จึงรายงานว่าสำเร็จ
+  //      ตัวรวบรวมแถวค้างเชื่อตามนั้นแล้วทิ้งแถวไป ผลรอบนั้นหายไปทั้งที่มีสำเนาเดียว
+  //      และบรรทัดที่เขียนค้างครึ่งเดียวยังทำให้แถวถัดไปเสียด้วย
+  String line = isoLocal(r.epoch) + "," + r.patientCode + "," + r.patientName + "," +
+                String((unsigned long)r.durationSec) + "," + String(r.reps) + "," +
+                (r.fault ? "1" : "0") + "\n";
+  size_t want = line.length();
+  size_t wrote = f.write((const uint8_t*)line.c_str(), want);
   f.close();
-  return true;
+  return wrote == want;
 }
 
 void sdlogRingPush(const SessionRow& r) {
@@ -56,6 +68,13 @@ void sdlogRingPush(const SessionRow& r) {
 }
 
 void sdlogFlushRing() {
+  // Once for the whole batch, not once per row: the header can only be missing
+  // on the first write after a mount, and the old placement cost an SD.exists
+  // probe plus an open/close for every row in the ring.
+  // [TH] ตรวจหัวตารางครั้งเดียวต่อการเขียนหนึ่งชุด ไม่ใช่ทุกแถว
+  //      หัวตารางจะขาดได้เฉพาะการเขียนครั้งแรกหลังเมานต์การ์ด
+  //      ของเดิมเสียเวลาตรวจไฟล์และเปิดปิดไฟล์ทุกแถว
+  if (ringCount > 0) sdlogEnsureHeader();
   while (ringCount > 0) {
     // Oldest first, so the file stays in chronological order.
     // [TH] เขียนแถวเก่าสุดก่อน ไฟล์จะได้เรียงตามเวลา

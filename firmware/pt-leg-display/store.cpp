@@ -69,6 +69,26 @@ void storeRemount() {
 }
 
 bool storeCardPresent() { return mounted; }
+
+// Pulling a card raises no interrupt, so `mounted` keeps claiming one until
+// something tries to write and fails. That left a swap invisible whenever the
+// machine was idle: no failed write, no remount, and the display went on serving
+// the settings and roster of a card that had left the slot. Opening the root
+// directory is the cheapest thing that actually touches the card.
+// [TH] การดึงการ์ดออกไม่มีสัญญาณแจ้ง ตัวแปร mounted จึงยังบอกว่ามีการ์ดจนกว่าจะมีการเขียนแล้วล้มเหลว
+//      ทำให้การสลับการ์ดตอนเครื่องว่างมองไม่เห็นเลย ไม่มีการเขียนล้มเหลว ก็ไม่มีการเมานต์ใหม่
+//      จอจึงใช้ค่าตั้งค่าและทะเบียนของการ์ดที่ถอดออกไปแล้ว การเปิดโฟลเดอร์รากคือวิธีที่ถูกที่สุดที่แตะการ์ดจริง
+bool storeProbe() {
+  if (!mounted) return false;
+  File root = SD.open("/");
+  if (root) {
+    root.close();
+    return true;
+  }
+  mounted = false;
+  patients.clear();
+  return false;
+}
 int storePatientCount() { return (int)patients.size(); }
 
 const Patient& storePatient(int i) {
@@ -81,9 +101,22 @@ bool storeAddPatient(const Patient& p) {
   bool newFile = !SD.exists(PATIENTS);
   File f = SD.open(PATIENTS, FILE_APPEND);
   if (!f) return false;
-  if (newFile) f.println("code,name,age");
-  f.printf("%s,%s,%u\n", p.code.c_str(), p.name.c_str(), p.age);
+
+  // The write is checked, and the roster only grows if the card took every byte.
+  // printf's result used to be discarded: a full card reported a saved patient
+  // who was on screen until the next boot and never in the file, and a half
+  // written line corrupts the row appended after it.
+  // [TH] ตรวจผลการเขียน และเพิ่มชื่อลงทะเบียนในหน่วยความจำเฉพาะเมื่อการ์ดรับข้อมูลครบ
+  //      เดิมทิ้งค่าที่ printf คืนมา การ์ดเต็มจึงรายงานว่าบันทึกคนไข้แล้ว
+  //      ชื่อจะอยู่บนจอจนกว่าจะปิดเครื่องแต่ไม่เคยอยู่ในไฟล์ และบรรทัดที่ขาดครึ่งทำให้แถวถัดไปเสีย
+  String line;
+  if (newFile) line += "code,name,age\n";
+  line += p.code + "," + p.name + "," + String(p.age) + "\n";
+  size_t want = line.length();
+  size_t wrote = f.write((const uint8_t*)line.c_str(), want);
   f.close();
+  if (wrote != want) return false;
+
   patients.push_back(p);
   return true;
 }

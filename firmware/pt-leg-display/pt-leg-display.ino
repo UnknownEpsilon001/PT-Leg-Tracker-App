@@ -303,8 +303,20 @@ void loop() {
   // after boot shows up in the data menu without a reboot.
   // [TH] ทำงานแม้ไม่มีแถวค้าง ถ้ายังไม่มีการ์ด เพื่อให้การ์ดที่เพิ่งเสียบใช้ได้ทันทีโดยไม่ต้องรีบูต
   static uint32_t lastSd = 0;
-  if (now - lastSd > 5000 && (sdlogRingDepth() > 0 || !storeCardPresent())) {
+  if (now - lastSd > 5000) {
     lastSd = now;
+    // Unconditional, where this used to run only with rows waiting or no card
+    // mounted. With a card in the slot and nothing to write, the whole block was
+    // skipped, so a card swapped on an idle machine was never noticed: the
+    // display kept serving the old card's settings and roster, and the next save
+    // wrote them onto the new card. Probing costs one directory open every five
+    // seconds and is what makes the absent-to-present edge below observable.
+    // [TH] ทำงานทุกครั้ง จากเดิมที่ทำเฉพาะตอนมีแถวค้างหรือไม่มีการ์ดเมานต์อยู่
+    //      ถ้ามีการ์ดอยู่และไม่มีอะไรต้องเขียน บล็อกนี้จะถูกข้ามทั้งหมด
+    //      การสลับการ์ดตอนเครื่องว่างจึงไม่ถูกตรวจพบ จอยังใช้ค่าและทะเบียนของการ์ดใบเก่า
+    //      และการบันทึกครั้งถัดไปจะเขียนทับการ์ดใบใหม่ การตรวจนี้เสียแค่การเปิดโฟลเดอร์ทุกห้าวินาที
+    //      และเป็นสิ่งที่ทำให้เห็นจังหวะเปลี่ยนจาก "ไม่มี" เป็น "มี" ด้านล่าง
+    storeProbe();
     if (!storeCardPresent()) storeBegin();
     int before = sdlogRingDepth();
     sdlogFlushRing();
@@ -328,8 +340,8 @@ void loop() {
     // to read the new one. Keyed on the transition rather than on remounting,
     // because storeRemount() also runs when a card that never moved simply
     // refuses writes — a full card is not a swapped card.
-    // Known gap: a swap completed between two ticks, with no failed write in
-    // between, never shows an absent state and is not caught here.
+    // Known gap: a swap completed entirely between two probes — card out and a
+    // new one in inside the same five seconds — still shows no absent state.
     // [TH] การ์ดที่เปลี่ยนจาก "ไม่มี" เป็น "มี" คือการ์ดที่เพิ่งถูกเสียบ และอาจไม่ใช่ใบเดิมที่อ่านตอนบูต
     //      สิ่งที่โมดูลจำไว้จะกลายเป็นข้อมูลของการ์ดที่ถอดออกไปแล้ว หน้าตั้งค่าจึงต้องอ่านใบใหม่
     //      ใช้จังหวะเปลี่ยนสถานะเป็นตัวตัดสิน ไม่ใช้การเมานต์ใหม่ เพราะการ์ดที่ไม่ได้ถูกถอดแต่เขียนไม่ได้

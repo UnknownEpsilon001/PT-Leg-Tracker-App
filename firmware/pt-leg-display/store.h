@@ -21,3 +21,4 @@ int storePatientCount();
 const Patient& storePatient(int i);      // 0..count-1; returns a static blank if out of range
 bool storeAddPatient(const Patient& p);  // append to CSV + RAM; false on write failure
 void storeRemount();                     // drop a stale mount and mount again (card swapped)
+bool storeProbe();                       // touch the card; drops the mount if it has gone
