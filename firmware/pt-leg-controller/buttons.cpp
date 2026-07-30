@@ -46,10 +46,34 @@ static bool takeEdge(Btn& b) {
   return e;
 }
 
+// Seeded from the pins, not from `false`. The structs used to start as
+// not-pressed, so a line already reading pressed at power-up looked like a
+// transition and raised a press edge about one debounce later. START is NC, so
+// an unplugged panel or a cut wire reads pressed forever — the machine would
+// begin lifting a leg roughly 25 ms after power-up with nobody touching it.
+// Taking the boot state as the baseline means a press has to be a release-then-
+// press seen after startup, which a broken wire can never produce.
+// [TH] ตั้งค่าเริ่มต้นจากค่าที่อ่านได้จริงจากขา ไม่ใช่กำหนดเป็น "ไม่ได้กด"
+//      เดิมโครงสร้างเริ่มที่ไม่ได้กด ถ้าตอนเปิดเครื่องขาใดอ่านได้ว่ากดอยู่ จะถูกมองว่าเพิ่งเปลี่ยนสถานะ
+//      แล้วเกิดขอบกดขึ้นหลังพ้นเวลากันเด้ง ปุ่ม START เป็นแบบปกติปิด สายที่ขาดหรือยังไม่ได้เสียบจะอ่านว่ากดค้าง
+//      เครื่องจะเริ่มยกขาผู้ป่วยเองราว 25 มิลลิวินาทีหลังเปิดเครื่องโดยไม่มีใครแตะปุ่ม
+//      การยึดสถานะตอนเปิดเครื่องเป็นค่าตั้งต้น ทำให้ต้องมีการปล่อยแล้วกดใหม่เท่านั้นจึงนับเป็นการกด
+//      ซึ่งสายที่ขาดอยู่ทำไม่ได้
+static void seed(Btn& b, uint32_t nowMs) {
+  b.lastRaw = b.stable = rawPressed(b.pin, b.nc);
+  b.changed = nowMs;
+  b.edge = false;
+}
+
 void buttonsBegin() {
   pinMode(PIN_BTN_START, INPUT_PULLUP);
   pinMode(PIN_BTN_STOP, INPUT_PULLUP);
   pinMode(PIN_BTN_RESET, INPUT_PULLUP);
+  delay(5);  // let the pullups pull the lines up before sampling — รอให้ตัวต้านทานดึงระดับขาขึ้นก่อนอ่าน
+  uint32_t now = millis();
+  seed(bStart, now);
+  seed(bStop, now);
+  seed(bReset, now);
 }
 
 void buttonsPoll(uint32_t nowMs) {
