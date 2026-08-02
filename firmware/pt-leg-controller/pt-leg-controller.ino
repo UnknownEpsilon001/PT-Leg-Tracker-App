@@ -305,7 +305,9 @@ void loop() {
   switchesPoll(now);
   buttonsPoll(now);
   gSession.tick(now, switchTop(), switchBottom());
-  // panel buttons: START (idle only), STOP (any state), RESET (idle only)
+  // panel buttons: START (from Idle or a latched Fault), STOP (any state, and it
+  // lowers the leg from Fault and from Idle as well as ending a session), RESET
+  // (only when not running, and from a Fault it lowers on the way to Idle)
   // Read all three first: each accessor clears its edge, so the debug build has
   // to see the same values this loop acts on.
   // [TH] ปุ่มหน้าปัด: START เริ่ม (เฉพาะว่าง), STOP หยุด (ตลอดเวลา), RESET ล้าง (เฉพาะว่าง)
@@ -428,11 +430,25 @@ void loop() {
     netHeartbeat(gSession.running() ? "running" : "idle", gSession.elapsedSec(now),
                  gSession.reps());
   }
-  // [TH] ส่งเหตุการณ์เมื่อ "เพิ่งเริ่ม" หรือ "เพิ่งหยุด" (ตรวจจับขอบสัญญาณครั้งเดียว)
-  if (gSession.takeStartedEdge()) netQueueEvent("started", gSession.elapsedSec(now), gSession.reps());
-  // The same edge feeds two independent records: the server event (online) and
+  // Stopped is handled BEFORE started, and the order is load-bearing. Both edges
+  // can be pending in one iteration: tick() can end a session on a fault, and the
+  // button block below it can start a new one, because running() is false in
+  // Fault. Queued the other way round the server saw started-then-stopped, where
+  // the stopped belongs to the session before it — so a server pairing the two
+  // closes the new session and leaves the faulted one open forever. A session can
+  // never start and stop within one iteration (start always lands in Lift, and no
+  // path out of Lift calls finish() in the same pass), so this order is safe.
+  // [TH] จัดการสัญญาณ "หยุด" ก่อนสัญญาณ "เริ่ม" และลำดับนี้สำคัญ
+  //      สัญญาณทั้งสองค้างอยู่พร้อมกันในลูปรอบเดียวได้ tick() จบรอบเพราะความผิดพลาดได้
+  //      และบล็อกปุ่มที่อยู่ถัดลงไปก็เริ่มรอบใหม่ได้ เพราะ running() เป็นเท็จในสถานะผิดพลาด
+  //      ถ้าเรียงกลับกัน เซิร์ฟเวอร์จะเห็นเริ่มก่อนหยุด โดยที่การหยุดนั้นเป็นของรอบก่อนหน้า
+  //      เซิร์ฟเวอร์ที่จับคู่สองเหตุการณ์นี้จะปิดรอบใหม่และทิ้งรอบที่ผิดพลาดค้างไว้ตลอดไป
+  //      รอบหนึ่งจะเริ่มและจบภายในลูปรอบเดียวไม่ได้ เพราะการเริ่มจะไปสถานะยกขาเสมอ
+  //      และไม่มีเส้นทางออกจากสถานะยกขาที่เรียก finish() ในรอบเดียวกัน ลำดับนี้จึงปลอดภัย
+  //
+  // The stopped edge feeds two independent records: the server event (online) and
   // the CYD's SD row (offline). Neither depends on the other succeeding.
-  // [TH] ขอบเดียวกันนี้ใช้บันทึกสองที่ที่ไม่ขึ้นต่อกัน: เหตุการณ์ฝั่งเซิร์ฟเวอร์ (ตอนออนไลน์)
+  // [TH] ขอบสัญญาณหยุดใช้บันทึกสองที่ที่ไม่ขึ้นต่อกัน: เหตุการณ์ฝั่งเซิร์ฟเวอร์ (ตอนออนไลน์)
   //      กับแถวข้อมูลใน SD ของจอ (ตอนออฟไลน์)
   if (gSession.takeStoppedEdge()) {
     netQueueEvent("stopped", gSession.finalElapsedSec(), gSession.finalReps());
@@ -453,6 +469,8 @@ void loop() {
     LinkDone d{gSession.finalElapsedSec(), gSession.finalReps(), epoch, gSession.finalFaulted()};
     gLink.sendDone(d);
   }
+  // [TH] ส่งเหตุการณ์ "เพิ่งเริ่ม" (ตรวจจับขอบสัญญาณครั้งเดียว)
+  if (gSession.takeStartedEdge()) netQueueEvent("started", gSession.elapsedSec(now), gSession.reps());
 
   // Settings that arrived mid-session land here, once the relays are off. After
   // the done message on purpose: applySettings restarts WiFi, and the session's

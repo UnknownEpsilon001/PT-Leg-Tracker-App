@@ -160,7 +160,21 @@ static void request(ActState dir) {
   // Relays off, but not off for long enough yet: wait out the remainder before
   // driving the other way.
   // [TH] รีเลย์ดับอยู่ แต่ยังดับไม่นานพอ ให้รอเวลาที่เหลือก่อนจึงค่อยสั่งไปอีกทาง
-  if (state == ACT_OFF && (int32_t)(millis() - offAt) < (int32_t)DEADTIME_MS) {
+  // Unsigned here, unlike the compares against the loop's captured `now`. offAt is
+  // always stamped from millis() and so is never ahead of it, which means the
+  // signed form bought nothing — and cost a great deal: for an elapsed time
+  // between 24.9 and 49.7 days the cast goes negative, every request parks in
+  // pending, and the honour test below never fires either. A machine left powered
+  // for 25 days would answer START and STOP with a stroke that never energizes,
+  // faulting after the cap with zero motion, until a reboot.
+  // [TH] ตรงนี้ใช้แบบไม่มีเครื่องหมาย ต่างจากการเทียบกับค่า now ที่ลูปอ่านไว้
+  //      ค่า offAt ถูกจับเวลาจาก millis() เสมอ จึงไม่มีทางล้ำหน้า millis() ได้
+  //      การใช้แบบมีเครื่องหมายจึงไม่ได้ประโยชน์อะไรเลย แต่เสียหายมาก
+  //      ถ้าเวลาที่ผ่านไปอยู่ระหว่าง 24.9 ถึง 49.7 วัน การแปลงชนิดจะได้ค่าติดลบ
+  //      คำขอทุกครั้งจะไปพักรอ และเงื่อนไขปลดการรอด้านล่างก็จะไม่เป็นจริงเช่นกัน
+  //      เครื่องที่เปิดทิ้งไว้ 25 วันจะตอบปุ่มเริ่มและปุ่มหยุดด้วยการเคลื่อนที่ที่ไม่จ่ายไฟเลย
+  //      แล้วจบด้วยความผิดพลาดหลังครบเพดานเวลาโดยไม่ขยับ จนกว่าจะรีบูต
+  if (state == ACT_OFF && (millis() - offAt) < DEADTIME_MS) {
     pending = dir;
     pendingAt = offAt + DEADTIME_MS;
     return;

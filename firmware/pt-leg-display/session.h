@@ -19,12 +19,32 @@ class SessionSM {
   CycleCfg cfg{8000, 10000, 10000};
   void start(uint32_t nowMs);        // Idle/Fault -> Lift (start also clears a latched Fault)
                                      // [TH] เริ่มรอบ และล้างสถานะ Fault ที่ค้างอยู่ด้วย
-  void requestStop(uint32_t nowMs);  // clean stop -> SafeLower (or straight off from Rest)
-                                     // [TH] สั่งหยุดแบบปลอดภัย: ลดขาลงก่อนแล้วค่อยหยุด
+  // Stop, and always by lowering the leg first where there is any chance it is up.
+  // From Lift/Hold/Lower this ends the session via SafeLower; from Rest the leg is
+  // already down so it stops immediately; from Fault it lowers WITHOUT reporting
+  // anything (that session was reported when it faulted); from Idle it lowers only
+  // if the leg is believed up, also without reporting. Only Idle-with-the-leg-down
+  // is a no-op.
+  // [TH] สั่งหยุด และให้ลดขาลงก่อนเสมอถ้ามีโอกาสที่ขาจะอยู่ข้างบน
+  //      จากสถานะยกขา/ค้าง/ลดลง จะจบรอบผ่านสถานะลดขาเพื่อหยุด
+  //      จากสถานะพัก ขาลงอยู่แล้วจึงหยุดได้ทันที
+  //      จากสถานะผิดพลาด จะลดขาโดยไม่รายงานอะไร เพราะรอบนั้นถูกรายงานไปแล้วตอนที่ผิดพลาด
+  //      จากสถานะว่าง จะลดขาเฉพาะเมื่อเชื่อว่าขาอยู่ข้างบน และไม่รายงานเช่นกัน
+  //      มีแต่กรณีสถานะว่างที่ขาอยู่ล่างสุดแล้วเท่านั้นที่ไม่ทำอะไร
+  void requestStop(uint32_t nowMs);
   void forceFault(uint32_t nowMs);   // external safety trip (actuator cap)
                                      // [TH] บังคับเข้าสถานะผิดพลาดจากภายนอก (เพดานเวลารีเลย์)
-  void reset(uint32_t nowMs);        // idle-only: zero reps/elapsed, clear FAULT -> Idle; no-op while running
-                                     // [TH] เฉพาะตอนว่าง: ล้างจำนวนครั้ง/เวลา และล้าง FAULT กลับสู่ Idle ; ไม่ทำอะไรถ้ากำลังทำงาน
+  // Clears the rep count, and from a Fault lowers the leg on the way to Idle
+  // rather than dropping the latch where it stands. Deliberately does NOT clear
+  // the pending edges or the finished session's totals — a RESET can land in the
+  // same loop iteration as the fault that ended a session, and clearing them there
+  // threw the session's only record away. No-op while running.
+  // [TH] ล้างจำนวนครั้ง และถ้าอยู่ในสถานะผิดพลาดจะลดขาลงระหว่างทางกลับสู่สถานะว่าง
+  //      แทนที่จะปล่อยสถานะทิ้งไว้ตรงนั้น
+  //      จงใจไม่ล้างขอบสัญญาณที่ค้างอยู่และยอดรวมของรอบที่จบไปแล้ว
+  //      เพราะการกด RESET อาจตกอยู่ในลูปรอบเดียวกับความผิดพลาดที่จบรอบนั้น
+  //      การล้างตรงนั้นจะทิ้งข้อมูลชิ้นเดียวของรอบนั้นไป ไม่ทำอะไรถ้ากำลังทำงานอยู่
+  void reset(uint32_t nowMs);
   void tick(uint32_t nowMs, bool topPressed, bool bottomPressed);
   bool running() const { return ph != Phase::Idle && ph != Phase::Fault; }
   bool faulted() const { return ph == Phase::Fault; }
@@ -32,8 +52,15 @@ class SessionSM {
   uint32_t elapsedSec(uint32_t nowMs) const;
   uint16_t reps() const { return repCount; }
   bool takeStartedEdge();  // อ่าน+ล้างสัญญาณ "เพิ่งเริ่มรอบ" (edge)
-  bool takeStoppedEdge();  // fires after safe-lower AND on entering FAULT
-                           // [TH] อ่าน+ล้างสัญญาณ "เพิ่งหยุด" เกิดหลังลงเสร็จ และตอนเข้าสถานะ FAULT
+  // Read+clear "a session just ended". Raised only by finish(), i.e. exactly once
+  // per session that is reported — so NOT by a lowering started from Fault or from
+  // Idle, neither of which is a session, and not by the quiet Fault re-latch when
+  // such a lowering cannot confirm the bottom.
+  // [TH] อ่านและล้างสัญญาณ "รอบเพิ่งจบ" ยกโดย finish() เท่านั้น
+  //      คือครั้งเดียวต่อรอบที่ถูกรายงาน จึงไม่ยกให้การลดขาที่เริ่มจากสถานะผิดพลาดหรือสถานะว่าง
+  //      เพราะทั้งสองอย่างนั้นไม่ใช่รอบการทำงาน
+  //      และไม่ยกให้การกลับเข้าสถานะผิดพลาดแบบเงียบๆ ตอนที่การลดขาแบบนั้นยืนยันตำแหน่งล่างสุดไม่ได้
+  bool takeStoppedEdge();
   uint32_t finalElapsedSec() const { return finalElapsed; }  // เวลารวมสุดท้ายของรอบที่จบ
   uint16_t finalReps() const { return finalRepCount; }       // จำนวนครั้งสุดท้ายของรอบที่จบ
   // Whether the session that just ended ended in a fault. Use this and not
@@ -73,6 +100,13 @@ class SessionSM {
 
  private:
   void enter(Phase p, uint32_t nowMs);
+  // Shared arrival test for Lower and SafeLower — see the definition for what it
+  // checks and why each clause is there. Samples the switches once per stroke, so
+  // it must be called on every tick of a descending phase and nowhere else.
+  // [TH] การตรวจการมาถึงที่ใช้ร่วมกันของสถานะลดลงและลดลงเพื่อหยุด
+  //      ดูรายละเอียดว่าตรวจอะไรและทำไมแต่ละข้อถึงมีอยู่ได้ที่ตัวฟังก์ชัน
+  //      อ่านค่าสวิตช์ครั้งเดียวต่อการเคลื่อนที่หนึ่งครั้ง จึงต้องเรียกทุกจังหวะของสถานะที่สั่งลง และห้ามเรียกที่อื่น
+  bool downConfirmed(bool topPressed, bool bottomPressed);
   void finish(uint32_t nowMs, Phase to, bool fault);  // record final elapsed/reps/fault, raise
                                                       // stoppedEdge, go to `to`
                                                       // [TH] บันทึกเวลา/จำนวนครั้ง/ความผิดพลาดสุดท้าย
@@ -83,21 +117,25 @@ class SessionSM {
   uint32_t finalElapsed = 0;
   uint16_t finalRepCount = 0;
   bool finalFault = false;
-  // A SafeLower that is bringing the leg down after a fault, rather than ending a
-  // session. Its session was already reported when the fault happened, so this one
-  // finishes without raising a stopped edge. See requestStop's Fault case.
-  // [TH] สถานะกำลังลดขาลงหลังเกิดความผิดพลาด ไม่ใช่การจบรอบตามปกติ
-  //      รอบนั้นถูกรายงานไปแล้วตอนเกิดเหตุ การลดขาครั้งนี้จึงจบโดยไม่ตั้งสัญญาณหยุด
-  //      ดูกรณีสถานะผิดพลาดใน requestStop
+  // This SafeLower is bringing the leg down rather than ending a session — set
+  // from Fault (that session was reported when it faulted) and from Idle (there is
+  // no session at all). Either way it must not raise a stopped edge, or the same
+  // session lands on the card twice. Invariant: recovering implies SafeLower.
+  // [TH] สถานะลดขาเพื่อหยุดครั้งนี้เป็นการเอาขาลง ไม่ใช่การจบรอบ
+  //      ตั้งจากสถานะผิดพลาด ซึ่งรอบนั้นถูกรายงานไปแล้วตอนที่ผิดพลาด
+  //      และตั้งจากสถานะว่าง ซึ่งไม่มีรอบอยู่เลย
+  //      ทั้งสองกรณีต้องไม่ตั้งสัญญาณหยุด ไม่งั้นรอบเดียวกันจะลงการ์ดสองครั้ง
+  //      ข้อกำหนด: ถ้า recovering เป็นจริง สถานะต้องเป็นลดขาเพื่อหยุดเสมอ
   bool recovering = false;
-  // A safe-lower has just been entered and has not yet sampled the switches, and
-  // whether the bottom switch was clear when it did. A bottom line that reads
-  // pressed from the start is lying — the leg cannot already be down and still
-  // need lowering — so its "we have arrived" must not be believed.
-  // [TH] เพิ่งเข้าสถานะลดขาลงและยังไม่ได้อ่านสวิตช์ กับค่าที่ว่าสวิตช์ล่างว่างหรือไม่ตอนที่อ่าน
-  //      สายสวิตช์ล่างที่อ่านได้ว่ากดตั้งแต่ต้นคือสายที่ให้ค่าผิด
-  //      ขาจะลงไปสุดอยู่แล้วและยังต้องลดลงอีกไม่ได้ จึงต้องไม่เชื่อคำว่า "ถึงแล้ว" ของมัน
-  bool safeLowerFresh = false;
+  // A descending stroke has just been entered and has not yet sampled the
+  // switches. Armed in enter() for both Lower and SafeLower, consumed by
+  // downConfirmed() on the stroke's first tick, which is what makes the two
+  // sample fields below belong to THIS stroke and not the previous one.
+  // [TH] เพิ่งเข้าสู่การเคลื่อนที่ลงและยังไม่ได้อ่านค่าสวิตช์
+  //      ตั้งค่าใน enter() ให้ทั้งสถานะลดลงและลดลงเพื่อหยุด
+  //      และถูกอ่านโดย downConfirmed() ในจังหวะแรกของการเคลื่อนที่
+  //      ซึ่งเป็นสิ่งที่ทำให้ค่าที่อ่านไว้สองตัวด้านล่างเป็นของการเคลื่อนที่ครั้งนี้ ไม่ใช่ครั้งก่อน
+  bool strokeFresh = false;
   bool bottomWasClear = false;
   bool alreadyDown = false;      // the leg was at the bottom when the stroke began
                                  // [TH] ขาอยู่ที่ตำแหน่งล่างสุดแล้วตั้งแต่การเคลื่อนที่เริ่มต้น

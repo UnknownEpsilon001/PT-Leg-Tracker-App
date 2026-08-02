@@ -16,6 +16,23 @@ void SessionSM::enter(Phase p, uint32_t nowMs) {
   //      เพราะ tick() ทำงานก่อนปุ่ม การลดขาครั้งหนึ่งจึงจบและครั้งใหม่เริ่มได้ระหว่างการมองสองครั้งติดกัน
   //      ผู้สังเกตจะไม่เห็นการเปลี่ยนแปลงใดๆ เลย
   if (p == Phase::SafeLower) strokeRenewEdge = true;
+  // Both descending phases arm the per-stroke arrival sample here rather than at
+  // their call sites. It used to be set at each of the four `enter(SafeLower)`
+  // sites by hand, which meant a fifth site would silently inherit the PREVIOUS
+  // stroke's sample — commonly "already at the bottom", since that is latched
+  // whenever a fault ends at the bottom. The new stroke would then confirm on its
+  // first tick, never energize the relay, and log clean with the leg in the air.
+  // One missed line, and it is the same catastrophe this file is full of guards
+  // against. Arming it where the phase changes makes that impossible.
+  // [TH] สถานะที่สั่งลงทั้งสองแบบตั้งค่าการอ่านตำแหน่งประจำการเคลื่อนที่ตรงนี้ ไม่ใช่ที่จุดเรียกของตัวเอง
+  //      เดิมตั้งด้วยมือที่จุดเรียกทั้งสี่จุดของ enter(SafeLower)
+  //      ถ้ามีจุดที่ห้าเกิดขึ้น มันจะรับค่าที่อ่านไว้ของการเคลื่อนที่ครั้งก่อนมาเงียบๆ
+  //      ซึ่งมักเป็น "อยู่ล่างสุดแล้ว" เพราะค่านั้นถูกเก็บไว้ทุกครั้งที่ความผิดพลาดเกิดตอนอยู่ล่างสุด
+  //      การเคลื่อนที่ครั้งใหม่จะยืนยันตั้งแต่จังหวะแรก ไม่จ่ายไฟรีเลย์เลย
+  //      และบันทึกว่าเป็นรอบปกติทั้งที่ขายังอยู่กลางอากาศ
+  //      พลาดบรรทัดเดียวก็เป็นหายนะแบบเดียวกับที่ไฟล์นี้เต็มไปด้วยการป้องกัน
+  //      การตั้งค่าตรงจุดที่สถานะเปลี่ยนทำให้เรื่องนั้นเกิดไม่ได้
+  if (p == Phase::SafeLower || p == Phase::Lower) strokeFresh = true;
   // Commanding a lift is what makes a "still at the bottom" reading stale. Only a
   // confirmed arrival clears it again — see the Lower and SafeLower cases.
   // [TH] การสั่งยกขาคือสิ่งที่ทำให้ค่าที่อ่านว่า "ยังอยู่ล่างสุด" ใช้ไม่ได้อีกต่อไป
@@ -29,6 +46,44 @@ bool SessionSM::takeStrokeRenewEdge() {
   bool v = strokeRenewEdge;
   strokeRenewEdge = false;
   return v;
+}
+
+// Has the leg arrived at the bottom, on evidence worth acting on? Shared by both
+// descending phases so the two cannot drift apart — they did, and the one without
+// the guards was the one that cleared `liftedSinceBottom` and told the rest of the
+// machine the leg was down.
+//
+// Three things are checked, each for a failure the others miss:
+//  - the top switch must disagree. Both pressed means one is lying, which is the
+//    open-line case net 2 exists for, and ending a stroke on a lie is how the leg
+//    is left in the air.
+//  - the bottom must have been CLEAR when this stroke began. A leg that still
+//    needs lowering cannot already be down, so a bottom reading pressed from the
+//    first tick is an open circuit, not an arrival.
+//  - unless the leg genuinely never left the bottom, which is what a fault
+//    latched at the bottom of a stroke looks like. Believing that avoids driving
+//    into the mechanical stop for the full cap to confirm something that was true
+//    before the stroke started — but only when the actuator has not been commanded
+//    up since, or an open bottom line would satisfy it on every stroke.
+// [TH] ขาถึงตำแหน่งล่างสุดแล้วหรือยัง โดยมีหลักฐานที่ควรเชื่อถือได้
+//      ใช้ร่วมกันทั้งสองสถานะที่สั่งลง เพื่อไม่ให้ทั้งสองแยกกันเดินคนละทาง
+//      ซึ่งเคยเกิดขึ้นแล้ว และฝั่งที่ไม่มีการป้องกันคือฝั่งที่ล้างค่า liftedSinceBottom
+//      แล้วไปบอกส่วนอื่นของเครื่องว่าขาลงถึงพื้นแล้ว
+//      ตรวจสามอย่าง แต่ละอย่างดักความล้มเหลวที่อีกสองอย่างมองไม่เห็น
+//       - สวิตช์บนต้องบอกไม่ตรงกัน ถ้ากดทั้งคู่แปลว่ามีตัวหนึ่งให้ค่าผิด
+//         ซึ่งคือกรณีสายขาดที่ตาข่ายกันพลาด 2 มีไว้ดัก และการจบการเคลื่อนที่ตามค่าที่ผิดคือสาเหตุที่ขาค้างกลางอากาศ
+//       - สวิตช์ล่างต้องว่างอยู่ตอนที่การเคลื่อนที่นี้เริ่ม ขาที่ยังต้องลดลงอีกจะอยู่ล่างสุดไปแล้วไม่ได้
+//         ค่าที่อ่านว่ากดตั้งแต่จังหวะแรกจึงคือวงจรเปิด ไม่ใช่การมาถึง
+//       - ยกเว้นกรณีที่ขาไม่เคยออกจากตำแหน่งล่างสุดจริงๆ ซึ่งเป็นลักษณะของความผิดพลาดที่เกิดตอนอยู่ล่างสุด
+//         การเชื่อกรณีนี้ช่วยเลี่ยงการสั่งลงชนกลไกจนครบเพดานเวลาเพื่อยืนยันสิ่งที่เป็นจริงอยู่ก่อนแล้ว
+//         แต่ใช้ได้เฉพาะเมื่อยังไม่มีการสั่งยกขาหลังจากนั้น ไม่งั้นสายสวิตช์ล่างที่ขาดจะเข้าเงื่อนไขทุกการเคลื่อนที่
+bool SessionSM::downConfirmed(bool topPressed, bool bottomPressed) {
+  if (strokeFresh) {
+    strokeFresh = false;
+    bottomWasClear = !bottomPressed;
+    alreadyDown = bottomPressed && !topPressed && !liftedSinceBottom;
+  }
+  return alreadyDown || (bottomWasClear && bottomPressed && !topPressed);
 }
 
 void SessionSM::finish(uint32_t nowMs, Phase to, bool fault) {
@@ -63,7 +118,7 @@ void SessionSM::start(uint32_t nowMs) {
   repCount = 0;
   startedEdge = true;
   recovering = false;
-  safeLowerFresh = false;
+
   // Belongs to the fault that raised it, not to the machine. Left set, it
   // disarmed the FIRST recovery descent of the next, unrelated fault: RESET would
   // clear that fault straight to Idle with the leg still up, having attempted
@@ -116,7 +171,7 @@ void SessionSM::requestStop(uint32_t nowMs) {
       if (!liftedSinceBottom) return;  // believed already down — เชื่อว่าขาอยู่ล่างสุดแล้ว
       if (recoveryFailed) return;      // a descent already failed — เคยลดขาแล้วไม่สำเร็จ
       recovering = true;               // no session to report — ไม่มีรอบให้รายงาน
-      safeLowerFresh = true;
+
       enter(Phase::SafeLower, nowMs);
       return;
     case Phase::Fault:
@@ -137,13 +192,13 @@ void SessionSM::requestStop(uint32_t nowMs) {
       //      ความผิดพลาดถูกบันทึกไปแล้ว ทั้งค่า finalFault และข้อความ done ที่ส่งไปตอนเกิดเหตุ
       //      การลดขาครั้งนี้จึงไม่รายงานอะไรซ้ำอีก ดูตัวแปร recovering
       recovering = true;
-      safeLowerFresh = true;
+
       enter(Phase::SafeLower, nowMs);
       return;
     case Phase::Lift:
     case Phase::Hold:
     case Phase::Lower:
-      safeLowerFresh = true;
+
       enter(Phase::SafeLower, nowMs);  // bring the leg down, then stop — ลดขาลงก่อนแล้วค่อยหยุด
       return;
     case Phase::Rest:
@@ -198,7 +253,6 @@ void SessionSM::reset(uint32_t nowMs) {
   //      การล้างสถานะต้องไม่แลกมาด้วยทางเดียวที่จะเอาขาลง
   if (ph == Phase::Fault && !recoveryFailed) {
     recovering = true;
-    safeLowerFresh = true;
     enter(Phase::SafeLower, nowMs);
     return;
   }
@@ -245,8 +299,25 @@ void SessionSM::tick(uint32_t nowMs, bool topPressed, bool bottomPressed) {
       if (dt >= cfg.holdMs) enter(Phase::Lower, nowMs);     // ค้างครบเวลา -> ลดลง
       return;
     case Phase::Lower:
-      if (bottomPressed) {
-        liftedSinceBottom = false;  // a real arrival — ถึงตำแหน่งล่างสุดจริง
+      // The same arrival test SafeLower uses, and for the same reason. This case
+      // used to believe `bottomPressed` on its own, which made it the one place a
+      // lying bottom switch was still taken at face value — and the worst place,
+      // because it cleared liftedSinceBottom. A bottom line that opens mid-descent
+      // reads pressed forever, so the leg "arrived" in mid-air, rested, and any
+      // stop from Rest logged a clean session. The machine then believed the leg
+      // was down: STOP at Idle was refused, START drove up, and a power cycle
+      // re-seeded the same wrong belief from the same broken switch. Every rescue
+      // path added for this was disabled by one unguarded read.
+      // [TH] ใช้การตรวจการมาถึงชุดเดียวกับสถานะลดลงเพื่อหยุด และด้วยเหตุผลเดียวกัน
+      //      เดิมกรณีนี้เชื่อค่า bottomPressed ตรงๆ จึงเป็นที่เดียวที่ยังเชื่อสวิตช์ล่างที่ให้ค่าผิดแบบไม่ตรวจสอบ
+      //      และเป็นที่ที่แย่ที่สุดด้วย เพราะมันล้างค่า liftedSinceBottom
+      //      สายสวิตช์ล่างที่ขาดกลางทางจะอ่านได้ว่ากดตลอดไป ขาจึง "ถึงพื้น" กลางอากาศ แล้วเข้าสถานะพัก
+      //      การหยุดจากสถานะพักจะบันทึกว่าเป็นรอบที่ปกติ
+      //      จากนั้นเครื่องจะเชื่อว่าขาอยู่ล่างสุด การกด STOP ตอนว่างจะถูกปฏิเสธ ปุ่ม START สั่งยกขึ้น
+      //      และการปิดเปิดเครื่องก็ตั้งค่าความเชื่อผิดๆ เดิมจากสวิตช์ตัวที่เสียตัวเดิม
+      //      เส้นทางกู้สถานการณ์ทั้งหมดที่เพิ่มมาถูกปิดการทำงานด้วยการอ่านค่าที่ไม่ได้ตรวจสอบเพียงจุดเดียว
+      if (downConfirmed(topPressed, bottomPressed)) {
+        liftedSinceBottom = false;  // a corroborated arrival — ถึงตำแหน่งล่างสุดแบบยืนยันได้
         enter(Phase::Rest, nowMs);  // fully down — ลงสุดแล้ว
       }
       else if (dt >= cfg.maxTravelMs) finish(nowMs, Phase::Fault, true);  // net 1 — เกินเวลา = ผิดพลาด
@@ -286,36 +357,9 @@ void SessionSM::tick(uint32_t nowMs, bool topPressed, bool bottomPressed) {
       //      ซึ่งจะทำงานตอนขาขึ้นไปถึงบนสุด แล้วราว 25 มิลลิวินาทีหลังเริ่มลดขาเพื่อกู้สถานการณ์
       //      สวิตช์บนจะผ่านกันเด้งเป็นว่าง ตอนนั้นสวิตช์ล่างที่ให้ค่าผิดจะถูกเชื่อ
       //      การเคลื่อนที่จึงจบลงโดยที่ขายังอยู่ข้างบน เคลื่อนที่ลงมาได้แค่ไม่กี่เซนติเมตร
-      if (safeLowerFresh) {
-        safeLowerFresh = false;
-        bottomWasClear = !bottomPressed;
-        // Bottom pressed and top clear at the very first tick is not a lie — it
-        // is a leg that is already down, which is what a fault latched at the
-        // bottom of a stroke looks like. Driving DOWN for the full cap against
-        // the mechanical stop, every time, was the alternative, and it never
-        // confirmed because the switch was closed before the stroke began.
-        // [TH] สวิตช์ล่างถูกกดและสวิตช์บนว่างตั้งแต่จังหวะแรกไม่ใช่ค่าที่ผิด
-        //      แต่คือขาที่ลงถึงพื้นอยู่แล้ว ซึ่งเป็นลักษณะของความผิดพลาดที่เกิดตอนจบการเคลื่อนที่ด้านล่าง
-        //      ทางเลือกอีกทางคือสั่งลงจนครบเพดานเวลาชนกลไกด้านล่างทุกครั้ง
-        //      และจะไม่มีวันยืนยันได้เลยเพราะสวิตช์ปิดอยู่ก่อนการเคลื่อนที่จะเริ่มด้วยซ้ำ
-        // ...but only if the leg has not been driven up since the bottom was last
-        // confirmed. Without that guard this is worse than the trap it removes: an
-        // open bottom line reads pressed forever, so a STOP part-way through a
-        // lift satisfies it on the first tick, the stroke "confirms" instantly,
-        // the DOWN relay never energizes at all, and the leg is left mid-air in
-        // Idle with the session logged clean. The open bottom line is the exact
-        // fault this whole block is written around.
-        // [TH] แต่ต้องเป็นกรณีที่ขายังไม่ถูกสั่งยกขึ้นนับตั้งแต่ครั้งสุดท้ายที่ยืนยันว่าอยู่ล่างสุด
-        //      ถ้าไม่มีเงื่อนไขนี้จะแย่กว่ากับดักที่มันแก้เสียอีก
-        //      สายสวิตช์ล่างที่ขาดจะอ่านได้ว่ากดตลอดเวลา การกด STOP กลางคันระหว่างยกขา
-        //      จึงเข้าเงื่อนไขตั้งแต่จังหวะแรก การเคลื่อนที่จะ "ยืนยัน" ทันที
-        //      รีเลย์ลงไม่ได้จ่ายไฟเลยแม้แต่ครั้งเดียว และขาถูกทิ้งไว้กลางอากาศในสถานะว่าง
-        //      โดยบันทึกรอบนั้นว่าปกติ ทั้งที่สายสวิตช์ล่างขาดคือความผิดพลาดที่บล็อกนี้เขียนขึ้นมาเพื่อรับมือ
-        alreadyDown = bottomPressed && !topPressed && !liftedSinceBottom;
-      }
-      bool downConfirmed = alreadyDown || (bottomWasClear && bottomPressed && !topPressed);
-      if (!downConfirmed && dt < cfg.maxTravelMs) return;
-      if (downConfirmed) liftedSinceBottom = false;  // the leg is down — ขาลงถึงพื้นแล้ว
+      bool confirmed = downConfirmed(topPressed, bottomPressed);
+      if (!confirmed && dt < cfg.maxTravelMs) return;
+      if (confirmed) liftedSinceBottom = false;  // the leg is down — ขาลงถึงพื้นแล้ว
       if (recovering) {
         // Lowering after a fault. That session was reported when it faulted, so
         // this ends quietly either way — a second stopped edge would file the
@@ -344,8 +388,8 @@ void SessionSM::tick(uint32_t nowMs, bool topPressed, bool bottomPressed) {
         // between Fault and an eight-second descent that never confirms.
         // [TH] การกู้สถานการณ์ที่ยืนยันไม่ได้ว่าถึงพื้นจะถูกจดจำไว้ เพื่อให้ปุ่ม RESET มีทางไปต่อ
         //      ถ้าไม่จำไว้ เครื่องจะได้แต่วนไปมาระหว่างสถานะผิดพลาดกับการลดขาแปดวินาทีที่ไม่เคยยืนยันได้
-        recoveryFailed = !downConfirmed;
-        enter(downConfirmed ? Phase::Idle : Phase::Fault, nowMs);
+        recoveryFailed = !confirmed;
+        enter(confirmed ? Phase::Idle : Phase::Fault, nowMs);
         return;
       }
       // Ran the cap out without the leg ever reaching the bottom: not a clean
@@ -364,7 +408,7 @@ void SessionSM::tick(uint32_t nowMs, bool topPressed, bool bottomPressed) {
       //      และให้ค้างที่สถานะผิดพลาดเพื่อให้ STOP กับ RESET ยังสั่งลดขาได้
       recoveryFailed = false;  // this was a session, not a failed recovery
                                // [TH] นี่คือการจบรอบ ไม่ใช่การกู้สถานการณ์ที่ล้มเหลว
-      finish(nowMs, downConfirmed ? Phase::Idle : Phase::Fault, !downConfirmed);
+      finish(nowMs, confirmed ? Phase::Idle : Phase::Fault, !confirmed);
       return;
     }
   }
@@ -373,6 +417,16 @@ void SessionSM::tick(uint32_t nowMs, bool topPressed, bool bottomPressed) {
 uint32_t SessionSM::elapsedSec(uint32_t nowMs) const {
   // [TH] เวลาที่ผ่านไปของรอบ (วินาที): ว่าง=0, ผิดพลาด=ค่าที่แช่ไว้ตอน fault, อื่นๆ=นับสด
   if (ph == Phase::Idle) return 0;
+  // A recovery lowering has no session of its own, so it has no elapsed time
+  // either. Measuring from sessionStart would report the age of whatever ran
+  // before it — after a power-cut reboot that is the uptime, since sessionStart is
+  // still 0 — and running() is true during a recovery, so that number went out on
+  // every heartbeat and onto the screen.
+  // [TH] การลดขาเพื่อกู้สถานการณ์ไม่มีรอบของตัวเอง จึงไม่มีเวลาที่ผ่านไปของตัวเองด้วย
+  //      ถ้าวัดจาก sessionStart จะได้อายุของสิ่งที่ทำงานอยู่ก่อนหน้า
+  //      และหลังไฟดับแล้วเปิดใหม่ ค่านั้นคือเวลาที่เครื่องเปิดมา เพราะ sessionStart ยังเป็น 0
+  //      ระหว่างกู้สถานการณ์ running() เป็นจริง ตัวเลขนั้นจึงถูกส่งออกทุกครั้งที่ส่งสัญญาณชีพและขึ้นบนจอ
+  if (recovering) return 0;
   if (ph == Phase::Fault) return finalElapsed;  // frozen at fault time — แช่ค่าไว้ ณ เวลาที่ผิดพลาด
   return (nowMs - sessionStart) / 1000;
 }
