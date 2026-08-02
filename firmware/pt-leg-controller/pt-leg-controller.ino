@@ -305,6 +305,33 @@ void loop() {
   switchesPoll(now);
   buttonsPoll(now);
   gSession.tick(now, switchTop(), switchBottom());
+
+  // The energize cap is charged to the stroke that was actually driving, which
+  // means consuming it BEFORE the buttons can start a new session. A long loop
+  // stall latches the trip and a held START at the same time; handled after the
+  // button block, forceFault() then finished the session that had just started
+  // milliseconds ago, and its zero totals overwrote the real ones of the session
+  // the cap had actually ended — destroying that session's duration and rep count
+  // in both the server event and the card row.
+  //
+  // Not while a safe-lower is running: the trip can surface in the same iteration
+  // in which STOP entered SafeLower, and faulting there would abort the descent
+  // the operator just asked for before the DOWN relay had energized at all. That
+  // descent is separately bounded by its own fresh cap.
+  // [TH] เพดานเวลาจ่ายไฟต้องถูกคิดให้กับการเคลื่อนที่ที่กำลังขับเคลื่อนอยู่จริง
+  //      จึงต้องอ่านค่าก่อนที่ปุ่มจะเริ่มรอบใหม่ได้
+  //      ลูปที่ค้างนานจะทำให้ทั้งการตัดและการกด START ค้างมาพร้อมกัน
+  //      ถ้าอ่านหลังบล็อกปุ่ม forceFault() จะไปจบรอบที่เพิ่งเริ่มไปไม่กี่มิลลิวินาที
+  //      แล้วยอดรวมศูนย์ของรอบนั้นจะเขียนทับยอดจริงของรอบที่เพดานเวลาเป็นคนจบ
+  //      ทำลายทั้งเวลารวมและจำนวนครั้งของรอบนั้นทั้งในเหตุการณ์ฝั่งเซิร์ฟเวอร์และในแถวข้อมูลบนการ์ด
+  //      และไม่ทำระหว่างที่กำลังลดขาเพื่อหยุด เพราะการตัดอาจปรากฏในลูปรอบเดียวกับที่ STOP พาเข้าสถานะนั้น
+  //      การตัดสินว่าผิดพลาดตรงนั้นจะยกเลิกการลดขาที่ผู้ใช้เพิ่งสั่ง ตั้งแต่ก่อนที่รีเลย์ลงจะได้จ่ายไฟ
+  //      การลดขาครั้งนั้นมีเพดานเวลาของตัวเองคุมอยู่แล้ว
+  if (actuatorTakeCapTrip()) {
+    Serial.println("actuator: energize cap opened the relays");
+    if (gSession.phase() != Phase::SafeLower) gSession.forceFault(now);
+  }
+
   // panel buttons: START (from Idle or a latched Fault), STOP (any state, and it
   // lowers the leg from Fault and from Idle as well as ending a session), RESET
   // (only when not running, and from a Fault it lowers on the way to Idle)
@@ -331,29 +358,13 @@ void loop() {
   if (pressReset) gSession.reset(now);
   applyActuator();
   actuatorTick(now);
-  // backstop: the relays stayed energized past the cap and the state machine
-  // never commanded OFF. Reported here, where the flag is consumed, so the line
-  // is printed exactly once per trip and cannot be swallowed by an actuatorOff()
-  // earlier in this same iteration.
-  // [TH] แนวป้องกันสำรอง รีเลย์จ่ายไฟเกินเพดานเวลาและเครื่องสถานะไม่ได้สั่งดับ
-  //      รายงานตรงนี้ซึ่งเป็นจุดที่อ่านและล้างค่า ข้อความจึงถูกพิมพ์ครั้งเดียวต่อการตัดหนึ่งครั้ง
-  //      และไม่ถูกกลืนโดย actuatorOff() ที่ทำงานก่อนหน้าในลูปรอบเดียวกัน
-  if (actuatorTakeCapTrip()) {
-    Serial.println("actuator: energize cap opened the relays");
-    // Not while a safe-lower is running. The trip can surface in the same
-    // iteration in which STOP entered SafeLower — a long loop stall latches both
-    // — and faulting there would abort the descent the operator just asked for
-    // before the DOWN relay had energized at all, leaving the leg where it was.
-    // The safe-lower has its own fresh cap from the stroke renew, so it is
-    // already bounded; let it run.
-    // [TH] ไม่ทำระหว่างที่กำลังลดขาเพื่อหยุด
-    //      การตัดอาจปรากฏในลูปรอบเดียวกับที่การกด STOP พาเข้าสู่สถานะลดขาเพื่อหยุด
-    //      เพราะลูปที่ค้างนานจะทำให้ทั้งสองอย่างค้างมาพร้อมกัน
-    //      การตัดสินว่าผิดพลาดตรงนั้นจะยกเลิกการลดขาที่ผู้ใช้เพิ่งสั่ง ตั้งแต่ก่อนที่รีเลย์ลงจะได้จ่ายไฟด้วยซ้ำ
-    //      แล้วขาจะค้างอยู่ที่เดิม การลดขาเพื่อหยุดมีเพดานเวลาของตัวเองจากการเริ่มจับเวลาใหม่อยู่แล้ว
-    //      จึงมีขอบเขตอยู่แล้ว ปล่อยให้ทำงานต่อไป
-    if (gSession.phase() != Phase::SafeLower) gSession.forceFault(now);
-  }
+  // The trip raised by actuatorTick's own software check is consumed at the top of
+  // the NEXT iteration, alongside the hardware timer's. Both go through the one
+  // place above, so a trip can never be charged to a session that started after
+  // the stroke it belongs to.
+  // [TH] การตัดที่เกิดจากการตรวจฝั่งซอฟต์แวร์ใน actuatorTick จะถูกอ่านที่ต้นลูปรอบถัดไป
+  //      พร้อมกับของตัวจับเวลาฮาร์ดแวร์ ทั้งคู่ผ่านจุดเดียวกันด้านบน
+  //      การตัดจึงไม่มีทางถูกคิดให้กับรอบที่เริ่มหลังการเคลื่อนที่ที่มันเป็นเจ้าของ
   netLoop(now);
   // One-shot NTP -> RTC. time(nullptr) returns a small number until SNTP has
   // answered, so the threshold is what distinguishes "clock not set yet" from a

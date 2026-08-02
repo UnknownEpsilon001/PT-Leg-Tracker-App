@@ -2,6 +2,17 @@
 // Session state-machine logic: transitions driven by time and the limit switches.
 #include "session.h"
 
+// How long the UP relay must have been driving before the leg is assumed to have
+// left the bottom, on a machine whose bottom switch never releases. Comfortably
+// longer than the switch's own debounce and shorter than any real travel, so on a
+// healthy machine the switch releasing always wins the race and this never
+// decides anything.
+// [TH] รีเลย์ยกต้องสั่งขึ้นนานเท่าใดจึงจะถือว่าขาออกจากตำแหน่งล่างสุดแล้ว
+//      สำหรับเครื่องที่สวิตช์ล่างไม่มีวันปล่อย
+//      ตั้งให้นานกว่าเวลากันเด้งของสวิตช์พอสมควร และสั้นกว่าเวลาเดินทางจริง
+//      บนเครื่องที่ปกติ การปล่อยของสวิตช์จะมาก่อนเสมอ ค่านี้จึงไม่เคยเป็นตัวตัดสินอะไรเลย
+static const uint32_t LIFT_COMMIT_MS = 500;
+
 void SessionSM::enter(Phase p, uint32_t nowMs) {
   // Entering SafeLower begins a new stroke that may keep driving the same
   // direction as the phase before it, which the actuator cannot see for itself.
@@ -33,11 +44,16 @@ void SessionSM::enter(Phase p, uint32_t nowMs) {
   //      พลาดบรรทัดเดียวก็เป็นหายนะแบบเดียวกับที่ไฟล์นี้เต็มไปด้วยการป้องกัน
   //      การตั้งค่าตรงจุดที่สถานะเปลี่ยนทำให้เรื่องนั้นเกิดไม่ได้
   if (p == Phase::SafeLower || p == Phase::Lower) strokeFresh = true;
-  // Commanding a lift is what makes a "still at the bottom" reading stale. Only a
-  // confirmed arrival clears it again — see the Lower and SafeLower cases.
-  // [TH] การสั่งยกขาคือสิ่งที่ทำให้ค่าที่อ่านว่า "ยังอยู่ล่างสุด" ใช้ไม่ได้อีกต่อไป
-  //      จะล้างค่านี้ได้ก็ต่อเมื่อยืนยันการมาถึงตำแหน่งล่างสุดจริงเท่านั้น ดูสถานะลดลงและลดลงเพื่อหยุด
-  if (p == Phase::Lift) liftedSinceBottom = true;
+  // Reaching the top is proof the leg left the bottom, whatever the bottom switch
+  // says. The Lift case sets this too, but only once the lift has actually
+  // committed — see there. Setting it on Hold as well means every route to Lower
+  // has passed through a state that proves it, so a Lower can never mistake a
+  // stuck bottom switch for "never left".
+  // [TH] การขึ้นไปถึงบนสุดคือหลักฐานว่าขาออกจากตำแหน่งล่างสุดแล้ว ไม่ว่าสวิตช์ล่างจะบอกอะไร
+  //      สถานะยกขาก็ตั้งค่านี้เหมือนกัน แต่ตั้งเมื่อการยกเดินหน้าไปจริงแล้วเท่านั้น ดูที่นั่น
+  //      การตั้งค่าตอนเข้าสถานะค้างด้วย ทำให้ทุกเส้นทางที่ไปสู่สถานะลดลงผ่านสถานะที่พิสูจน์เรื่องนี้แล้ว
+  //      สถานะลดลงจึงไม่มีทางเข้าใจผิดว่าสวิตช์ล่างที่ค้างอยู่แปลว่า "ไม่เคยออกจากล่างสุด"
+  if (p == Phase::Hold) liftedSinceBottom = true;
   ph = p;
   phaseStart = nowMs;  // จับเวลาเริ่มสถานะใหม่
 }
@@ -292,6 +308,28 @@ void SessionSM::tick(uint32_t nowMs, bool topPressed, bool bottomPressed) {
     case Phase::Fault:
       return;
     case Phase::Lift:
+      // "The leg has left the bottom" is only true once the lift has committed —
+      // either the bottom switch released, or the relay has driven up long enough
+      // that it must have. Setting it the instant Lift was entered made a STOP in
+      // the first moments of a session pathological: the leg had not moved, but
+      // the flag said it had, so alreadyDown was refused, the descent could never
+      // confirm, and the actuator drove into the bottom stop for the full cap and
+      // then faulted — repeatably, with a patient's leg loaded on it.
+      //
+      // The time term is what covers an open bottom line, which never releases:
+      // without it the flag would never set on that machine, and a recovery
+      // descent would "confirm" 25 ms in with the leg fully raised.
+      // [TH] คำว่า "ขาออกจากตำแหน่งล่างสุดแล้ว" จะเป็นจริงก็ต่อเมื่อการยกเดินหน้าไปจริงแล้ว
+      //      คือสวิตช์ล่างปล่อยแล้ว หรือรีเลย์สั่งยกนานพอจนขาต้องขยับไปแล้ว
+      //      การตั้งค่านี้ทันทีที่เข้าสถานะยกขาทำให้การกด STOP ในช่วงต้นของรอบมีปัญหาหนัก
+      //      ขายังไม่ได้ขยับ แต่ค่าบอกว่าขยับแล้ว เงื่อนไข alreadyDown จึงถูกปฏิเสธ
+      //      การลดขายืนยันไม่ได้เลย ชุดขับเคลื่อนจึงดันชนกลไกด้านล่างจนครบเพดานเวลาแล้วจบด้วยความผิดพลาด
+      //      เกิดซ้ำได้เรื่อยๆ ทั้งที่มีขาของผู้ป่วยวางอยู่
+      //      ส่วนเงื่อนไขเรื่องเวลามีไว้รองรับสายสวิตช์ล่างที่ขาด ซึ่งจะไม่มีวันปล่อย
+      //      ถ้าไม่มีเงื่อนไขนี้ ค่าจะไม่ถูกตั้งเลยบนเครื่องนั้น
+      //      แล้วการลดขาเพื่อกู้สถานการณ์จะ "ยืนยัน" ตั้งแต่ 25 มิลลิวินาทีแรกทั้งที่ขายกสุดอยู่
+      if (!liftedSinceBottom && (!bottomPressed || dt >= LIFT_COMMIT_MS))
+        liftedSinceBottom = true;
       if (topPressed) enter(Phase::Hold, nowMs);            // fully up — ยกสุดแล้ว
       else if (dt >= cfg.maxTravelMs) finish(nowMs, Phase::Fault, true);  // net 1 — เกินเวลา = ผิดพลาด
       return;
