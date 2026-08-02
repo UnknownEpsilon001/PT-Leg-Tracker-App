@@ -192,16 +192,18 @@ $steps = @(
         Name    = "START begins a session"
         Do      = "lift the START jumper (GPIO 25) briefly, then put it back on GND"
         Expect  = @('EDGE START', 'phase=LIFT')
-        Hint    = "EDGE but no LIFT: the session refused to start (already running, or a latched FAULT). No EDGE at all: wrong pin or polarity."
+        Hint    = "EDGE but no LIFT: the session refused to start (already running, a latched FAULT, or the STOP line has read pressed since power-up - it prints 'start refused: STOP has read pressed since power-up', so wire STOP to GND and lift it once to clear that). No EDGE at all: wrong pin or polarity."
     },
     [pscustomobject]@{
         Name    = "STOP safe-lowers"
         # No bottom switch ever closes on the bench, so SAFE-LOWER runs the full
-        # max-travel cap (8 s by default) before ending IDLE - not FAULT, the
-        # safe-stop path is deliberately not a fault.
-        Do      = "lift the STOP jumper (GPIO 26) briefly, then put it back on GND"
+        # max-travel cap (8 s by default) before ending IDLE. The PHASE is not
+        # FAULT, but the SESSION is flagged faulted because the leg never reached
+        # the bottom switch, so the row this run writes to the card carries
+        # fault=1. Expected on a bench with the limits jumpered to GND.
+        Do      = "press STOP within 8 s of START (lift the GPIO 26 jumper briefly, then put it back on GND) - wait longer and the lift times out into FAULT first"
         Expect  = @('EDGE STOP', 'phase=SAFE-LOWER', 'phase=IDLE')
-        Hint    = "Reaching IDLE takes the full max-travel cap (~8 s) because no bottom switch closes. FAULT here instead means a limit pin came loose."
+        Hint    = "Reaching IDLE takes the full max-travel cap (~8 s) because no bottom switch closes. FAULT here instead means a limit pin came loose. Note STOP now also safe-lowers out of a latched FAULT, so this step passing does not by itself prove a session was running."
     },
     [pscustomobject]@{
         Name    = "RESET clears reps when idle"

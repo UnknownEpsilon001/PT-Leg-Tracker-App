@@ -39,20 +39,34 @@ static const char* MAP_TH2[] = {
 // same width as the twelve single-width keys above it.
 // [TH] บิตล่างของค่าควบคุมคือความกว้างของปุ่ม และความกว้างคิดเทียบกันเฉพาะภายในแถวเดียวกัน
 //      แถวล่างจึงใช้ 2+2+6+2 ซึ่งกว้างเท่ากับปุ่มขนาดหนึ่งหน่วยสิบสองปุ่มในแถวบน
+// The page-switching keys — ⇧, ?123, globe and OK — act on release and never
+// auto-repeat; every other key keeps the stock behaviour, so backspace and space
+// still repeat when held. LVGL's own maps set these bits and ours did not: a
+// button matrix fires on press-down and again on every long-press repeat, so a
+// firm press on this resistive panel, which is the normal way to use it, flipped
+// the layout five or six times in a second and left whichever page the last
+// repeat happened to land on.
+// [TH] ปุ่มสลับหน้า ⇧ ?123 ลูกโลก และตกลง จะทำงานตอนปล่อยนิ้วและไม่กดซ้ำอัตโนมัติ
+//      ปุ่มอื่นยังทำงานเหมือนเดิม ปุ่มลบและเว้นวรรคจึงยังกดค้างแล้วซ้ำได้
+//      แป้นของ LVGL เองตั้งบิตเหล่านี้ไว้แต่ของเราไม่ได้ตั้ง ปุ่มแบบตารางจะทำงานตั้งแต่กดลง
+//      แล้วทำซ้ำทุกครั้งที่กดค้าง การกดหนักๆ บนจอสัมผัสแบบนี้ซึ่งเป็นวิธีใช้ปกติ
+//      จึงสลับหน้าห้าหกครั้งในหนึ่งวินาที แล้วค้างอยู่ที่หน้าที่การกดซ้ำครั้งสุดท้ายพาไป
+#define KB_SW (LV_BTNMATRIX_CTRL_NO_REPEAT | LV_BTNMATRIX_CTRL_CLICK_TRIG)
+
 static const lv_btnmatrix_ctrl_t CTRL_TH1[] = {
   1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
   1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
   1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-  2, 2, 6, 2
+  KB_SW | 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+  KB_SW | 2, KB_SW | 2, 6, KB_SW | 2
 };
 
 static const lv_btnmatrix_ctrl_t CTRL_TH2[] = {
   1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
   1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
   1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-  2, 2, 6, 2
+  KB_SW | 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+  KB_SW | 2, KB_SW | 2, 6, KB_SW | 2
 };
 
 // The Latin pages are ours too, because LVGL's stock ones have no globe key:
@@ -81,8 +95,8 @@ static const char* MAP_EN2[] = {
 static const lv_btnmatrix_ctrl_t CTRL_EN[] = {
   1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
   1, 1, 1, 1, 1, 1, 1, 1, 1,
-  1, 1, 1, 1, 1, 1, 1, 1, 1,
-  2, 2, 4, 2
+  KB_SW | 1, 1, 1, 1, 1, 1, 1, 1, 1,
+  KB_SW | 2, KB_SW | 2, 4, KB_SW | 2
 };
 
 // LVGL's own keyboard handler knows only the keys in its own maps. A "?123" or

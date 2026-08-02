@@ -8,8 +8,11 @@
 
 void rtcBegin();                    // Wire.begin + probe; safe if the chip is absent
                                     // [TH] เริ่ม I2C และตรวจว่ามีชิปหรือไม่ ไม่มีก็ไม่พัง
-bool rtcPresent();                  // false if I2C init failed — เป็น false เมื่อหาชิปไม่เจอ
+bool rtcPresent();                  // whether the chip answered the last time it was asked
+                                    // [TH] ชิปตอบรับหรือไม่ในครั้งล่าสุดที่ถาม
 uint32_t rtcEpoch();                // UTC seconds; 0 if absent or never set (year < 2020)
                                     // [TH] วินาที UTC คืน 0 ถ้าไม่มีชิปหรือยังไม่เคยตั้งเวลา
-void rtcSetFromEpoch(uint32_t utc); // write the time (used after an NTP sync)
+bool rtcSetFromEpoch(uint32_t utc); // write the time (used after an NTP sync); false if the
+                                    // chip did not answer, so the caller can try again later
                                     // [TH] ตั้งเวลาลงชิป (ใช้หลังซิงก์เวลาจาก NTP)
+                                    //      คืน false ถ้าชิปไม่ตอบ ผู้เรียกจะได้ลองใหม่ทีหลัง

@@ -24,6 +24,19 @@ struct Ev { String type; uint32_t elapsed; uint16_t reps; };
 static Ev evq[EV_MAX];
 static int evHead = 0, evCount = 0;
 
+// A queue that cannot be delivered must not be retried every loop iteration.
+// Each failed attempt costs the full connect timeout, and an event the server
+// never accepts stays queued forever, so the safety loop would drop from
+// hundreds of iterations per second to two: the limit switches need two samples
+// 25 ms apart to be believed, and the panel STOP button the same, so both would
+// answer most of a second late while the relay is still driving.
+// [TH] คิวที่ส่งไม่สำเร็จต้องไม่ลองใหม่ทุกรอบลูป
+//      การลองแต่ละครั้งเสียเวลาเท่ากับ timeout เต็มๆ และเหตุการณ์ที่เซิร์ฟเวอร์ไม่รับจะค้างตลอดไป
+//      ลูปความปลอดภัยจะเหลือแค่ไม่กี่รอบต่อวินาที ลิมิตสวิตช์ต้องอ่านสองครั้งห่างกัน 25 มิลลิวินาที
+//      ปุ่ม STOP ก็เช่นกัน ทั้งคู่จึงตอบสนองช้าเกือบวินาทีทั้งที่รีเลย์ยังทำงานอยู่
+static const uint32_t EV_RETRY_MS = 3000;
+static uint32_t evNextTryMs = 0;
+
 void netBegin(const DeviceSettings& s) {
   // [TH] ตั้งค่า URL เซิร์ฟเวอร์และรหัสอุปกรณ์ แล้วเริ่มเชื่อมต่อ WiFi ถ้ามี SSID
   baseUrl = s.serverUrl;
@@ -93,10 +106,34 @@ String netPollCommand() {
   int code = http.GET();
   String cmd = "";
   if (code == 200) {
-    JsonDocument doc;
-    if (deserializeJson(doc, http.getString()) == DeserializationError::Ok &&
-        !doc["command"].isNull())
-      cmd = doc["command"].as<String>();
+    // The body is read as a bounded stream, not pulled into a String whole. This
+    // poll runs once a second, and serverUrl can point at anything someone typed
+    // — a captive portal, a router's web UI on the wrong port — which answers 200
+    // with a page. getString() would allocate that page every second on a board
+    // with ~150 KB of usable heap and fragment what the UART buffer, the event
+    // queue and the WiFi stack draw from. The filter keeps only the one field
+    // this function wants, so a large body costs nothing to parse either.
+    // [TH] อ่านเนื้อหาแบบสตรีมที่จำกัดขนาด ไม่ดึงมาเก็บเป็นสตริงทั้งก้อน
+    //      การถามคำสั่งทำทุกวินาที และ serverUrl ชี้ไปที่อะไรก็ได้ที่มีคนพิมพ์ไว้
+    //      เช่นหน้าล็อกอินไวไฟหรือหน้าเว็บของเราเตอร์ที่ตอบ 200 พร้อมหน้าเว็บทั้งหน้า
+    //      getString() จะจองหน่วยความจำเท่าหน้านั้นทุกวินาทีบนบอร์ดที่มีหน่วยความจำว่างราว 150 KB
+    //      และทำให้หน่วยความจำแตกกระจัดกระจายจนบัฟเฟอร์ UART คิวเหตุการณ์ และ WiFi ไม่พอใช้
+    //      ตัวกรองเก็บเฉพาะฟิลด์เดียวที่ต้องใช้ เนื้อหาก้อนใหญ่จึงไม่กินหน่วยความจำตอนแปลงด้วย
+    static const int MAX_BODY = 2048;
+    int len = http.getSize();
+    if (len > MAX_BODY) {
+      Serial.printf("net: command body %d bytes, ignored\n", len);
+    } else {
+      JsonDocument filter;
+      filter["command"] = true;
+      JsonDocument doc;
+      if (deserializeJson(doc, http.getStream(), DeserializationOption::Filter(filter)) ==
+              DeserializationError::Ok &&
+          !doc["command"].isNull()) {
+        cmd = doc["command"].as<String>();
+        if (cmd.length() > 32) cmd = "";  // no command is that long — คำสั่งไม่ยาวขนาดนั้น
+      }
+    }
   }
   http.end();
   serverOk = code >= 200 && code < 300;
@@ -113,8 +150,11 @@ void netQueueEvent(const char* type, uint32_t elapsedSec, uint16_t reps) {
   evCount++;
 }
 
-static void tryFlushEvent() {
+static void tryFlushEvent(uint32_t nowMs) {
   if (evCount == 0) return;
+  // Signed compare so the wrap at 49 days does not park the queue for a month.
+  // [TH] เทียบแบบมีเครื่องหมาย เวลาที่วนกลับที่ 49 วันจะได้ไม่ทำให้คิวหยุดส่งเป็นเดือน
+  if ((int32_t)(nowMs - evNextTryMs) < 0) return;
   const Ev& e = evq[evHead];  // FIFO: preserve start-before-stop ordering
   // Serialised, not concatenated: ArduinoJson escapes whatever the device code
   // contains. See urlEncode above for why that matters.
@@ -129,6 +169,10 @@ static void tryFlushEvent() {
   if (post("/api/device/event", body)) {
     evHead = (evHead + 1) % EV_MAX;
     evCount--;
+    evNextTryMs = nowMs;  // draining works: take the next one on the next pass
+                          // [TH] ส่งได้แล้ว รอบถัดไปส่งตัวต่อไปได้ทันที
+  } else {
+    evNextTryMs = nowMs + EV_RETRY_MS;
   }
 }
 
@@ -150,5 +194,5 @@ void netLoop(uint32_t nowMs) {
     lastReconnect = nowMs;
     WiFi.reconnect();
   }
-  tryFlushEvent();
+  tryFlushEvent(nowMs);
 }

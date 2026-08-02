@@ -258,8 +258,9 @@ fields use. At thai20/28 the marks share a baseline and overlap — see
 
 `pt-leg-display/uitest.h` carries a flag that is `0` in every commit. Set it to
 `1` for a bench run and the display takes commands on the USB serial line:
-`tap X Y`, `type TEXT`, `clear`, `ta`, `screen`, `mem`, `cat PATH`, `shot`,
-`shot x1 y1 x2 y2`, `reset`. Taps use screen coordinates and bypass the touch
+`tap X Y`, `swipe X1 Y1 X2 Y2`, `type TEXT`, `clear`, `ta`, `screen`, `mem`,
+`cat PATH`, `known`, `shot`, `shot x1 y1 x2 y2`, `reset`. `known` unlocks SAVE
+and RESET DEFAULTS without a controller attached. Taps use screen coordinates and bypass the touch
 panel's calibration, so a scripted run repeats exactly.
 
 `shot` streams the screen back as one base64 line per pixel row — there is no
@@ -339,9 +340,10 @@ arduino-cli compile --fqbn "esp32:esp32:esp32:PartitionScheme=huge_app" --upload
 .\firmware\tools\fake-controller.ps1 -AutoStart
 ```
 
-The script answers `hello`, reacts to START/STOP touches, and runs a compressed
-LIFT/HOLD/LOWER/REST cycle so the phases visibly move. Stop it and the display
-falls back to `NO LINK` after ~2.5 s. **Set the switch back to `0` before
+The script answers `hello`, takes `s`/`x`/`r` on the keyboard in place of the
+controller's panel buttons, and runs the real LIFT/HOLD/LOWER/REST cycle so the
+phases visibly move — shorten it with `-HoldSec`/`-RestSec`. Stop it and the
+display falls back to `ไม่พบตัวควบคุม` (no link) after ~2.5 s. **Set the switch back to `0` before
 flashing a real machine** — do not use `--build-property` to set it, as flag
 changes against cached objects have produced broken images.
 
@@ -378,10 +380,12 @@ that library into `1.print(...)` and the controller stops compiling.
 **Unwired NC inputs read as pressed.** `SWITCH_NC` + `INPUT_PULLUP` means a
 closed contact pulls the pin LOW and an open one floats HIGH, and an absent wire
 is indistinguishable from an open contact — that is the fail-safe, not a bug. A
-bare board therefore boots with START, STOP and RESET all "pressed", firing one
-edge each on the first debounce pass. For a bench test, jumper each button pin to
-GND to stand in for the closed contact, and lift the jumper to press. **Ground
-GPIO 32 and 33 as well before starting** — see the fault note below:
+bare board therefore boots with START, STOP and RESET all reading "pressed", but
+fires **no** edges: the debouncer is seeded from the pin state at power-up, so an
+edge needs a release-then-press that a floating pin never produces. For a bench
+test, jumper each button pin to GND to stand in for the closed contact, and lift
+the jumper to press. **Ground GPIO 32 and 33 as well before starting** — see the
+fault note below:
 
 | Signal | Pin | Jumper to GND | Lift jumper |
 | ------ | --- | ------------- | ----------- |
@@ -410,19 +414,141 @@ bench. Exit code is the number of failed steps.
 
 Leaving the limit pins floating does **not** give a fast cycle. Both read
 AT-LIMIT at once, which is physically impossible, so `SessionSM::tick` calls it a
-wiring fault and the session goes straight to FAULT — verified on the bench
-2026-07-26, where a bare board went `SAFE-LOWER` → `FAULT` 13 ms after boot:
-
-```
-[dbg 247] EDGE START / EDGE STOP / EDGE RESET   <- three floating buttons
-[dbg 247] limits top=AT-LIMIT bottom=AT-LIMIT
-[dbg 260] phase=FAULT reps=0 elapsed=0s
-```
+wiring fault and the session goes straight to FAULT the moment one is started. (A
+bare board no longer starts one by itself — see the seeding note above. The
+transcript that used to sit here showed a board faulting 13 ms after boot off
+three floating buttons, which the seeding made impossible.)
 
 So ground 32 and 33 for the whole button test. With them grounded, neither limit
 ever closes, and the phases run on the max-travel cap alone: START gives LIFT for
-8 s and then FAULT (net 1), while STOP gives SAFE-LOWER for 8 s and then IDLE —
-the safe-stop path deliberately ends idle rather than faulted.
+8 s and then FAULT (net 1), while STOP gives SAFE-LOWER for 8 s and then IDLE.
+The *phase* deliberately ends idle rather than faulted, but the *session* is
+flagged faulted whenever the leg never reached the bottom switch — so a bench
+STOP produces `done.fault=true` and a `fault=1` row on the card. Expected with
+the limits jumpered to GND, and the thing to look for on a real machine.
+
+**START is refused while STOP has read pressed since power-up.** On an NC button
+an open line reads pressed forever and can never raise an edge, so STOP would be
+dead for the whole power cycle. Wiring STOP to GND and lifting the jumper once
+clears the suspicion; until then START prints
+`start refused: STOP has read pressed since power-up, check its wiring` and does
+nothing.
+
+## The safety nets, and what each one actually covers
+
+Seven things stand between a fault and a patient's leg. They are listed here
+together because several of them look redundant and are not, and because two of
+them were added after a review found the leg could be left in the air.
+
+**1. Break-before-make, plus a 50 ms dead time.** `actuator.cpp` is the only
+file that touches the relay pins. It always de-energizes both before energizing
+one, and on a direction reversal it drops both, waits `DEADTIME_MS`, and
+energizes the new direction from `actuatorTick()`. The wait matters because
+commanding the relays apart is not the same as their contacts being apart: STOP
+during a lift goes from UP to SafeLower's DOWN in a single loop iteration, and
+without the wait that reversal relied on the UP relay releasing faster than the
+DOWN one operates — a property of the parts, not of this code, and the two are
+on different connectors.
+
+**2. The travel cap, enforced twice.** `actuatorTick()` checks it every loop,
+and an `esp_timer` one-shot armed on every energize cuts the relays from the
+timer task if the loop does not get there. The loop-side check alone was not a
+second net: the failures that make a stroke run long — a network call blocking
+for its timeout, a long flash write — are the same failures that stop the check
+running. The timer covers a blocked loop, and it runs on the other core so it
+survives one. It does **not** cover a panic (neither core runs) and it is
+delayed, not defeated, by a flash erase, which stalls both CPUs. If it cannot be
+created at boot, `setup()` prints `cap timer missing, the hardware backstop is
+OFF` — that message means the machine is down to net-1 only.
+
+**3. Both limit switches pressed at once is a wiring fault** (net 2), because it
+is physically impossible. SafeLower is exempt: the usual cause is one open
+switch line reading pressed forever, and faulting *during* a lowering is what
+strands the leg. A safe-lower only ever drives DOWN and is time-capped, so
+letting it finish is bounded and always moves the leg the safe way.
+
+**4. A fault does not trap the leg.** Both STOP and RESET lower it from a
+latched Fault. Before that, a travel-timeout fault parked the leg wherever it
+stopped — often halfway up — and STOP did nothing, RESET only cleared the latch,
+and START drove the actuator *further up* into whatever had jammed it. The
+lowering reports nothing of its own: the session was already recorded when it
+faulted, and a second report would put a duplicate row on the card.
+
+**Any** safe-lower — a recovery, an ordinary STOP, or a lower started from Idle —
+returns to Idle only if the bottom switch confirmed the arrival; otherwise it
+latches Fault. A descent that ran its cap out without reaching the bottom used to
+leave the leg in the air with the screen reading "พร้อม" (ready) and no button
+able to lower it, because at the time Idle had no DOWN command at all — and a
+failed DOWN relay or a jammed actuator looks exactly like that. Latching Fault
+keeps the failure visible and keeps STOP and RESET commanding descents. `maxTravelSec` is sized for a lift, not necessarily for a
+full recovery descent, so more than one press can legitimately be needed.
+
+Two details that keep that from becoming its own trap. A bottom switch already
+closed at the first tick of a stroke means the leg is **already down**, not that
+the switch is lying — so a fault latched at the bottom of a stroke does not
+drive into the mechanical stop for the full cap trying to confirm something that
+was true before it started. And after a descent that could not confirm, a second
+RESET clears the fault instead of driving again; repeating a descent that did
+not work is not help, it is another eight seconds against whatever is in the
+way. STOP still commands another descent for an operator who wants one.
+
+**5. The bottom switch is only believed if it was clear when the stroke began.**
+A leg that still needs lowering cannot already be at the bottom, so a bottom
+line reading pressed from the first tick is an open circuit, not an arrival.
+Without this, a recovery lower after the canonical net-2 fault ended about 25 ms
+in — as soon as the top switch debounced clear, the lying bottom switch was
+believed — leaving the leg up after travelling a couple of centimetres. A
+safe-lower that runs its cap out without a confirmed arrival ends in Idle by
+design but is reported as `fault=true`: the phase is a clean stop, the session
+is not.
+
+**6. Only STOP can be recovered from the interrupt.** Buttons are level-sampled
+once per loop, and one iteration can block for most of a second inside a network
+call against an unreachable server — long enough for a normal press to begin and
+end unseen. A pin-change interrupt therefore times each press and hands the loop
+the ones it was not awake for. That path is wired to STOP alone: a lost START
+just means pressing it again, whereas a *false* START lifts a leg with nobody at
+the panel, and the interrupt is not IRAM-registered on this core, so a glitch
+delivered late out of a flash-cache-off window can be mis-timed as a full press.
+A spurious STOP costs one safe-lower; that is the trade.
+
+**7. Idle can lower too, when the leg is believed up.** Idle used to be the only
+state with no DOWN command at all, and it is reachable with the leg in the air —
+a second RESET after a failed recovery lands there, and so does a power cut
+part-way through a lift. STOP in Idle now commands one capped descent, but only
+while the firmware believes the leg has been driven up since the bottom was last
+genuinely confirmed. After an ordinary session the leg is at the bottom, that
+belief is false, and STOP in Idle stays the no-op it has always been.
+
+That belief is seeded from the bottom limit switch at boot, which is what makes
+the power-cut case work: a board that comes up with the leg in the air knows it.
+The descent ends under the same rules as any other — Idle on a confirmed
+arrival, Fault otherwise — so a lower that achieves nothing is visible and is
+not repeatable without the operator acknowledging it. An earlier version let
+this path always return to Idle on the reasoning that Idle has no fault to go
+back to; that made it unconfirmable, unlatched and endlessly repeatable, and
+every press drove the full cap into the mechanical bottom stop in silence.
+
+Two things that are deliberately **not** nets. The UART-loss safe-stop is armed
+by the first line ever received, so a controller running standalone is not
+stopped by a display that was never there. And START is refused while the STOP
+line reads pressed with nobody plausibly pressing it — an open NC circuit — on
+the grounds that a session nobody can stop from the panel should not begin.
+
+### What the firmware cannot fix
+
+A DOWN relay that has failed open, or a jammed actuator, leaves no way down by
+any command. The firmware behaves correctly around both — strokes stay bounded,
+the machine stays latched in Fault so STOP keeps buying descents — but the leg
+comes down by hand or not at all. Treat a fault that survives two descents as a
+mechanical fault, not a firmware one.
+
+One combination is still a dead end by design: leg up in Idle **and** the STOP
+line open at power-up. START is refused (net 7's gate is `liftedSinceBottom`,
+which a fresh boot clears, and the STOP-wire refusal blocks START from both the
+panel and the server), so nothing can be commanded. It needs two coincident
+faults, and the alternative — letting a machine with a dead STOP button start a
+session — is worse.
 
 ## LVGL logging and asserts
 

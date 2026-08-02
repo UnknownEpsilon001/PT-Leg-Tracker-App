@@ -23,7 +23,7 @@
 #
 # It answers `hello` with a settings reply, then runs the device's real cycle:
 # LIFT -> HOLD 10 s -> LOWER -> REST 10 s, repeating. Ctrl+C stops, and the display
-# should fall back to NO LINK about 2.5 s later.
+# should fall back to ไม่พบตัวควบคุม (no link) about 2.5 s later.
 # Shorten a phase for a quicker watch with -HoldSec / -RestSec.
 #
 # Ending a session (x, or -Seconds running out mid-stop) sends `done`, the same
@@ -47,8 +47,11 @@ param(
     # [TH] เวลาที่ใส่ในข้อความ done ตอนจบรอบ: 0 = เหมือนไม่มีนาฬิกา, -1 = ใช้เวลาจริงของเครื่องพีซี
     [long]$Epoch = -1,
     # Ends the session with fault=true, the way the controller reports a session
-    # cut short by a limit switch. The finish screen should read the fault wording
-    # and the SD row should carry fault=1.
+    # that hit a safety net: a stroke that ran past maxTravelSec with no limit
+    # closing, both limits reading pressed at once, an actuator cap trip, or a
+    # safe-lower that never reached the bottom switch. A limit switch closing is
+    # the normal path, not a fault. The finish screen should read the fault
+    # wording and the SD row should carry fault=1.
     # [TH] จบรอบด้วย fault=true เหมือนตอนสวิตช์จำกัดระยะทำงาน หน้าสรุปต้องขึ้นข้อความเตือน
     #      และแถวในไฟล์ต้องมี fault=1
     [switch]$Fault
@@ -159,15 +162,15 @@ try {
                 Write-Host "   (kept the display's settings)" -ForegroundColor Yellow
                 Send-Line $settings
             }
-            elseif ($line -match '"v"\s*:\s*"start"') {
-                $running = $true; $phase = 1; $phaseLeft = $TravelSec
-                $reps = 0; $sessionStart = Get-Date
-                Write-Host "   START" -ForegroundColor Green
-            }
-            elseif ($line -match '"v"\s*:\s*"stop"') {
-                $phase = 5; $phaseLeft = $TravelSec   # SafeLower, then idle
-                Write-Host "   STOP" -ForegroundColor Green
-            }
+            # Run control used to travel over UART as a `cmd` message. It moved to
+            # physical panel buttons on the controller, the display's main screen
+            # is output-only, and link-protocol.md no longer defines the message -
+            # so nothing can send it and the branches that handled it are gone.
+            # The keyboard handler below is the live stand-in for those buttons.
+            # [TH] เดิมคำสั่งเริ่ม/หยุดส่งผ่าน UART เป็นข้อความ cmd
+            #      ตอนนี้ย้ายไปเป็นปุ่มจริงบนคอนโทรลเลอร์ หน้าจอหลักของจอแสดงผลอย่างเดียว
+            #      และเอกสารโพรโทคอลไม่มีข้อความนี้แล้ว จึงไม่มีอะไรส่งมาได้และลบส่วนที่รับไปแล้ว
+            #      ตัวรับปุ่มจากคีย์บอร์ดด้านล่างคือตัวแทนของปุ่มเหล่านั้น
         }
 
         # keyboard: stand in for the controller's START/STOP/RESET panel buttons

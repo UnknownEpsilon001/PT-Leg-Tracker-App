@@ -405,7 +405,7 @@ void uiUpdateMain(bool running, Phase phase, uint32_t elapsedSec, uint16_t reps,
 //      ตัวจัดการเปรียบเทียบด้วยสตริง จึงต้องนิยามไว้ที่เดียว
 #define SCAN_PLACEHOLDER "(เลือกเครือข่าย)"
 
-static lv_obj_t *scrSettings, *taSsid, *taPass, *taServer, *taCode, *kb, *ddScan;
+static lv_obj_t *scrSettings, *taSsid, *taPass, *taServer, *taCode, *kb, *ddScan, *colSettings;
 static lv_obj_t *spinMax, *spinHold, *spinRest, *btnSave, *btnReset;
 static void (*cbSave)(const DeviceSettings&) = nullptr;
 static bool settingsKnown = false;  // has the controller ever sent its settings?
@@ -568,6 +568,14 @@ static void buildConfirmReset() {
 static void hideKeyboard() {
   if (!kb) return;
   lv_obj_add_flag(kb, LV_OBJ_FLAG_HIDDEN);
+  // Full height and the bottom anchor back, so all the fields are on screen
+  // whenever the keys are not. Same shape as hideAddKeyboard.
+  // [TH] คืนความสูงเต็มและการจัดวางชิดล่างให้กล่องช่องกรอก ช่องต่างๆ จะได้เห็นครบตอนไม่มีแป้นพิมพ์บัง
+  //      รูปแบบเดียวกับ hideAddKeyboard
+  if (colSettings) {
+    lv_obj_set_height(colSettings, 196);
+    lv_obj_align(colSettings, LV_ALIGN_BOTTOM_MID, 0, 0);
+  }
   lv_keyboard_set_textarea(kb, nullptr);
 }
 
@@ -590,6 +598,24 @@ static void taFocused(lv_event_t* e) {
   lv_obj_t* ta = (lv_obj_t*)lv_event_get_target(e);
   lv_keyboard_set_textarea(kb, ta);
   thaiKbSetScript(kb, false);  // these fields are ASCII — ช่องเหล่านี้ใช้อักษรอังกฤษ
+
+  // The field column is shrunk to the strip above the keyboard, exactly as the
+  // add form does it. scroll_to_view alone does nothing here: LVGL still counts a
+  // field as "in view" when the keyboard is drawn on top of it, so every one of
+  // these fields was typed into blind — the SD-status row added at the top of the
+  // column pushed them further under the keys still. The column is bottom-
+  // anchored, unlike the add form's, so it has to be re-anchored as well or
+  // shrinking just slides it behind the keys.
+  // [TH] ย่อความสูงกล่องช่องกรอกให้เหลือเฉพาะส่วนเหนือแป้นพิมพ์ แบบเดียวกับฟอร์มลงทะเบียน
+  //      ถ้าใช้ scroll_to_view อย่างเดียวจะไม่เกิดอะไรขึ้น เพราะ LVGL ยังนับว่าช่องนั้นอยู่ในจอ
+  //      ทั้งที่แป้นพิมพ์วาดทับอยู่ ทุกช่องในหน้านี้จึงต้องพิมพ์แบบมองไม่เห็น
+  //      และแถวสถานะการ์ด SD ที่เพิ่มไว้บนสุดยังดันช่องต่างๆ ให้ลงไปอยู่ใต้แป้นพิมพ์มากขึ้นอีก
+  //      กล่องนี้จัดวางชิดล่าง ต่างจากของฟอร์มลงทะเบียน จึงต้องย้ายจุดยึดด้วย
+  //      ไม่อย่างนั้นการย่อจะแค่เลื่อนมันไปอยู่หลังแป้นพิมพ์
+  if (colSettings) {
+    lv_obj_set_height(colSettings, 76);
+    lv_obj_align(colSettings, LV_ALIGN_TOP_MID, 0, 44);
+  }
   lv_obj_clear_flag(kb, LV_OBJ_FLAG_HIDDEN);
   lv_obj_scroll_to_view(ta, LV_ANIM_ON);  // keep the focused field above the keys
 }
@@ -772,7 +798,7 @@ static void buildSettings() {
   applySaveEnabled();
 
 
-  lv_obj_t* col = lv_obj_create(scrSettings);
+  lv_obj_t* col = colSettings = lv_obj_create(scrSettings);
   lv_obj_set_size(col, lv_pct(100), 196);
   lv_obj_align(col, LV_ALIGN_BOTTOM_MID, 0, 0);
   lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
@@ -812,9 +838,23 @@ static void buildSettings() {
   lv_obj_add_event_cb(
       ddScan,
       [](lv_event_t* e) {
+        // Row 0 is never a network: it is either the prompt or the "no networks
+        // found" line, and LVGL sends VALUE_CHANGED on every release over an
+        // option whether or not the selection moved. Matching the prompt string
+        // let the error line through, so tapping it typed "(ไม่พบเครือข่าย -
+        // ลองใหม่)" into the SSID field — truncated mid-codepoint at 64 bytes —
+        // and SAVE then wrote that to NVS and to the card, leaving a machine that
+        // never joins WiFi again until someone retypes the name by hand.
+        // [TH] แถวที่ 0 ไม่ใช่ชื่อเครือข่ายเสมอ เป็นข้อความชวนให้เลือกหรือบรรทัด "ไม่พบเครือข่าย"
+        //      และ LVGL ส่ง VALUE_CHANGED ทุกครั้งที่ปล่อยนิ้วบนตัวเลือก ไม่ว่าค่าจะเปลี่ยนหรือไม่
+        //      การเทียบกับข้อความชวนให้เลือกจึงปล่อยบรรทัดแจ้งข้อผิดพลาดผ่านไปได้
+        //      แตะแล้วข้อความนั้นจะถูกใส่ลงช่อง SSID โดยถูกตัดกลางตัวอักษรที่ 64 ไบต์
+        //      พอกดบันทึกก็จะถูกเขียนลง NVS และลงการ์ด เครื่องจะต่อ WiFi ไม่ได้อีกจนกว่าจะพิมพ์ชื่อใหม่เอง
+        lv_obj_t* dd = (lv_obj_t*)lv_event_get_target(e);
+        if (lv_dropdown_get_selected(dd) == 0) return;
         char sel[64];
-        lv_dropdown_get_selected_str((lv_obj_t*)lv_event_get_target(e), sel, sizeof(sel));
-        if (strcmp(sel, SCAN_PLACEHOLDER) != 0) lv_textarea_set_text(taSsid, sel);
+        lv_dropdown_get_selected_str(dd, sel, sizeof(sel));
+        lv_textarea_set_text(taSsid, sel);
       },
       LV_EVENT_VALUE_CHANGED, nullptr);
 
@@ -832,8 +872,16 @@ static void buildSettings() {
   spinHold = makeSpinRow(col, "ค้าง (วิ)", 10, 1, 60);
   spinRest = makeSpinRow(col, "พัก (วิ)", 10, 1, 60);
 
+  // The keyboard comes down before the dialog goes up. Both ways out of the
+  // dialog return with lv_scr_load(scrSettings) rather than uiOpenSettings, so
+  // nothing on the way back resets keyboard state — whatever this screen was left
+  // holding, including the shrunk field column, would still be there.
+  // [TH] ปิดแป้นพิมพ์ก่อนเปิดกล่องยืนยัน ทั้งสองทางออกของกล่องนั้นกลับมาด้วย lv_scr_load(scrSettings)
+  //      ไม่ได้ผ่าน uiOpenSettings จึงไม่มีอะไรคืนสถานะแป้นพิมพ์ให้ตอนกลับมา
+  //      สิ่งที่ค้างไว้บนหน้านี้จะยังอยู่ รวมถึงกล่องช่องกรอกที่ถูกย่อไว้ด้วย
   btnReset = makeBtn(col, "คืนค่าเริ่มต้น", COL_SURFACE, &thai20,
                      [](lv_event_t*) {
+                       hideKeyboard();
                        if (!scrConfirmReset) buildConfirmReset();
                        lv_scr_load(scrConfirmReset);
                      });

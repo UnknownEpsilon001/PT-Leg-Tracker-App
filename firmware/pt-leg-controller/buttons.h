@@ -17,3 +17,15 @@ void buttonsPoll(uint32_t nowMs);  // call every loop, before SessionSM::tick
 bool buttonStartPressed();         // one-shot press edge — ขอบกดครั้งเดียว
 bool buttonStopPressed();
 bool buttonResetPressed();
+// True while the STOP line reads pressed with no plausible person pressing it:
+// either it has read that way since power-up, or it has held it for longer than
+// anyone holds a button. On an NC button that state is an open circuit — a broken
+// wire or an unseated connector — and STOP cannot raise an edge while it lasts,
+// so no session should be started. Clears as soon as the line moves, which a held
+// button does when it is released and a cut wire never does.
+// [TH] เป็นจริงเมื่อสาย STOP อ่านได้ว่ากดอยู่โดยไม่น่าจะมีคนกดจริง
+//      คืออ่านได้แบบนั้นมาตั้งแต่เปิดเครื่อง หรือค้างอยู่นานเกินกว่าที่คนจะกดค้างไว้
+//      สำหรับปุ่มแบบปกติปิด สถานะนั้นคือวงจรเปิด ซึ่งมักเป็นสายขาดหรือขั้วต่อหลวม
+//      และปุ่ม STOP จะไม่เกิดขอบสัญญาณตราบที่ยังเป็นแบบนั้น จึงไม่ควรให้เริ่มรอบใหม่
+//      ค่านี้จะถูกล้างทันทีที่ระดับขาเปลี่ยน ซึ่งปุ่มที่ถูกกดค้างจะเปลี่ยนเมื่อปล่อย แต่สายที่ขาดจะไม่มีวันเปลี่ยน
+bool buttonStopWireSuspect();

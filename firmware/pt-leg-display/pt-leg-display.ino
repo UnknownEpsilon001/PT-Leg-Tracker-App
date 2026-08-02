@@ -62,12 +62,27 @@ static bool gReconciled = false;  // the first controller reply has been handled
 //      ที่แปลว่ามีคนเพิ่งเสียบการ์ด ซึ่งเป็นจังหวะที่ต้องอ่านค่าตั้งค่าบนการ์ดใหม่
 static bool gCardWasPresent = false;
 
-// Which patient the next session belongs to. -1 until someone picks one, and it
-// stays -1 all day if nobody does: the machine must run for a walk-up patient
+// Who the next session belongs to. Empty until someone picks a patient, and it
+// stays empty all day if nobody does: the machine must run for a walk-up patient
 // with no roster at all, the row just logs without a name.
-// [TH] คนไข้ที่รอบถัดไปจะถูกบันทึกให้ -1 คือยังไม่ได้เลือก และปล่อยเป็น -1 ทั้งวันก็ได้
+//
+// The code and name are copied at the moment of the tap rather than an index
+// being kept. A roster index means nothing once the roster is reloaded — and it
+// is reloaded whenever a card is swapped, or simply re-mounted after a failed
+// write. Row 3 of the new card is a different person, so the finished session
+// was filed under a name the operator never chose, on a machine whose whole
+// purpose is per-patient progress. Copying the identity also keeps the row
+// correct when the chosen patient is not on the card that happens to be in the
+// slot at the end of the session.
+// [TH] คนไข้ที่รอบถัดไปจะถูกบันทึกให้ ว่างไว้จนกว่าจะมีคนเลือก และปล่อยว่างทั้งวันก็ได้
 //      เครื่องต้องใช้งานได้แม้ไม่มีใครลงทะเบียน แค่บันทึกโดยไม่มีชื่อ
-static int gActivePatient = -1;
+//      เก็บรหัสและชื่อตั้งแต่ตอนที่แตะเลือก ไม่ได้เก็บเป็นลำดับที่ในทะเบียน
+//      เพราะลำดับที่จะไม่มีความหมายทันทีที่ทะเบียนถูกโหลดใหม่ ซึ่งเกิดขึ้นทุกครั้งที่สลับการ์ด
+//      หรือแค่เมานต์การ์ดใหม่หลังเขียนไม่สำเร็จ แถวที่สามของการ์ดใบใหม่คือคนละคน
+//      รอบที่จบไปแล้วจึงถูกบันทึกในชื่อที่ผู้ใช้ไม่ได้เลือก บนเครื่องที่มีไว้ติดตามผลรายคนโดยเฉพาะ
+//      การเก็บตัวตนไว้ยังทำให้แถวถูกต้องแม้คนที่เลือกไว้จะไม่ได้อยู่บนการ์ดที่เสียบอยู่ตอนจบรอบ
+static String gActiveCode;
+static String gActiveName;
 
 // Card values go to the controller the moment they are known, because the card
 // is the master copy wherever it was read — at boot or hours later.
@@ -120,7 +135,16 @@ static bool dataAdd(const char* code, const char* name, int age) {
   Patient p{String(code), String(name), (uint16_t)age};
   return storeAddPatient(p);
 }
-static void dataSetActive(int i) { gActivePatient = i; }
+static void dataSetActive(int i) {
+  if (i >= 0 && i < storePatientCount()) {
+    const Patient& p = storePatient(i);
+    gActiveCode = p.code;
+    gActiveName = p.name;
+  } else {
+    gActiveCode = "";
+    gActiveName = "";
+  }
+}
 
 static void onSaveFromUi(const DeviceSettings& s) {
   gLast = s;
@@ -184,17 +208,11 @@ static void onLinkDone(const LinkDone& d) {
   r.reps = d.reps;
   r.durationSec = d.elapsed;
   r.fault = d.fault;
-  // The index is re-checked against the roster because a card can be swapped
-  // between picking a patient and finishing the session.
-  // [TH] ตรวจดัชนีซ้ำกับทะเบียนอีกครั้ง เพราะการ์ดอาจถูกเปลี่ยนหลังเลือกคนไข้ไปแล้ว
-  if (gActivePatient >= 0 && gActivePatient < storePatientCount()) {
-    const Patient& p = storePatient(gActivePatient);
-    r.patientCode = p.code;
-    r.patientName = p.name;
-  } else {
-    r.patientCode = "-";
-    r.patientName = "";
-  }
+  // The identity was copied when the patient was picked, so nothing here depends
+  // on the roster still holding the same rows it held then.
+  // [TH] ตัวตนของคนไข้ถูกคัดลอกไว้ตั้งแต่ตอนเลือก ตรงนี้จึงไม่ต้องพึ่งว่าทะเบียนยังมีแถวเดิมอยู่หรือไม่
+  r.patientCode = gActiveCode.length() ? gActiveCode : String("-");
+  r.patientName = gActiveName;
   bool saved = storeCardPresent() && sdlogWrite(r);
   if (!saved) sdlogRingPush(r);  // retried from loop() — ลองใหม่จากลูปหลัก
   Serial.printf("session done: %lus x%u fault=%d saved=%d\n", (unsigned long)r.durationSec,
@@ -274,8 +292,17 @@ void loop() {
   // live. Mirrors the controller's own 2 s UART watchdog.
   // [TH] คอนโทรลเลอร์ส่งสถานะราว 4 ครั้ง/วินาที ถ้าเงียบเกิน 2.5 วินาที ถือว่าสายหลุด
   //      ค่าที่เก็บไว้ถือว่าเก่า จอต้องเลิกแสดงว่าสด สอดคล้องกับตัวเฝ้าระวัง 2 วินาทีฝั่งคอนโทรลเลอร์
+  // Signed: gLink.poll() just above stamps lastRx with a fresh millis(), which can
+  // be later than the `now` captured at the top of this iteration. Unsigned, that
+  // subtraction is ~4.29e9 and the link reads as down at the exact moment a
+  // message arrived. Only a flickering indicator here, unlike the controller's
+  // copy of this compare, which safe-stops the session.
+  // [TH] ใช้การเทียบแบบมีเครื่องหมาย เพราะ gLink.poll() ด้านบนบันทึกเวลาด้วย millis() ค่าใหม่
+  //      ซึ่งอาจช้ากว่าค่า now ที่อ่านไว้ตั้งแต่ต้นรอบ
+  //      ถ้าลบแบบไม่มีเครื่องหมายจะได้ราวสี่พันล้าน แล้วจะอ่านว่าสายหลุดในจังหวะที่เพิ่งมีข้อความเข้ามาพอดี
+  //      ที่นี่แค่ไฟสถานะกะพริบ ต่างจากฝั่งคอนโทรลเลอร์ที่การเทียบแบบเดียวกันสั่งหยุดรอบการทำงาน
   uint32_t lastRx = gLink.lastRxMs();
-  gLinkUp = lastRx != 0 && (now - lastRx) < 2500;
+  gLinkUp = lastRx != 0 && (int32_t)(now - lastRx) < 2500;
 
   static uint32_t lastUi = 0, lastPing = 0, lastHello = 0;
   if (now - lastUi >= 250) {  // [TH] รีเฟรชหน้าจอ ~4 ครั้ง/วินาที
@@ -348,7 +375,19 @@ void loop() {
     //      ก็ทำให้เมานต์ใหม่เหมือนกัน การ์ดเต็มไม่ใช่การ์ดที่ถูกสลับ
     //      ข้อจำกัดที่รู้อยู่: ถ้าสลับการ์ดจบภายในช่วงระหว่างสองรอบตรวจ จะไม่เห็นสถานะ "ไม่มีการ์ด" และจับไม่ได้
     bool cardNow = storeCardPresent();
-    if (cardNow && !gCardWasPresent) settingsFileForget();
+    if (cardNow && !gCardWasPresent) {
+      settingsFileForget();
+      // The chosen patient goes with the old card. Whoever was picked was picked
+      // off a roster that is no longer in the slot, and the next walk-up patient
+      // who presses START without picking anybody would otherwise have their
+      // session filed under that name on a card it does not even belong to.
+      // [TH] คนไข้ที่เลือกไว้ไปพร้อมกับการ์ดใบเก่า
+      //      คนที่ถูกเลือกมาจากทะเบียนของการ์ดที่ไม่ได้อยู่ในช่องแล้ว
+      //      ถ้าไม่ล้าง คนไข้คนถัดไปที่กดเริ่มโดยไม่ได้เลือกใคร จะถูกบันทึกในชื่อนั้น
+      //      บนการ์ดที่ชื่อนั้นไม่ได้อยู่ด้วยซ้ำ
+      gActiveCode = "";
+      gActiveName = "";
+    }
     gCardWasPresent = cardNow;
   }
   uitestPoll();  // no-op unless UI_TEST_HOOK — ไม่ทำอะไรเลยถ้าไม่ได้เปิดโหมดทดสอบ

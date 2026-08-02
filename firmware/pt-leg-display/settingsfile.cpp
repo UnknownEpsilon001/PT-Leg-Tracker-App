@@ -205,6 +205,8 @@ bool settingsFileSave(const DeviceSettings& s) {
   }
   if (!SD.rename(TMP, PATH)) {
     SD.rename(OLD, PATH);  // put the previous file back under its own name
+    SD.remove(TMP);        // and take the temp file with it, like the paths above
+                           // [TH] และลบไฟล์ชั่วคราวทิ้งเหมือนเส้นทางล้มเหลวอื่นๆ ด้านบน
     return false;
   }
   SD.remove(OLD);
