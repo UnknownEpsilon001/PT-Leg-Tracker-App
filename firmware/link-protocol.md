@@ -45,14 +45,14 @@ ArduinoJson. Malformed lines are dropped. Lines over 512 chars reset the buffer.
   session was not clean.
 - `maxtravel` replaced the old `lift`/`lower` timings when travel became
   limit-switch terminated; it is the per-stroke safety cap in seconds.
-- Run control (START/STOP/RESET) is on physical NC panel buttons wired to the
-  controller, so it no longer travels over UART.
+- Run control is on physical NC panel buttons wired to the controller, so it no
+  longer travels over UART. Two buttons: RUN, a start/stop toggle, and RESET.
 - UART loss is still a safety event: if the controller sees no line for ~2 s
   during a session it safe-lowers and stops, as defense-in-depth (the physical
-  STOP remains the primary stop).
+  RUN button remains the primary stop).
 - That watchdog is armed by the first line ever received, not by boot. A
   controller that has never heard from a display is running standalone — the
   bench setup in `firmware/README.md`, or a machine with the CYD unplugged —
-  and stops on its panel STOP button instead. Arming it from boot would make
+  and stops on its panel RUN button instead. Arming it from boot would make
   "silent for 2 s" true from the first instant on those machines, and no session
   could start at all.

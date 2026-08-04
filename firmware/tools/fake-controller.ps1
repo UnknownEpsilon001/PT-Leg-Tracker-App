@@ -173,7 +173,15 @@ try {
             #      ตัวรับปุ่มจากคีย์บอร์ดด้านล่างคือตัวแทนของปุ่มเหล่านั้น
         }
 
-        # keyboard: stand in for the controller's START/STOP/RESET panel buttons
+        # keyboard: stand in for the controller's RUN/RESET panel buttons. The real
+        # panel has one RUN toggle rather than separate START and STOP, but `s` and
+        # `x` stay split here on purpose: this tool exists to drive the display
+        # through each phase, and being able to say "start" and "stop" outright is
+        # easier to steer than a key whose meaning depends on the fake's own state.
+        # [TH] แป้นพิมพ์ใช้แทนปุ่ม RUN/RESET บนหน้าปัดจริง
+        #      หน้าปัดจริงมีปุ่ม RUN แบบสลับปุ่มเดียว ไม่ได้แยก START กับ STOP
+        #      แต่ที่นี่ยังแยกปุ่ม s กับ x ไว้โดยตั้งใจ เพราะเครื่องมือนี้มีไว้พาจอไล่ดูทีละสถานะ
+        #      การสั่ง "เริ่ม" กับ "หยุด" ตรงๆ ควบคุมง่ายกว่าปุ่มที่ความหมายขึ้นกับสถานะของตัวจำลองเอง
         if ($interactive) {
             while ([Console]::KeyAvailable) {
                 $key = [Console]::ReadKey($true).KeyChar

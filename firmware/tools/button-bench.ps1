@@ -14,9 +14,19 @@
 # Then (port auto-detected; pass -Port COMx to override):
 #   .\firmware\tools\button-bench.ps1
 #
+# The status LED on GPIO 23 is the out-of-band check throughout: lit whenever a
+# session is in progress (including the safe-lower), dark when idle or in a
+# latched FAULT. It does not blink - it is a 12 V lamp on a relay, so it only ever
+# switches at a phase boundary, and you should hear the relay click each time. If
+# a step's serial output disagrees with the lamp, trust neither and check wiring.
+#
 # Wiring: the buttons are normally-closed on INPUT_PULLUP, so a *grounded* pin is
-# the at-rest state and lifting the jumper is a press. Three jumpers:
-#   GPIO 25 -> GND (START)   GPIO 26 -> GND (STOP)   GPIO 4 -> GND (RESET)
+# the at-rest state and lifting the jumper is a press. Two jumpers:
+#   GPIO 25 -> GND (RUN)   GPIO 4 -> GND (RESET)
+# RUN is a toggle - the same press starts an idle machine and stops a running one,
+# so the checklist below exercises it twice and matches on the "would START" /
+# "would STOP" half of the edge line rather than on two different pins.
+# GPIO 26 was the old dedicated STOP pin and is no longer read.
 # Leave the limit switches (32, 33) floating unless a step says otherwise.
 #
 # -Tail skips the checklist and just streams the debug output.
@@ -38,17 +48,17 @@ $ErrorActionPreference = "Stop"
 # here first, instead of on the bench with jumpers in hand.
 $script:dryTranscript = @(
     'pt-leg-controller 0.1.0 ssid=ClinicWiFi server=http://192.168.0.12:8000 code=KNEE-01 cycle max/hold/rest=8/10/10'
-    'debug prints ON - btn start=25(NC) stop=26(NC) reset=4(NO), limits=NC'
-    '[dbg 812] btn levels start=HIGH/pressed stop=HIGH/pressed reset=HIGH/pressed'
+    'debug prints ON - btn run=25(NC) reset=4(NO), led=23, limits=NC'
+    '[dbg 812] btn levels run=HIGH/pressed reset=HIGH/pressed'
     '[dbg 812] limits top=AT-LIMIT bottom=AT-LIMIT'
     '[dbg 812] phase=IDLE reps=0 elapsed=0s'
     '[dbg 2100] limits top=clear bottom=clear'
-    '[dbg 2400] btn levels start=LOW/rest stop=LOW/rest reset=HIGH/rest'   # RESET wired NO, still at rest
-    '[dbg 5100] EDGE START'
+    '[dbg 2400] btn levels run=LOW/rest reset=HIGH/rest'   # RESET wired NO, still at rest
+    '[dbg 5100] EDGE RUN (would START, polled)'
     '[dbg 5100] phase=LIFT reps=0 elapsed=0s'
-    '[dbg 5140] btn levels start=HIGH/pressed stop=LOW/rest reset=LOW/rest'
-    '[dbg 5260] btn levels start=LOW/rest stop=LOW/rest reset=LOW/rest'
-    '[dbg 9000] EDGE STOP'
+    '[dbg 5140] btn levels run=HIGH/pressed reset=LOW/rest'
+    '[dbg 5260] btn levels run=LOW/rest reset=LOW/rest'
+    '[dbg 9000] EDGE RUN (would STOP/LOWER, polled)'
     '[dbg 9000] phase=SAFE-LOWER reps=0 elapsed=4s'
     '[dbg 17000] phase=IDLE reps=0 elapsed=0s'   # safe-lower ran the full 8 s cap
     '[dbg 20000] EDGE RESET'
@@ -169,47 +179,49 @@ if ($Tail) {
 $steps = @(
     [pscustomobject]@{
         Name    = "debug build is running"
-        Do      = "nothing - just confirming the board is flashed with BENCH_DEBUG=1"
+        Do      = "nothing, but check the status LED on GPIO 23 stays DARK through boot - it must not flash or click at power-up"
         Expect  = @('debug prints ON')
-        Hint    = "No banner: the image was built without the flag, or -NoReset skipped the reboot that prints it."
+        Hint    = "No banner: the image was built without the flag, or -NoReset skipped the reboot that prints it. Lamp LIT while idle: the relay board is active-low and LED_ACTIVE_LOW is not set in config.h - fix that before anything else, because the lamp currently means the opposite of what it should."
         Fatal   = $true   # every later step reads that same debug output
     },
     [pscustomobject]@{
-        Name    = "all three buttons at rest"
+        Name    = "both buttons at rest"
         # Levels print on change, so the step has to create one: starting from
         # bare pins guarantees a HIGH -> LOW transition to watch for.
         # GPIO 32/33 get grounded here too and stay that way: both limits reading
         # AT-LIMIT at once is the wiring-fault net, and it would fault every
         # session the later steps try to start.
-        Do      = "start with all jumpers OFF; ground GPIO 32 and 33 (limits, leave them), then wire the three buttons"
+        Do      = "start with all jumpers OFF; ground GPIO 32 and 33 (limits, leave them), then wire the two buttons"
         # Match on /rest rather than LOW/rest: contact type is per button now, so
         # an NO button correctly rests HIGH. The firmware resolves level plus
         # polarity into the rest/pressed word, which is the part that must agree.
-        Expect  = @('btn levels start=\S+/rest stop=\S+/rest reset=\S+/rest')
-        Hint    = "Nothing wired yet reads exactly like this: every floating pin is HIGH, and an NC button reads that as pressed. This step needs the buttons wired between their GPIO and GND (or plain jumpers to GND). If one still says /pressed once wired, its contact type is wrong - flip BTN_START_NC / BTN_STOP_NC / BTN_RESET_NC in config.h and reflash. The banner in step 1 prints what the firmware currently believes."
+        Expect  = @('btn levels run=\S+/rest reset=\S+/rest')
+        Hint    = "Nothing wired yet reads exactly like this: every floating pin is HIGH, and an NC button reads that as pressed. This step needs the buttons wired between their GPIO and GND (or plain jumpers to GND). If one still says /pressed once wired, its contact type is wrong - flip BTN_RUN_NC / BTN_RESET_NC in config.h and reflash. The banner in step 1 prints what the firmware currently believes."
     },
     [pscustomobject]@{
-        Name    = "START begins a session"
-        Do      = "lift the START jumper (GPIO 25) briefly, then put it back on GND"
-        Expect  = @('EDGE START', 'phase=LIFT')
-        Hint    = "EDGE but no LIFT: the session refused to start (already running, a latched FAULT, or the STOP line has read pressed since power-up - it prints 'start refused: STOP has read pressed since power-up', so wire STOP to GND and lift it once to clear that). No EDGE at all: wrong pin or polarity."
+        Name    = "RUN starts a session"
+        # The edge line carries what the press meant, so this step and the next
+        # one match different halves of the same button rather than two pins.
+        Do      = "lift the RUN jumper (GPIO 25) briefly, then put it back on GND - the status lamp should light (one relay click) and stay lit"
+        Expect  = @('EDGE RUN \(would START', 'phase=LIFT')
+        Hint    = "Edge says 'would STOP/LOWER' instead: the machine did not think it was idle-with-the-leg-down - a latched FAULT, or it believes the leg is up (finish the previous step's safe-lower, or press RESET). Edge says 'latched' and nothing happens: an interrupt-recovered press is never allowed to start, which is by design - press again. Edge but no LIFT with 'start refused' printed: the RUN line has read pressed since power-up, so wire it to GND and lift it once to clear that. No EDGE at all: wrong pin or polarity."
     },
     [pscustomobject]@{
-        Name    = "STOP safe-lowers"
+        Name    = "RUN stops and safe-lowers"
         # No bottom switch ever closes on the bench, so SAFE-LOWER runs the full
         # max-travel cap (8 s by default) before ending IDLE. The PHASE is not
         # FAULT, but the SESSION is flagged faulted because the leg never reached
         # the bottom switch, so the row this run writes to the card carries
         # fault=1. Expected on a bench with the limits jumpered to GND.
-        Do      = "press STOP within 8 s of START (lift the GPIO 26 jumper briefly, then put it back on GND) - wait longer and the lift times out into FAULT first"
-        Expect  = @('EDGE STOP', 'phase=SAFE-LOWER', 'phase=IDLE')
-        Hint    = "Reaching IDLE takes the full max-travel cap (~8 s) because no bottom switch closes. FAULT here instead means a limit pin came loose. Note STOP now also safe-lowers out of a latched FAULT, so this step passing does not by itself prove a session was running."
+        Do      = "press RUN again within 8 s of the start (lift the GPIO 25 jumper briefly, then put it back on GND) - wait longer and the lift times out into FAULT first. The lamp stays lit right through the safe-lower and goes dark only when the phase reaches IDLE - one click, ~8 s after the press"
+        Expect  = @('EDGE RUN \(would STOP', 'phase=SAFE-LOWER', 'phase=IDLE')
+        Hint    = "Reaching IDLE takes the full max-travel cap (~8 s) because no bottom switch closes. FAULT here instead means a limit pin came loose. Note RUN also safe-lowers out of a latched FAULT and out of an idle machine that believes the leg is up, so this step passing does not by itself prove a session was running."
     },
     [pscustomobject]@{
         Name    = "RESET clears reps when idle"
         Do      = "with phase=IDLE, lift the RESET jumper (GPIO 4) briefly"
         Expect  = @('EDGE RESET', 'phase=IDLE reps=0')
-        Hint    = "RESET is idle-only by design: pressed mid-session it prints the edge and does nothing."
+        Hint    = "RESET is idle-only by design: pressed mid-session it prints the edge and does nothing. It is also the only way out of a latched FAULT now that RUN never clears one."
     },
     [pscustomobject]@{
         Name    = "limit switches read both ways"

@@ -106,6 +106,7 @@ h1{font-size:clamp(30px,6vw,54px);font-weight:700;letter-spacing:-.03em;line-hei
 .pinstate .num{font-family:var(--mono);margin-left:auto;color:var(--silk-dim)}
 .pinstate.up,.pinstate.down{color:var(--relay)}
 .pinstate.top,.pinstate.bot{color:var(--limit)}
+.pinstate.stat{color:var(--btn)}
 
 .controls{display:flex;gap:8px;flex-wrap:wrap}
 .pbtn{font-family:inherit;font-size:12px;letter-spacing:.12em;text-transform:uppercase;
@@ -254,7 +255,7 @@ a{color:var(--pad)}
     <div class="rig-head">
       <div class="phase">
         <span id="phaseName">IDLE</span>
-        <small id="phaseNote">Press START</small>
+        <small id="phaseNote">Press RUN</small>
       </div>
       <div class="clock">
         <span class="big" id="phaseT">0.0 s</span>
@@ -286,17 +287,19 @@ a{color:var(--pad)}
       <div class="pinstate bot" id="ps33"><span class="led"></span>
         <span class="lbl"><span class="en">Bottom limit</span><span class="th">ลิมิตล่าง</span></span>
         <span class="num">GPIO 33</span></div>
+      <div class="pinstate stat" id="ps23"><span class="led"></span>
+        <span class="lbl"><span class="en">Status LED</span><span class="th">ไฟแสดงสถานะ</span></span>
+        <span class="num">GPIO 23</span></div>
     </div>
 
     <div class="controls">
-      <button class="pbtn start" id="cStart">START</button>
-      <button class="pbtn stop" id="cStop">STOP</button>
+      <button class="pbtn start" id="cRun">RUN</button>
       <button class="pbtn" id="cReset">RESET</button>
       <button class="pbtn" id="cSpeed">×4</button>
     </div>
     <p class="hint">
-      <span class="en">The same three panel buttons the machine has — GPIO 25, 26 and 4. The clock counts the machine's own seconds, so a rep reads 10 s of hold at any playback speed. The speed button steps ×4 → ×10 → ×1; ×1 is real time. Travel shows ≤ 8 s because a stroke ends at its limit switch, and <code>maxTravelSec</code> caps it.</span>
-      <span class="th">ปุ่มสามปุ่มเดียวกับที่อยู่บนหน้าปัดจริง คือขา 25, 26 และ 4 นาฬิกานับเป็นวินาทีของเครื่องจริง เวลาค้างจึงอ่านได้ 10 วินาทีทุกความเร็วที่เล่น ปุ่มความเร็วสลับ ×4 → ×10 → ×1 โดย ×1 คือความเร็วจริง ส่วนจังหวะยกและลดแสดง ≤ 8 วินาที เพราะจบเมื่อถึงลิมิตสวิตช์ และมี <code>maxTravelSec</code> เป็นเพดานเวลา</span>
+      <span class="en">The same two panel buttons the machine has — GPIO 25 and 4. RUN is a toggle: it starts from idle and stops (by lowering) once a session is running, and the button relabels itself so you can see which half a press would take. The clock counts the machine's own seconds, so a rep reads 10 s of hold at any playback speed. The speed button steps ×4 → ×10 → ×1; ×1 is real time. Travel shows ≤ 8 s because a stroke ends at its limit switch, and <code>maxTravelSec</code> caps it.</span>
+      <span class="th">ปุ่มสองปุ่มเดียวกับที่อยู่บนหน้าปัดจริง คือขา 25 และ 4 ปุ่ม RUN เป็นแบบสลับ กดตอนว่างคือเริ่ม กดตอนกำลังทำงานคือหยุดโดยลดขาลง และตัวปุ่มจะเปลี่ยนข้อความเองให้เห็นว่าการกดครั้งต่อไปจะเป็นอย่างไหน นาฬิกานับเป็นวินาทีของเครื่องจริง เวลาค้างจึงอ่านได้ 10 วินาทีทุกความเร็วที่เล่น ปุ่มความเร็วสลับ ×4 → ×10 → ×1 โดย ×1 คือความเร็วจริง ส่วนจังหวะยกและลดแสดง ≤ 8 วินาที เพราะจบเมื่อถึงลิมิตสวิตช์ และมี <code>maxTravelSec</code> เป็นเพดานเวลา</span>
     </p>
   </div>
  </div>
@@ -388,17 +391,17 @@ a{color:var(--pad)}
         <th><span class="en">Does</span><span class="th">หน้าที่</span></th>
       </tr></thead>
       <tbody>
-      <tr data-pin="25"><td>START</td><td><span class="pad">GPIO 25</span></td>
-        <td><span class="en">Starts a session, idle only</span><span class="th">เริ่มรอบการทำงาน เฉพาะตอนว่าง</span></td></tr>
-      <tr data-pin="26"><td>STOP</td><td><span class="pad">GPIO 26</span></td>
-        <td><span class="en">Stop and safe-lower, live at all times</span><span class="th">หยุดและลดขาลงอย่างปลอดภัย ใช้ได้ตลอดเวลา</span></td></tr>
+      <tr data-pin="25"><td>RUN</td><td><span class="pad">GPIO 25</span></td>
+        <td><span class="en">Start / stop toggle. Starts a session when idle with the leg down; stops and safe-lowers in every other state, including a latched FAULT</span><span class="th">ปุ่มสลับ เริ่ม/หยุด กดตอนว่างและขาอยู่ล่างสุดคือเริ่มรอบ กดตอนอื่นคือหยุดและลดขาลงอย่างปลอดภัย รวมถึงตอนค้างสถานะ FAULT</span></td></tr>
       <tr data-pin="4"><td>RESET</td><td><span class="pad">GPIO 4</span></td>
-        <td><span class="en">Clears reps and FAULT when idle</span><span class="th">ล้างจำนวนรอบและสถานะ FAULT ตอนว่าง</span></td></tr>
+        <td><span class="en">Clears reps and FAULT when idle. The only way to clear a FAULT — RUN never does</span><span class="th">ล้างจำนวนรอบและสถานะ FAULT ตอนว่าง เป็นทางเดียวที่ล้าง FAULT ได้ ปุ่ม RUN ไม่ล้างให้</span></td></tr>
+      <tr data-pin="23"><td>STATUS LED</td><td><span class="pad">GPIO 23</span></td>
+        <td><span class="en"><b>Output</b> — 12 V lamp through a relay. Lit while a session is in progress and the actuator may move; dark when idle, in a latched FAULT, or unpowered. No blinking: every change is a relay contact operation</span><span class="th"><b>ขาออก</b> หลอด 12 โวลต์ผ่านรีเลย์ ติดตอนอยู่ในรอบการทำงานและชุดขับเคลื่อนอาจเคลื่อนที่ ดับตอนว่าง ตอนค้างสถานะผิดพลาด หรือตอนไม่มีไฟ ไม่มีการกะพริบ เพราะทุกการเปลี่ยนสถานะคือการตัดต่อหน้าสัมผัสของรีเลย์</span></td></tr>
       </tbody>
     </table></div>
     <p class="sub" style="margin:8px 0 0">
-      <span class="en">Momentary, <code>INPUT_PULLUP</code>, other side to GND. Contact type is set <b>per button</b> — <code>BTN_START_NC</code>, <code>BTN_STOP_NC</code>, <code>BTN_RESET_NC</code>, all <code>1</code> (normally-closed) as committed. Match each to the real part; a wrong value reads as a button held down forever.</span>
-      <span class="th">ปุ่มกดชั่วขณะ ตั้ง <code>INPUT_PULLUP</code> อีกขาลง GND ชนิดหน้าสัมผัสตั้งได้<b>แยกทีละปุ่ม</b>ที่ <code>BTN_START_NC</code>, <code>BTN_STOP_NC</code>, <code>BTN_RESET_NC</code> ปัจจุบันเป็น <code>1</code> (ปกติปิด) ทั้งหมด ต้องตั้งให้ตรงกับปุ่มจริง ถ้าตั้งผิดจะอ่านได้เหมือนกดค้างตลอดเวลา</span>
+      <span class="en">Momentary, <code>INPUT_PULLUP</code>, other side to GND. Contact type is set <b>per button</b> — <code>BTN_RUN_NC</code>, <code>BTN_RESET_NC</code>, both <code>1</code> (normally-closed) as committed. Match each to the real part; a wrong value reads as a button held down forever. <b>GPIO 26</b> was a separate STOP button before the panel went to two buttons, and is now a free pin like any other — nothing reads it and nothing reserves it.</span>
+      <span class="th">ปุ่มกดชั่วขณะ ตั้ง <code>INPUT_PULLUP</code> อีกขาลง GND ชนิดหน้าสัมผัสตั้งได้<b>แยกทีละปุ่ม</b>ที่ <code>BTN_RUN_NC</code>, <code>BTN_RESET_NC</code> ปัจจุบันเป็น <code>1</code> (ปกติปิด) ทั้งคู่ ต้องตั้งให้ตรงกับปุ่มจริง ถ้าตั้งผิดจะอ่านได้เหมือนกดค้างตลอดเวลา <b>ขา 26</b> เคยเป็นปุ่ม STOP แยกก่อนจะเปลี่ยนมาเหลือสองปุ่ม ตอนนี้เป็นขาว่างเหมือนขาอื่นๆ ไม่มีอะไรอ่านและไม่ได้กันไว้ให้อะไร</span>
     </p>
 
     <h3 style="--dot:var(--i2c)"><span class="en">DS3231 clock — I²C</span><span class="th">นาฬิกา DS3231 — I²C</span></h3>
@@ -556,8 +559,8 @@ a{color:var(--pad)}
   </div>
   <div class="rule" style="--k:var(--limit)">
     <h4><span class="en">An unwired NC input reads as pressed</span><span class="th">ขาที่ไม่ได้ต่อสายแบบ NC จะอ่านว่าถูกกด</span></h4>
-    <p><span class="en">With a pull-up, an open line floats HIGH — the same as an open contact. A bare board boots with START, STOP and RESET all reading pressed. That is the fail-safe, not a bug.</span>
-       <span class="th">เมื่อมีพูลอัป สายที่เปิดวงจรจะลอยเป็น HIGH เหมือนหน้าสัมผัสที่เปิดอยู่ บอร์ดเปล่าจึงบูตมาโดยอ่านว่า START, STOP และ RESET ถูกกดทั้งหมด นี่คือการออกแบบให้ปลอดภัย ไม่ใช่ข้อผิดพลาด</span></p>
+    <p><span class="en">With a pull-up, an open line floats HIGH — the same as an open contact. A bare board boots with both RUN and RESET reading pressed. That is the fail-safe, not a bug: the debouncer seeds from the boot level, so neither raises an edge.</span>
+       <span class="th">เมื่อมีพูลอัป สายที่เปิดวงจรจะลอยเป็น HIGH เหมือนหน้าสัมผัสที่เปิดอยู่ บอร์ดเปล่าจึงบูตมาโดยอ่านว่าทั้ง RUN และ RESET ถูกกด นี่คือการออกแบบให้ปลอดภัย ไม่ใช่ข้อผิดพลาด เพราะกลไกกันเด้งตั้งค่าตั้งต้นจากระดับตอนบูต จึงไม่มีปุ่มไหนเกิดขอบสัญญาณ</span></p>
   </div>
   <div class="rule" style="--k:var(--limit)">
     <h4><span class="en">Ground 32 and 33 before a button test</span><span class="th">ต่อขา 32 และ 33 ลงกราวด์ก่อนทดสอบปุ่ม</span></h4>
@@ -570,9 +573,9 @@ a{color:var(--pad)}
        <span class="th">ยกสายออกเท่ากับการกดหนึ่งครั้ง สคริปต์ <code>tools/button-bench.ps1</code> พาไล่ทดสอบทีละขั้นพร้อมบอกผ่านหรือไม่ผ่าน</span></p>
   </div>
   <div class="rule" style="--k:var(--relay)">
-    <h4><span class="en">A bad STOP wire blocks START</span><span class="th">สาย STOP ผิดพลาดจะกด START ไม่ได้</span></h4>
-    <p><span class="en">If the STOP line has read pressed since power-up — an open NC circuit — START is refused. Ground GPIO 26 and lift once to clear it.</span>
-       <span class="th">ถ้าขา STOP อ่านว่าถูกกดมาตั้งแต่เปิดเครื่อง ซึ่งแปลว่าวงจร NC ขาด ระบบจะปฏิเสธคำสั่ง START ให้ต่อขา 26 ลงกราวด์แล้วยกออกหนึ่งครั้งเพื่อล้างสถานะ</span></p>
+    <h4><span class="en">A bad RUN wire blocks starting</span><span class="th">สาย RUN ผิดพลาดจะเริ่มรอบไม่ได้</span></h4>
+    <p><span class="en">If the RUN line has read pressed since power-up — an open NC circuit — it can never raise an edge, so the panel has no stop and a start is refused, from the server too. Ground GPIO 25 and lift once to clear it. Stopping is never refused.</span>
+       <span class="th">ถ้าขา RUN อ่านว่าถูกกดมาตั้งแต่เปิดเครื่อง ซึ่งแปลว่าวงจร NC ขาด มันจะไม่มีวันเกิดขอบสัญญาณอีก หน้าปัดจึงไม่มีปุ่มหยุด ระบบจะปฏิเสธการเริ่มรอบ รวมถึงคำสั่งจากเซิร์ฟเวอร์ด้วย ให้ต่อขา 25 ลงกราวด์แล้วยกออกหนึ่งครั้งเพื่อล้างสถานะ ส่วนการสั่งหยุดไม่เคยถูกปฏิเสธ</span></p>
   </div>
   <div class="rule" style="--k:var(--relay)">
     <h4><span class="en">Check relay polarity with the actuator off</span><span class="th">ตรวจขั้วรีเลย์ตอนถอดมอเตอร์ออก</span></h4>
@@ -596,8 +599,8 @@ a{color:var(--pad)}
   <tr data-pin="19"><td><span class="pad">19</span></td><td><span class="en">RTC SCL</span><span class="th">นาฬิกา SCL</span></td><td class="sub">I²C</td></tr>
   <tr data-pin="21"><td><span class="pad">21</span></td><td><span class="en">RTC SDA</span><span class="th">นาฬิกา SDA</span></td><td class="sub">I²C</td></tr>
   <tr data-pin="22"><td><span class="pad">22</span></td><td><span class="en">Relay UP</span><span class="th">รีเลย์ยกขึ้น</span></td><td class="sub">OUTPUT</td></tr>
-  <tr data-pin="25"><td><span class="pad">25</span></td><td>START <span class="sub"><span class="en">button</span><span class="th">ปุ่ม</span></span></td><td class="sub">INPUT_PULLUP</td></tr>
-  <tr data-pin="26"><td><span class="pad">26</span></td><td>STOP <span class="sub"><span class="en">button</span><span class="th">ปุ่ม</span></span></td><td class="sub">INPUT_PULLUP + <span class="en">interrupt</span><span class="th">อินเทอร์รัปต์</span></td></tr>
+  <tr data-pin="23"><td><span class="pad">23</span></td><td><span class="en">Status LED</span><span class="th">ไฟแสดงสถานะ</span> <span class="sub"><span class="en">via relay</span><span class="th">ผ่านรีเลย์</span></span></td><td class="sub">OUTPUT</td></tr>
+  <tr data-pin="25"><td><span class="pad">25</span></td><td>RUN <span class="sub"><span class="en">start/stop toggle</span><span class="th">ปุ่มสลับ เริ่ม/หยุด</span></span></td><td class="sub">INPUT_PULLUP + <span class="en">interrupt</span><span class="th">อินเทอร์รัปต์</span></td></tr>
   <tr data-pin="27"><td><span class="pad">27</span></td><td><span class="en">Relay DOWN</span><span class="th">รีเลย์ลดลง</span></td><td class="sub">OUTPUT</td></tr>
   <tr data-pin="32"><td><span class="pad">32</span></td><td><span class="en">TOP limit switch</span><span class="th">ลิมิตสวิตช์บน</span></td><td class="sub">INPUT_PULLUP</td></tr>
   <tr data-pin="33"><td><span class="pad">33</span></td><td><span class="en">BOTTOM limit switch</span><span class="th">ลิมิตสวิตช์ล่าง</span></td><td class="sub">INPUT_PULLUP</td></tr>
@@ -633,7 +636,8 @@ a{color:var(--pad)}
   var RIGHT=['23','22','TX0','RX0','21','19','18','5','17','16','4','2','15','GND','3V3'];
   var USE={ '22':['var(--relay)','UP'], '27':['var(--relay)','DOWN'],
             '32':['var(--limit)','TOP'], '33':['var(--limit)','BOT'],
-            '25':['var(--btn)','START'], '26':['var(--btn)','STOP'], '4':['var(--btn)','RESET'],
+            '25':['var(--btn)','RUN'], '4':['var(--btn)','RESET'],
+            '23':['var(--btn)','LED'],
             '21':['var(--i2c)','SDA'], '19':['var(--i2c)','SCL'],
             '16':['var(--uart)','RX'], '17':['var(--uart)','TX'] };
   var NS='http://www.w3.org/2000/svg', g=document.getElementById('ctrlPins');
@@ -708,16 +712,16 @@ a{color:var(--pad)}
   var SPEEDS=[4,10,1], spIdx=0, speed=SPEEDS[0];
   var running=false, pos=0, phase='idle', reps=0;
   /* Deliberately NOT gated on prefers-reduced-motion: the rig only moves after
-     you press START, so the press is the consent. The ambient animations (UART
+     you press RUN, so the press is the consent. The ambient animations (UART
      dashes, blinking CYD pads) stay gated in CSS, because nobody asked for those. */
 
   var TEXT={
-    idle:{en:['IDLE','Press START'],th:['ว่าง','กด START']},
+    idle:{en:['IDLE','Press RUN'],th:['ว่าง','กด RUN']},
     lift:{en:['LIFT','Relay 22 energized'],th:['ยกขึ้น','รีเลย์ขา 22 ทำงาน']},
     hold:{en:['HOLD','Both relays off, 10 s'],th:['ค้างไว้','รีเลย์ดับทั้งคู่ 10 วินาที']},
     lower:{en:['LOWER','Relay 27 energized'],th:['ลดลง','รีเลย์ขา 27 ทำงาน']},
     rest:{en:['REST','Bottom limit closed, 10 s'],th:['พัก','ลิมิตล่างปิดวงจร 10 วินาที']},
-    safe:{en:['SAFE-LOWER','STOP pressed — bringing the leg down'],th:['ลดลงอย่างปลอดภัย','กด STOP แล้ว กำลังลดขาลง']}
+    safe:{en:['SAFE-LOWER','RUN pressed again — bringing the leg down'],th:['ลดลงอย่างปลอดภัย','กด RUN ซ้ำ กำลังลดขาลง']}
   };
 
   var segMeta=[];
@@ -731,6 +735,7 @@ a{color:var(--pad)}
   function label(){
     var l=document.documentElement.lang==='th'?'th':'en', k=TEXT[phase]||TEXT.idle;
     phaseName.textContent=k[l][0]; phaseNote.textContent=k[l][1];
+    runLabel();   /* every phase change and every language switch comes through here */
   }
 
   /* --- one-shot writes, never per frame --- */
@@ -768,6 +773,14 @@ a{color:var(--pad)}
     ps[27].classList.toggle('on',phase==='lower'||phase==='safe');
   }
 
+  /* Status lamp: lit whenever a session is in progress, which is every phase
+     except idle — the same rule as SessionSM::running() driving statusLedSet().
+     No timer and no blinking, because the real lamp is 12 V behind a mechanical
+     relay and every change of state is a contact operation. Updated from the
+     phase transitions like relays(), not on an interval. */
+  var ps23=document.getElementById('ps23');
+  function statusLamp(){ ps23.classList.toggle('on', phase!=='idle'); }
+
   var timer=0, posFrom=0, posTo=0, tStart=0, tDur=0;
   function after(ms,fn){ clearTimeout(timer); timer=setTimeout(fn,ms); }
 
@@ -791,7 +804,7 @@ a{color:var(--pad)}
     pos=posNow();
     if(phase!=='idle') sessAcc+=phaseSec();
     phase=ph; phStart=performance.now(); phSpeed=speed;
-    relays(); label(); clock(); ticking(ph!=='idle');
+    relays(); statusLamp(); label(); clock(); ticking(ph!=='idle');
     var ms;
     if(ph==='lift'){
       limit('bot',false);
@@ -820,12 +833,20 @@ a{color:var(--pad)}
     }
   }
 
-  document.getElementById('cStart').onclick=function(){
+  /* One RUN button, same toggle the firmware runs: idle starts, anything else
+     stops by lowering. The label follows the state so the page shows what the
+     next press does — on a real panel the operator has the machine in front of
+     them, here the button is the only cue. */
+  var cRun=document.getElementById('cRun');
+  function runLabel(){
+    var th=document.documentElement.lang==='th';
+    var stop=(phase!=='idle');
+    cRun.textContent=stop?(th?'หยุด':'STOP'):(th?'เริ่ม':'RUN');
+    cRun.className='pbtn '+(stop?'stop':'start');
+  }
+  cRun.onclick=function(){
     if(phase==='idle'){running=true;sessAcc=0;enter('lift');}
-  };
-  document.getElementById('cStop').onclick=function(){
-    running=false;
-    if(phase!=='idle') enter('safe');
+    else{running=false;enter('safe');}
   };
   document.getElementById('cReset').onclick=function(){
     if(phase!=='idle') return;
@@ -841,7 +862,7 @@ a{color:var(--pad)}
   document.getElementById('btn-en').addEventListener('click',label);
   document.getElementById('btn-th').addEventListener('click',label);
 
-  moveLeg(0,0); limit('bot',true); label(); clock();
+  moveLeg(0,0); limit('bot',true); statusLamp(); label(); clock();
 })();
 
 /* pause the decorative figure animations unless they are actually on screen */

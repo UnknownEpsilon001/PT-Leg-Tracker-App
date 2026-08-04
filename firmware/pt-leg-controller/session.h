@@ -32,6 +32,26 @@ class SessionSM {
   //      จากสถานะว่าง จะลดขาเฉพาะเมื่อเชื่อว่าขาอยู่ข้างบน และไม่รายงานเช่นกัน
   //      มีแต่กรณีสถานะว่างที่ขาอยู่ล่างสุดแล้วเท่านั้นที่ไม่ทำอะไร
   void requestStop(uint32_t nowMs);
+  // The panel's single RUN button. Starts only from the one state where starting
+  // is unambiguous — Idle with the leg believed at the bottom — and is a stop
+  // everywhere else, including a latched Fault, where the useful thing to do is
+  // bring the leg down rather than begin a new lift into whatever jammed it.
+  // Clearing a Fault is RESET's job, so the two buttons stay distinct: RUN never
+  // clears a latch and RESET never starts a session.
+  // [TH] ปุ่ม RUN ปุ่มเดียวบนหน้าปัด เริ่มรอบได้เฉพาะสถานะเดียวที่ไม่กำกวม
+  //      คือสถานะว่างและเชื่อว่าขาอยู่ล่างสุด นอกนั้นถือเป็นการสั่งหยุดทั้งหมด
+  //      รวมถึงสถานะผิดพลาดที่ค้างอยู่ ซึ่งสิ่งที่ควรทำคือเอาขาลง ไม่ใช่เริ่มยกขึ้นไปหาสิ่งที่ทำให้ติดขัด
+  //      การล้างสถานะผิดพลาดเป็นหน้าที่ของปุ่ม RESET ปุ่มทั้งสองจึงแยกกันชัดเจน
+  //      RUN ไม่เคยล้างสถานะที่ค้าง และ RESET ไม่เคยเริ่มรอบ
+  void toggle(uint32_t nowMs);
+  // What toggle() would do right now, without doing it. The sketch needs this to
+  // decide whether an interrupt-latched press may raise an edge at all: a press
+  // that could start the machine must come from the polling path only. See the
+  // isrMayEdge discussion in buttons.cpp.
+  // [TH] บอกว่าถ้ากดตอนนี้ toggle() จะเริ่มรอบหรือไม่ โดยยังไม่ทำอะไร
+  //      สเก็ตช์ใช้ค่านี้ตัดสินว่าการกดที่อินเทอร์รัปต์จับไว้จะสร้างขอบสัญญาณได้หรือเปล่า
+  //      การกดที่อาจทำให้เครื่องเริ่มทำงานต้องมาจากการอ่านตามรอบเท่านั้น ดูคำอธิบาย isrMayEdge ใน buttons.cpp
+  bool toggleWouldStart() const { return ph == Phase::Idle && !liftedSinceBottom; }
   void forceFault(uint32_t nowMs);   // external safety trip (actuator cap)
                                      // [TH] บังคับเข้าสถานะผิดพลาดจากภายนอก (เพดานเวลารีเลย์)
   // Clears the rep count, and from a Fault lowers the leg on the way to Idle

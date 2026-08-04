@@ -146,6 +146,32 @@ void SessionSM::start(uint32_t nowMs) {
   enter(Phase::Lift, nowMs);
 }
 
+// One button, two meanings, and the split is deliberately NOT running()/!running().
+//
+// "Not running" covers three situations that want different things. Idle with the
+// leg down is the only one where a start is what the operator meant. Idle with the
+// leg in the air — a power cut mid-lift, a second RESET after a failed recovery —
+// wants the leg down first; starting there would drive the actuator further up.
+// A latched Fault wants the leg down too, and wants the latch to stay until
+// somebody acknowledges it with RESET, so a fault cannot be pressed away with the
+// same button that just stopped the session.
+//
+// requestStop() already distinguishes all three (see its Idle and Fault cases), so
+// everything that is not a clean start is handed to it unchanged.
+// [TH] ปุ่มเดียวมีสองความหมาย และเส้นแบ่งจงใจไม่ใช่ running()/!running()
+//      "ไม่ได้ทำงาน" ครอบคลุมสามสถานการณ์ที่ต้องการคนละอย่าง
+//      สถานะว่างที่ขาอยู่ล่างสุดเป็นกรณีเดียวที่ผู้ใช้ตั้งใจจะเริ่มรอบ
+//      สถานะว่างที่ขายังลอยอยู่ เช่นไฟดับกลางจังหวะยก หรือกด RESET ครั้งที่สองหลังกู้ไม่สำเร็จ
+//      ต้องเอาขาลงก่อน ถ้าเริ่มรอบตรงนั้นจะสั่งชุดขับเคลื่อนยกขึ้นไปอีก
+//      สถานะผิดพลาดที่ค้างอยู่ก็ต้องเอาขาลงเช่นกัน และต้องค้างไว้จนกว่าจะมีคนรับทราบด้วยปุ่ม RESET
+//      ความผิดพลาดจะได้ไม่ถูกกดทิ้งด้วยปุ่มเดียวกับที่เพิ่งใช้หยุดรอบ
+//      requestStop() แยกทั้งสามกรณีไว้แล้ว (ดูเคส Idle และ Fault ของมัน)
+//      ทุกอย่างที่ไม่ใช่การเริ่มรอบแบบสะอาดจึงส่งต่อให้มันทั้งหมดโดยไม่แก้อะไร
+void SessionSM::toggle(uint32_t nowMs) {
+  if (toggleWouldStart()) start(nowMs);
+  else requestStop(nowMs);
+}
+
 void SessionSM::requestStop(uint32_t nowMs) {
   // [TH] คำขอหยุด: ตอบสนองต่างกันตามสถานะปัจจุบัน เพื่อให้ขาลงถึงพื้นก่อนหยุดเสมอ
   switch (ph) {

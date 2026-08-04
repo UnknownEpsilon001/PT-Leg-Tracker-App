@@ -380,7 +380,7 @@ that library into `1.print(...)` and the controller stops compiling.
 **Unwired NC inputs read as pressed.** `SWITCH_NC` + `INPUT_PULLUP` means a
 closed contact pulls the pin LOW and an open one floats HIGH, and an absent wire
 is indistinguishable from an open contact — that is the fail-safe, not a bug. A
-bare board therefore boots with START, STOP and RESET all reading "pressed", but
+bare board therefore boots with RUN and RESET both reading "pressed", but
 fires **no** edges: the debouncer is seeded from the pin state at power-up, so an
 edge needs a release-then-press that a floating pin never produces. For a bench
 test, jumper each button pin to GND to stand in for the closed contact, and lift
@@ -389,11 +389,21 @@ fault note below:
 
 | Signal | Pin | Jumper to GND | Lift jumper |
 | ------ | --- | ------------- | ----------- |
-| START  | 25  | at rest       | press       |
-| STOP   | 26  | at rest       | press       |
+| RUN    | 25  | at rest       | press       |
 | RESET  | 4   | at rest       | press       |
 | TOP limit    | 32 | not at limit | leg fully up   |
 | BOTTOM limit | 33 | not at limit | leg fully down |
+| STATUS LED   | 23 | — output, see below | — |
+
+RUN is a **toggle**: one press starts a session when the machine is idle with the
+leg down, and stops it — by lowering first — in every other state. The debug
+build prints which of the two a press meant, e.g.
+`EDGE RUN (would START, polled)`, so an edge can be checked against the response.
+
+The status LED on GPIO 23 is the out-of-band readout for the whole bench run: lit
+while a session is in progress, dark when idle or in a latched FAULT. It never
+blinks, so the only thing to watch is that it switches at the phase boundaries and
+nowhere else. Details in [The status LED](#the-status-led) below.
 
 `firmware/tools/button-bench.ps1` walks that test as a pass/fail checklist: it
 opens the port, reboots the board, tells you which jumper to move next, and fails
@@ -417,22 +427,77 @@ AT-LIMIT at once, which is physically impossible, so `SessionSM::tick` calls it 
 wiring fault and the session goes straight to FAULT the moment one is started. (A
 bare board no longer starts one by itself — see the seeding note above. The
 transcript that used to sit here showed a board faulting 13 ms after boot off
-three floating buttons, which the seeding made impossible.)
+floating buttons, which the seeding made impossible.)
 
 So ground 32 and 33 for the whole button test. With them grounded, neither limit
-ever closes, and the phases run on the max-travel cap alone: START gives LIFT for
-8 s and then FAULT (net 1), while STOP gives SAFE-LOWER for 8 s and then IDLE.
-The *phase* deliberately ends idle rather than faulted, but the *session* is
-flagged faulted whenever the leg never reached the bottom switch — so a bench
-STOP produces `done.fault=true` and a `fault=1` row on the card. Expected with
-the limits jumpered to GND, and the thing to look for on a real machine.
+ever closes, and the phases run on the max-travel cap alone: a starting RUN press
+gives LIFT for 8 s and then FAULT (net 1), while a stopping one gives SAFE-LOWER
+for 8 s and then IDLE. The *phase* deliberately ends idle rather than faulted, but
+the *session* is flagged faulted whenever the leg never reached the bottom
+switch — so a bench stop produces `done.fault=true` and a `fault=1` row on the
+card. Expected with the limits jumpered to GND, and the thing to look for on a
+real machine.
 
-**START is refused while STOP has read pressed since power-up.** On an NC button
-an open line reads pressed forever and can never raise an edge, so STOP would be
-dead for the whole power cycle. Wiring STOP to GND and lifting the jumper once
-clears the suspicion; until then START prints
-`start refused: STOP has read pressed since power-up, check its wiring` and does
-nothing.
+**A start is refused while RUN has read pressed since power-up.** On an NC button
+an open line reads pressed forever and can never raise an edge, so the panel would
+have no stop at all for the whole power cycle. Wiring RUN to GND and lifting the
+jumper once clears the suspicion; until then a starting press prints
+`start refused: RUN has read pressed since power-up, check its wiring` and does
+nothing. A *stopping* press is never refused, by this gate or any other.
+
+## The status LED
+
+A 12 V panel lamp on **GPIO 23**, switched by a mechanical relay. It carries one
+bit, and it is the bit that matters standing next to the machine:
+
+| Lamp | Means |
+| ---- | ----- |
+| Lit | a session is in progress and the actuator may move — keep clear |
+| Dark | idle, a latched FAULT, or no power; nothing will move on its own |
+
+Lit is exactly `SessionSM::running()` — LIFT, HOLD, LOWER, REST **and** the
+safe-lower. A latched FAULT reads dark because the relays genuinely are off in
+that state. Faults are diagnosed on the CYD, the serial log and the card row; the
+lamp only answers "is it about to move".
+
+**Why there is no blinking.** The relay makes every state change a contact
+operation and an audible click. A 5 Hz fault blink is 18,000 operations an hour,
+which retires a ~100k-operation relay in about six hours of one latched fault —
+and an idle heartbeat would grind it down while the machine sat doing nothing at
+all. Solid states cost two operations per session: at twenty sessions a day that
+is roughly seven years. An earlier version of this file specified 2.5 Hz / 5 Hz /
+heartbeat patterns; those were written for a 3.3 V LED driven straight off the pin
+and do not survive contact with a relay.
+
+If the lamp is ever moved onto a MOSFET or an SSR the constraint disappears and
+patterns become free again — but the semantics above are the ones the panel is
+built and documented around.
+
+`statusLedBegin()` writes the level **before** `pinMode(OUTPUT)`, which is the
+opposite order to `actuatorBegin()`. A pin leaves reset as a high-Z input, and
+`pinMode(OUTPUT)` makes it drive whatever the output register holds — LOW. On an
+active-low relay board LOW is *energized*, so mode-then-write flicks the lamp on
+at every boot. The motor relays get away with the other order only because they
+are active-high.
+
+There is deliberately **no power-on lamp test**. It would prove the bulb at every
+boot, but the lamp is specified to light only while the machine is working, and a
+flash plus a click at power-up reads as the machine starting by itself — the one
+impression this panel must never give. Test the lamp by starting a session.
+
+Set `LED_ACTIVE_LOW` in `config.h` if your relay board energizes on LOW, as most
+cheap opto-isolated modules do. **Check this before first power-up**: backwards,
+the lamp is lit whenever the machine is idle and dark while it is working, which
+is the dangerous way round.
+
+**Why 23.** It is free, and it is not a strapping pin — 0/2/5/12/15 are, and an
+LED on 12 in particular holds the flash-voltage select high at reset and stops the
+board booting at all. GPIO 26, which the retired STOP button freed, would have
+worked just as well; nothing reads it and nothing reserves it. The one case where
+26 is a bad choice is an older machine that still has a STOP button physically
+wired to that header, because an output tied to a switch that shorts to GND is a
+dead short on every press. A panel built to this two-button design has no such
+wire.
 
 ## The safety nets, and what each one actually covers
 
@@ -444,8 +509,8 @@ them were added after a review found the leg could be left in the air.
 file that touches the relay pins. It always de-energizes both before energizing
 one, and on a direction reversal it drops both, waits `DEADTIME_MS`, and
 energizes the new direction from `actuatorTick()`. The wait matters because
-commanding the relays apart is not the same as their contacts being apart: STOP
-during a lift goes from UP to SafeLower's DOWN in a single loop iteration, and
+commanding the relays apart is not the same as their contacts being apart: a RUN
+press during a lift goes from UP to SafeLower's DOWN in a single loop iteration, and
 without the wait that reversal relied on the UP relay releasing faster than the
 DOWN one operates — a property of the parts, not of this code, and the two are
 on different connectors.
@@ -467,20 +532,25 @@ switch line reading pressed forever, and faulting *during* a lowering is what
 strands the leg. A safe-lower only ever drives DOWN and is time-capped, so
 letting it finish is bounded and always moves the leg the safe way.
 
-**4. A fault does not trap the leg.** Both STOP and RESET lower it from a
+**4. A fault does not trap the leg.** Both RUN and RESET lower it from a
 latched Fault. Before that, a travel-timeout fault parked the leg wherever it
 stopped — often halfway up — and STOP did nothing, RESET only cleared the latch,
 and START drove the actuator *further up* into whatever had jammed it. The
 lowering reports nothing of its own: the session was already recorded when it
 faulted, and a second report would put a duplicate row on the card.
 
-**Any** safe-lower — a recovery, an ordinary STOP, or a lower started from Idle —
+Note what RUN does **not** do in a Fault: it never clears the latch. Acknowledging
+a fault is RESET's job alone, so the button an operator just used to stop the
+machine cannot also dismiss the reason it stopped. Restarting after a fault is
+therefore RESET (which lowers on the way to Idle) and then RUN.
+
+**Any** safe-lower — a recovery, an ordinary stop, or a lower started from Idle —
 returns to Idle only if the bottom switch confirmed the arrival; otherwise it
 latches Fault. A descent that ran its cap out without reaching the bottom used to
 leave the leg in the air with the screen reading "พร้อม" (ready) and no button
 able to lower it, because at the time Idle had no DOWN command at all — and a
 failed DOWN relay or a jammed actuator looks exactly like that. Latching Fault
-keeps the failure visible and keeps STOP and RESET commanding descents. `maxTravelSec` is sized for a lift, not necessarily for a
+keeps the failure visible and keeps RUN and RESET commanding descents. `maxTravelSec` is sized for a lift, not necessarily for a
 full recovery descent, so more than one press can legitimately be needed.
 
 Two details that keep that from becoming its own trap. A bottom switch already
@@ -490,7 +560,7 @@ drive into the mechanical stop for the full cap trying to confirm something that
 was true before it started. And after a descent that could not confirm, a second
 RESET clears the fault instead of driving again; repeating a descent that did
 not work is not help, it is another eight seconds against whatever is in the
-way. STOP still commands another descent for an operator who wants one.
+way. RUN still commands another descent for an operator who wants one.
 
 **5. The bottom switch is only believed if it was clear when the stroke began.**
 A leg that still needs lowering cannot already be at the bottom, so a bottom
@@ -502,23 +572,34 @@ safe-lower that runs its cap out without a confirmed arrival ends in Idle by
 design but is reported as `fault=true`: the phase is a clean stop, the session
 is not.
 
-**6. Only STOP can be recovered from the interrupt.** Buttons are level-sampled
+**6. Only a stop can be recovered from the interrupt.** Buttons are level-sampled
 once per loop, and one iteration can block for most of a second inside a network
 call against an unreachable server — long enough for a normal press to begin and
 end unseen. A pin-change interrupt therefore times each press and hands the loop
-the ones it was not awake for. That path is wired to STOP alone: a lost START
-just means pressing it again, whereas a *false* START lifts a leg with nobody at
-the panel, and the interrupt is not IRAM-registered on this core, so a glitch
-delivered late out of a flash-cache-off window can be mis-timed as a full press.
-A spurious STOP costs one safe-lower; that is the trade.
+the ones it was not awake for. Such a press may never start a session: a lost
+start just means pressing the button again, whereas a *false* start lifts a leg
+with nobody at the panel, and the interrupt is not IRAM-registered on this core,
+so a glitch delivered late out of a flash-cache-off window can be mis-timed as a
+full press. A spurious stop costs one safe-lower; that is the trade.
+
+With START and STOP on separate pins this was settled by wiring the interrupt
+path to the STOP pin only. One RUN button cannot be split that way — the same
+press means either thing depending on the phase, and the phase can still change
+between the poll and the sketch acting on the edge, because `tick()` runs in
+between. So the latch fires for RUN and the edge carries its origin
+(`edgeFromIsr`); the sketch drops a latched press that would have started a
+session and prints `start ignored: latched RUN press, not a polled one`. The
+guarantee is unchanged, just enforced one step later.
 
 **7. Idle can lower too, when the leg is believed up.** Idle used to be the only
 state with no DOWN command at all, and it is reachable with the leg in the air —
 a second RESET after a failed recovery lands there, and so does a power cut
-part-way through a lift. STOP in Idle now commands one capped descent, but only
+part-way through a lift. RUN in Idle now commands one capped descent, but only
 while the firmware believes the leg has been driven up since the bottom was last
-genuinely confirmed. After an ordinary session the leg is at the bottom, that
-belief is false, and STOP in Idle stays the no-op it has always been.
+genuinely confirmed. That same belief is what decides whether a RUN press starts
+at all (`SessionSM::toggleWouldStart`), so the two readings can never disagree:
+if the leg is believed up, the press lowers; if it is believed down, the press
+starts.
 
 That belief is seeded from the bottom limit switch at boot, which is what makes
 the power-cut case work: a board that comes up with the leg in the air knows it.
@@ -531,7 +612,7 @@ every press drove the full cap into the mechanical bottom stop in silence.
 
 Two things that are deliberately **not** nets. The UART-loss safe-stop is armed
 by the first line ever received, so a controller running standalone is not
-stopped by a display that was never there. And START is refused while the STOP
+stopped by a display that was never there. And a start is refused while the RUN
 line reads pressed with nobody plausibly pressing it — an open NC circuit — on
 the grounds that a session nobody can stop from the panel should not begin.
 
@@ -539,16 +620,24 @@ the grounds that a session nobody can stop from the panel should not begin.
 
 A DOWN relay that has failed open, or a jammed actuator, leaves no way down by
 any command. The firmware behaves correctly around both — strokes stay bounded,
-the machine stays latched in Fault so STOP keeps buying descents — but the leg
+the machine stays latched in Fault so RUN keeps buying descents — but the leg
 comes down by hand or not at all. Treat a fault that survives two descents as a
 mechanical fault, not a firmware one.
 
-One combination is still a dead end by design: leg up in Idle **and** the STOP
-line open at power-up. START is refused (net 7's gate is `liftedSinceBottom`,
-which a fresh boot clears, and the STOP-wire refusal blocks START from both the
-panel and the server), so nothing can be commanded. It needs two coincident
-faults, and the alternative — letting a machine with a dead STOP button start a
-session — is worse.
+A broken RUN line is now a bigger single-point failure than a broken STOP line
+was, and that is the price of the two-button panel. Under `BTN_RUN_NC` an open
+circuit reads pressed forever: it raises exactly one edge on the way open — a
+stop, which is the safe direction — and then the panel has neither a start nor a
+stop until the wire is fixed. The server can still stop the machine, and the
+travel cap and the UART-loss safe-stop are both unaffected. Wiring RUN as
+normally-open would trade this for a line that goes silently dead instead of
+firing one safe stop, which is worse; `BTN_RUN_NC` stays at `1`.
+
+One combination is still a dead end by design: leg up in Idle **and** the RUN
+line open at power-up. Nothing can be commanded from the panel — the wire-suspect
+refusal also blocks a start from the server — and it needs two coincident faults.
+The alternative, letting a machine with no working stop button start a session,
+is worse.
 
 ## LVGL logging and asserts
 
@@ -563,5 +652,12 @@ patient-facing machine it recovers instead of appearing bricked.
 
 - Controller relays: UP GPIO 22, DOWN GPIO 27. Limit switches: TOP GPIO 32,
   BOTTOM GPIO 33 (INPUT_PULLUP, `SWITCH_NC` in `config.h` if normally-closed).
+- Panel buttons: RUN (start/stop toggle) GPIO 25, RESET GPIO 4. Momentary,
+  INPUT_PULLUP, other side to GND; contact type per button via `BTN_RUN_NC` /
+  `BTN_RESET_NC`. GPIO 26 carried a separate STOP button until the panel went to
+  two buttons and is now free.
+- Status LED: GPIO 23, a 12 V lamp through a relay. Lit while a session is in
+  progress, dark otherwise. Set `LED_ACTIVE_LOW` if the relay board energizes on
+  LOW.
 - UART: controller GPIO 16 (RX) / 17 (TX) ↔ CYD GPIO 22 (RX) / 27 (TX),
   cross-wired, common GND. 115200 8N1. Pins to be confirmed on the bench.

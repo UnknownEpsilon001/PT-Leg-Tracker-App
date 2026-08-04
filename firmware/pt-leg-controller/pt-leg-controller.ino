@@ -19,6 +19,7 @@
 #include "actuator.h"
 #include "switches.h"
 #include "buttons.h"
+#include "status_led.h"
 #include "session.h"
 #include "net.h"
 #include "link.h"
@@ -188,24 +189,32 @@ static const char* levelName(int level, bool nc) {
 // [TH] พิมพ์เฉพาะตอนค่าเปลี่ยน เพราะลูปเดินเร็วมาก ถ้าพิมพ์ทุกลูปจะท่วมจนหาบรรทัดที่ต้องการไม่เจอ
 //      พิมพ์ค่าดิบของขาคู่กับขอบที่ผ่านกันเด้งแล้ว เพราะกำลังตรวจขั้ว: ขา NC ที่ไม่ได้ต่อจะลอยเป็น HIGH
 //      ซึ่งอ่านได้เหมือนกดค้าง จะเห็นชัดก็ต่อเมื่อดูค่าดิบ
-static void debugTick(uint32_t nowMs, bool startEdge, bool stopEdge, bool resetEdge) {
+// `runWouldStart` is what the RUN edge was about to mean, sampled by the caller
+// before the state machine acted on it. Printing the meaning and not just the pin
+// is the whole point on a toggle: "EDGE RUN" alone cannot be checked against the
+// machine's response.
+// [TH] ค่า runWouldStart คือความหมายของการกด RUN ครั้งนั้น ผู้เรียกอ่านไว้ก่อนที่เครื่องสถานะจะทำงาน
+//      บนปุ่มสลับ การพิมพ์ความหมายไม่ใช่แค่ชื่อขาคือประเด็นทั้งหมด
+//      เพราะคำว่า "EDGE RUN" เฉยๆ เอาไปเทียบกับสิ่งที่เครื่องตอบสนองไม่ได้
+static void debugTick(uint32_t nowMs, bool runEdge, bool runWouldStart, bool runFromIsr,
+                      bool resetEdge) {
   static bool firstRun = true;
-  static int lvStart = -1, lvStop = -1, lvReset = -1;
+  static int lvRun = -1, lvReset = -1;
   static bool lastTop = false, lastBot = false;
   static Phase lastPhase = Phase::Idle;
   static uint16_t lastReps = 0;
 
-  if (startEdge) Serial.printf("[dbg %lu] EDGE START\n", (unsigned long)nowMs);
-  if (stopEdge) Serial.printf("[dbg %lu] EDGE STOP\n", (unsigned long)nowMs);
+  if (runEdge)
+    Serial.printf("[dbg %lu] EDGE RUN (%s, %s)\n", (unsigned long)nowMs,
+                  runWouldStart ? "would START" : "would STOP/LOWER",
+                  runFromIsr ? "latched" : "polled");
   if (resetEdge) Serial.printf("[dbg %lu] EDGE RESET\n", (unsigned long)nowMs);
 
-  int s = digitalRead(PIN_BTN_START), t = digitalRead(PIN_BTN_STOP),
-      r = digitalRead(PIN_BTN_RESET);
-  if (firstRun || s != lvStart || t != lvStop || r != lvReset) {
-    lvStart = s; lvStop = t; lvReset = r;
-    Serial.printf("[dbg %lu] btn levels start=%s stop=%s reset=%s\n", (unsigned long)nowMs,
-                  levelName(s, BTN_START_NC), levelName(t, BTN_STOP_NC),
-                  levelName(r, BTN_RESET_NC));
+  int s = digitalRead(PIN_BTN_RUN), r = digitalRead(PIN_BTN_RESET);
+  if (firstRun || s != lvRun || r != lvReset) {
+    lvRun = s; lvReset = r;
+    Serial.printf("[dbg %lu] btn levels run=%s reset=%s\n", (unsigned long)nowMs,
+                  levelName(s, BTN_RUN_NC), levelName(r, BTN_RESET_NC));
   }
 
   bool top = switchTop(), bot = switchBottom();
@@ -233,7 +242,7 @@ static void debugTick(uint32_t nowMs, bool startEdge, bool stopEdge, bool resetE
   // print would leave the press looking like it did nothing at all.
   // [TH] ทุกครั้งที่กดปุ่มจะพิมพ์สถานะซ้ำเสมอ แม้ค่าไม่เปลี่ยน เพราะกด RESET ตอนที่ค่าเป็นศูนย์อยู่แล้ว
   //      จะไม่มีอะไรเปลี่ยน ถ้าพิมพ์เฉพาะตอนเปลี่ยนจะดูเหมือนการกดไม่มีผล
-  bool pressed = startEdge || stopEdge || resetEdge;
+  bool pressed = runEdge || resetEdge;
   if (firstRun || pressed || gSession.phase() != lastPhase || gSession.reps() != lastReps) {
     lastPhase = gSession.phase();
     lastReps = gSession.reps();
@@ -249,6 +258,7 @@ void setup() {
   actuatorBegin();  // safety first — ดับรีเลย์ก่อนเป็นอันดับแรกเพื่อความปลอดภัย
   switchesBegin();
   buttonsBegin();
+  statusLedBegin();  // lamp dark before anything can drive it — ให้หลอดดับไว้ก่อนที่อะไรจะมาสั่งได้
   rtcBegin();  // absent chip is fine: epochs just read 0 — ไม่มีชิปก็ไม่เป็นไร เวลาจะเป็น 0
   Serial.begin(115200);
   delay(200);  // let UART0 settle so the boot banner is not clipped — รอ UART0 นิ่งกันข้อความต้นเปิดเครื่องขาด
@@ -287,10 +297,10 @@ void setup() {
                 gSettings.restSec);
 #if BENCH_DEBUG
   // ASCII only: an em dash here reaches a serial monitor as mojibake.
-  Serial.printf("debug prints ON - btn start=%d(%s) stop=%d(%s) reset=%d(%s), limits=%s\n",
-                PIN_BTN_START, BTN_START_NC ? "NC" : "NO",
-                PIN_BTN_STOP, BTN_STOP_NC ? "NC" : "NO",
+  Serial.printf("debug prints ON - btn run=%d(%s) reset=%d(%s), led=%d, limits=%s\n",
+                PIN_BTN_RUN, BTN_RUN_NC ? "NC" : "NO",
                 PIN_BTN_RESET, BTN_RESET_NC ? "NC" : "NO",
+                PIN_STATUS_LED,
 #ifdef SWITCH_NC
                 "NC");
 #else
@@ -308,23 +318,23 @@ void loop() {
 
   // The energize cap is charged to the stroke that was actually driving, which
   // means consuming it BEFORE the buttons can start a new session. A long loop
-  // stall latches the trip and a held START at the same time; handled after the
+  // stall latches the trip and a held RUN at the same time; handled after the
   // button block, forceFault() then finished the session that had just started
   // milliseconds ago, and its zero totals overwrote the real ones of the session
   // the cap had actually ended — destroying that session's duration and rep count
   // in both the server event and the card row.
   //
   // Not while a safe-lower is running: the trip can surface in the same iteration
-  // in which STOP entered SafeLower, and faulting there would abort the descent
+  // in which a RUN press entered SafeLower, and faulting there would abort the descent
   // the operator just asked for before the DOWN relay had energized at all. That
   // descent is separately bounded by its own fresh cap.
   // [TH] เพดานเวลาจ่ายไฟต้องถูกคิดให้กับการเคลื่อนที่ที่กำลังขับเคลื่อนอยู่จริง
   //      จึงต้องอ่านค่าก่อนที่ปุ่มจะเริ่มรอบใหม่ได้
-  //      ลูปที่ค้างนานจะทำให้ทั้งการตัดและการกด START ค้างมาพร้อมกัน
+  //      ลูปที่ค้างนานจะทำให้ทั้งการตัดและการกด RUN ค้างมาพร้อมกัน
   //      ถ้าอ่านหลังบล็อกปุ่ม forceFault() จะไปจบรอบที่เพิ่งเริ่มไปไม่กี่มิลลิวินาที
   //      แล้วยอดรวมศูนย์ของรอบนั้นจะเขียนทับยอดจริงของรอบที่เพดานเวลาเป็นคนจบ
   //      ทำลายทั้งเวลารวมและจำนวนครั้งของรอบนั้นทั้งในเหตุการณ์ฝั่งเซิร์ฟเวอร์และในแถวข้อมูลบนการ์ด
-  //      และไม่ทำระหว่างที่กำลังลดขาเพื่อหยุด เพราะการตัดอาจปรากฏในลูปรอบเดียวกับที่ STOP พาเข้าสถานะนั้น
+  //      และไม่ทำระหว่างที่กำลังลดขาเพื่อหยุด เพราะการตัดอาจปรากฏในลูปรอบเดียวกับที่การกด RUN พาเข้าสถานะนั้น
   //      การตัดสินว่าผิดพลาดตรงนั้นจะยกเลิกการลดขาที่ผู้ใช้เพิ่งสั่ง ตั้งแต่ก่อนที่รีเลย์ลงจะได้จ่ายไฟ
   //      การลดขาครั้งนั้นมีเพดานเวลาของตัวเองคุมอยู่แล้ว
   if (actuatorTakeCapTrip()) {
@@ -332,32 +342,77 @@ void loop() {
     if (gSession.phase() != Phase::SafeLower) gSession.forceFault(now);
   }
 
-  // panel buttons: START (from Idle or a latched Fault), STOP (any state, and it
-  // lowers the leg from Fault and from Idle as well as ending a session), RESET
-  // (only when not running, and from a Fault it lowers on the way to Idle)
-  // Read all three first: each accessor clears its edge, so the debug build has
-  // to see the same values this loop acts on.
-  // [TH] ปุ่มหน้าปัด: START เริ่ม (เฉพาะว่าง), STOP หยุด (ตลอดเวลา), RESET ล้าง (เฉพาะว่าง)
-  //      อ่านทั้งสามก่อน เพราะการอ่านจะล้างขอบทิ้ง โหมดดีบักต้องเห็นค่าชุดเดียวกับที่ลูปใช้
-  bool pressStart = buttonStartPressed();
-  bool pressStop = buttonStopPressed();
+  // panel buttons: RUN (a toggle — starts from Idle with the leg down, and stops
+  // or lowers in every other state, including a latched Fault) and RESET (only
+  // when not running, and from a Fault it lowers on the way to Idle).
+  // Read both first: each accessor clears its edge, so the debug build has to see
+  // the same values this loop acts on.
+  // [TH] ปุ่มหน้าปัด: RUN เป็นปุ่มสลับ เริ่มรอบตอนว่างและขาอยู่ล่างสุด
+  //      นอกนั้นคือหยุดหรือลดขา รวมถึงตอนที่ค้างสถานะผิดพลาด
+  //      ส่วน RESET ใช้ได้เฉพาะตอนไม่ได้ทำงาน และถ้าอยู่ในสถานะผิดพลาดจะลดขาลงระหว่างทางกลับสู่สถานะว่าง
+  //      อ่านทั้งสองก่อน เพราะการอ่านจะล้างขอบทิ้ง โหมดดีบักต้องเห็นค่าชุดเดียวกับที่ลูปใช้
+  bool runFromIsr = false;
+  bool pressRun = buttonRunPressed(&runFromIsr);
   bool pressReset = buttonResetPressed();
-  // START is refused while the STOP line looks broken. On an NC button an open
-  // circuit reads pressed forever, which means STOP can never raise an edge — so
-  // the session would run with no way to stop it from the panel, on a machine
-  // where the panel is the primary stop. Better to not start at all.
-  // [TH] ไม่ให้เริ่มรอบถ้าสาย STOP ดูเหมือนขาด ปุ่มแบบปกติปิดที่วงจรเปิดจะอ่านได้ว่ากดค้างตลอด
-  //      แปลว่าปุ่ม STOP จะไม่มีวันเกิดขอบสัญญาณ รอบนั้นจะเดินโดยไม่มีทางหยุดจากหน้าปัดได้เลย
-  //      บนเครื่องที่ใช้หน้าปัดเป็นตัวหยุดหลัก ไม่เริ่มเลยดีกว่า
-  if (pressStart && buttonStopWireSuspect()) {
-    Serial.println("start refused: STOP has read pressed since power-up, check its wiring");
-  } else if (pressStart) {
-    gSession.start(now);
+  // Both refusals apply to the STARTING half of the toggle only. A stop must never
+  // be blocked by anything, so every rejected press below still falls through to
+  // nothing rather than to a different action, and a press that means "stop" skips
+  // these tests entirely.
+  //
+  // 1. A press the interrupt latched, rather than one the polling saw, may not
+  //    start a session. The latch can turn an electrical transient into a
+  //    full-width press (buttons.h explains why), and a self-start lifts a
+  //    patient's leg with nobody at the panel. Judged here and not when the latch
+  //    fires, because tick() runs between buttonsPoll() and this line: a
+  //    safe-lower that reaches the bottom in that gap flips the phase to Idle, and
+  //    a press latched while the machine was still moving would arrive as a start.
+  // 2. A start is refused while the RUN line looks broken. On an NC button an open
+  //    circuit reads pressed forever, which means RUN can never raise another edge
+  //    — the session would run with no way to stop it from the panel, on a machine
+  //    where the panel is the primary stop. Better to not start at all.
+  // [TH] การปฏิเสธทั้งสองข้อใช้กับ "ฝั่งที่เป็นการเริ่ม" ของปุ่มสลับเท่านั้น
+  //      การสั่งหยุดต้องไม่ถูกขวางด้วยอะไรทั้งสิ้น การกดที่ถูกปฏิเสธด้านล่างจึงกลายเป็นไม่ทำอะไร
+  //      ไม่ใช่ไปทำอย่างอื่น และการกดที่หมายถึงการหยุดจะข้ามการตรวจเหล่านี้ไปทั้งหมด
+  //      1. การกดที่อินเทอร์รัปต์จับค้างไว้ ไม่ใช่การกดที่การอ่านตามรอบเห็นเอง จะเริ่มรอบไม่ได้
+  //         กลไกจับค้างอาจเปลี่ยนสัญญาณรบกวนทางไฟฟ้าให้เป็นการกดเต็มเกณฑ์ได้ (buttons.h อธิบายเหตุผลไว้)
+  //         และการเริ่มทำงานเองคือการยกขาผู้ป่วยโดยไม่มีใครอยู่ที่หน้าปัด
+  //         ตัดสินตรงนี้ ไม่ใช่ตอนที่กลไกจับค้างทำงาน เพราะ tick() ทำงานคั่นระหว่าง buttonsPoll() กับบรรทัดนี้
+  //         การลดขาเพื่อหยุดที่ถึงพื้นพอดีในช่วงนั้นจะพลิกสถานะเป็นว่าง
+  //         การกดที่ถูกจับค้างไว้ตอนที่เครื่องยังเคลื่อนที่อยู่ก็จะมาถึงในฐานะการเริ่มรอบ
+  //      2. ไม่ให้เริ่มรอบถ้าสาย RUN ดูเหมือนขาด ปุ่มแบบปกติปิดที่วงจรเปิดจะอ่านได้ว่ากดค้างตลอด
+  //         แปลว่าปุ่ม RUN จะไม่มีวันเกิดขอบสัญญาณอีก รอบนั้นจะเดินโดยไม่มีทางหยุดจากหน้าปัดได้เลย
+  //         บนเครื่องที่ใช้หน้าปัดเป็นตัวหยุดหลัก ไม่เริ่มเลยดีกว่า
+  // Sampled once, before anything acts on it: toggle() changes the phase, so a
+  // second call would answer about the state the press produced rather than the
+  // state it was judged against — and the debug print below needs the same value
+  // this block used.
+  // [TH] อ่านครั้งเดียวก่อนที่จะมีอะไรไปทำตาม เพราะ toggle() เปลี่ยนสถานะ
+  //      ถ้าเรียกซ้ำจะได้คำตอบของสถานะที่การกดนั้นสร้างขึ้น ไม่ใช่สถานะที่ใช้ตัดสินการกด
+  //      และการพิมพ์ดีบักด้านล่างต้องใช้ค่าเดียวกับที่บล็อกนี้ใช้
+  bool runWouldStart = gSession.toggleWouldStart();
+  if (pressRun && runWouldStart && runFromIsr) {
+    Serial.println("start ignored: latched RUN press, not a polled one");
+  } else if (pressRun && runWouldStart && buttonRunWireSuspect()) {
+    Serial.println("start refused: RUN has read pressed since power-up, check its wiring");
+  } else if (pressRun) {
+    gSession.toggle(now);
   }
-  if (pressStop) gSession.requestStop(now);
   if (pressReset) gSession.reset(now);
   applyActuator();
   actuatorTick(now);
+  // Right after the relays, and before the network work: the lamp then agrees
+  // with the actuator command issued in the same iteration, and it still updates
+  // on the iterations where netLoop() later blocks on an unreachable server.
+  // running() is the whole rule — true for Lift/Hold/Lower/Rest and for the
+  // safe-lower, false for Idle and for a latched Fault, which is exactly "the
+  // actuator may move" and exactly what the lamp is for.
+  // [TH] วางไว้ต่อจากการสั่งรีเลย์และก่อนงานเครือข่าย
+  //      หลอดจะได้ตรงกับคำสั่งชุดขับเคลื่อนที่ออกไปในลูปรอบเดียวกัน
+  //      และยังถูกอัปเดตในรอบที่ netLoop() ไปค้างรอเซิร์ฟเวอร์ที่ติดต่อไม่ได้ด้วย
+  //      ใช้ running() เป็นกฎทั้งหมด เป็นจริงตอนยกขึ้น/ค้าง/ลดลง/พัก และตอนลดขาเพื่อหยุด
+  //      เป็นเท็จตอนว่างและตอนค้างสถานะผิดพลาด ซึ่งตรงกับความหมาย "ชุดขับเคลื่อนอาจเคลื่อนที่" พอดี
+  //      และตรงกับหน้าที่ของหลอดพอดี
+  statusLedSet(gSession.running());
   // The trip raised by actuatorTick's own software check is consumed at the top of
   // the NEXT iteration, alongside the hardware timer's. Both go through the one
   // place above, so a trip can never be charged to a session that started after
@@ -390,14 +445,14 @@ void loop() {
   //
   // Armed by the first line ever received, deliberately. A board that has never
   // heard from a display is running standalone — the documented bench setup, and
-  // a machine whose CYD is unplugged — where the panel STOP button is the primary
+  // a machine whose CYD is unplugged — where the panel RUN button is the primary
   // stop and works regardless. Arming from boot instead would make the condition
-  // permanently true on those machines: START and requestStop would land in the
+  // permanently true on those machines: a start and requestStop would land in the
   // same loop iteration and no session could ever run. See "Running the
   // controller without a display" in firmware/README.md.
   // [TH] เริ่มนับจากข้อความแรกที่ได้รับ ซึ่งเป็นความตั้งใจ
   //      บอร์ดที่ไม่เคยได้ยินเสียงจากจอเลยคือบอร์ดที่ใช้งานเดี่ยว ทั้งชุดทดสอบตามที่บันทึกไว้
-  //      และเครื่องที่ถอดสายจอออก กรณีนั้นปุ่ม STOP หน้าปัดเป็นตัวหยุดหลักและใช้ได้อยู่แล้ว
+  //      และเครื่องที่ถอดสายจอออก กรณีนั้นปุ่ม RUN หน้าปัดเป็นตัวหยุดหลักและใช้ได้อยู่แล้ว
   //      ถ้าเริ่มนับตั้งแต่เปิดเครื่อง เงื่อนไขจะเป็นจริงตลอดเวลาบนเครื่องเหล่านั้น
   //      คำสั่งเริ่มและคำสั่งหยุดจะตกอยู่ในลูปรอบเดียวกัน และจะไม่มีรอบใดเดินได้เลย
   //      ดูหัวข้อการใช้คอนโทรลเลอร์โดยไม่มีจอใน firmware/README.md
@@ -408,7 +463,7 @@ void loop() {
   // timeout against an unreachable server. A ping that lands inside that block is
   // timestamped later than `now`, and unsigned that subtraction is ~4.29e9 — past
   // 2000 — so a perfectly healthy link safe-stopped the session about a second
-  // after START, over and over.
+  // after it started, over and over.
   // [TH] ใช้การเทียบแบบมีเครื่องหมายด้วยเหตุผลเดียวกับเพดานเวลาของชุดขับเคลื่อน
   //      ค่า now อ่านไว้ตั้งแต่ต้นรอบ แต่ gLink.poll() ด้านบนบันทึกเวลารับล่าสุดด้วย millis() ค่าใหม่
   //      และ netLoop() ก่อนหน้านั้นค้างได้นานถึง 400 มิลลิวินาทีเมื่อติดต่อเซิร์ฟเวอร์ไม่ได้
@@ -424,13 +479,13 @@ void loop() {
     lastPoll = now;
     String cmd = netPollCommand();
     // The server's start is held to the same condition as the panel's: a machine
-    // whose STOP button cannot raise an edge must not begin a session, and it
-    // makes no difference who asked. Stop is never refused.
+    // whose RUN button cannot raise an edge has no panel stop and must not begin a
+    // session, and it makes no difference who asked. Stop is never refused.
     // [TH] คำสั่งเริ่มจากเซิร์ฟเวอร์ใช้เงื่อนไขเดียวกับปุ่มบนหน้าปัด
-    //      เครื่องที่ปุ่ม STOP ไม่สามารถสร้างขอบสัญญาณได้ต้องไม่เริ่มรอบใหม่ ไม่ว่าใครจะเป็นคนสั่ง
-    //      ส่วนคำสั่งหยุดไม่เคยถูกปฏิเสธ
-    if (cmd == "start" && buttonStopWireSuspect())
-      Serial.println("server start refused: STOP reads pressed, check its wiring");
+    //      เครื่องที่ปุ่ม RUN สร้างขอบสัญญาณไม่ได้ก็ไม่มีปุ่มหยุดที่หน้าปัด ต้องไม่เริ่มรอบใหม่
+    //      ไม่ว่าใครจะเป็นคนสั่ง ส่วนคำสั่งหยุดไม่เคยถูกปฏิเสธ
+    if (cmd == "start" && buttonRunWireSuspect())
+      Serial.println("server start refused: RUN reads pressed, check its wiring");
     else if (cmd == "start") gSession.start(now);
     else if (cmd == "stop") gSession.requestStop(now);
   }
@@ -504,7 +559,7 @@ void loop() {
     gLink.sendState(st);
   }
 #if BENCH_DEBUG
-  debugTick(now, pressStart, pressStop, pressReset);
+  debugTick(now, pressRun, runWouldStart, runFromIsr, pressReset);
 #endif
   delay(2);
 }
