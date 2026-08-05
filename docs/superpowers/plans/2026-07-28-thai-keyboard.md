@@ -6,7 +6,7 @@
 
 **Architecture:** Two Thai key pages live in LVGL's `USER_1` / `USER_2` keyboard modes, defined once in a new `thai_kb` module and applied to both existing keyboards. LVGL's built-in keyboard event handler is replaced, because it types unknown control keys into the textarea instead of acting on them.
 
-**Tech Stack:** Arduino ESP32 core 3.3.10, LVGL 8.4.0, TFT_eSPI 2.5.43, Kanit fonts already generated at 14/20/28 px covering `0x0E00-0x0E7F`.
+**Tech Stack:** Arduino ESP32 core 3.3.11, LVGL 8.4.0, TFT_eSPI 2.5.43, Kanit fonts already generated at 14/20/28 px covering `0x0E00-0x0E7F`.
 
 **Spec:** `docs/superpowers/specs/2026-07-28-thai-keyboard-design.md` (status: approved)
 

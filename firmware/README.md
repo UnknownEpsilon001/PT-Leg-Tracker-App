@@ -34,7 +34,23 @@ not a code problem. Reinstall the pin and rebuild with `--clean`.
 [TH] ต้องใช้ lvgl 8.4.0 เท่านั้น ถ้าเผลออัปเป็น 9.x จะคอมไพล์จอไม่ผ่านเพราะชื่อ API เปลี่ยน
 
 Core: `arduino-cli core install esp32:esp32` (board manager URL
-`https://espressif.github.io/arduino-esp32/package_esp32_index.json`).
+`https://espressif.github.io/arduino-esp32/package_esp32_index.json`). Both
+sketches are built and flashed against **3.3.11**; 3.3.10 also worked, and the
+core is not pinned because nothing here depends on a version-specific API.
+
+The library versions above are a different matter — they are pinned for a
+reason. The Arduino IDE offers to update libraries on startup, and accepting
+that is what silently moves lvgl to 9.x. Before a build after any long gap:
+
+```powershell
+arduino-cli lib list lvgl TFT_eSPI ArduinoJson
+```
+
+Expect 8.4.0 / 2.5.43 / 7.4.x. Anything else, reinstall the pin, re-copy the two
+config files below, and rebuild with `--clean` — a stale cache otherwise links
+objects from both versions.
+[TH] เวอร์ชันของไลบรารีด้านบนถูกล็อกไว้ด้วยเหตุผล ถ้ากดยอมรับการอัปเดตที่ Arduino IDE เสนอตอนเปิดโปรแกรม
+     lvgl จะถูกอัปเป็น 9.x แล้วคอมไพล์ไม่ผ่าน ก่อนบิลด์ให้ตรวจเวอร์ชันก่อนเสมอ
 
 ## One-time library config (both files live in this repo, copied into the libraries dir)
 

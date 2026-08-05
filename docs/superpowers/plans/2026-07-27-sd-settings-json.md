@@ -6,7 +6,7 @@
 
 **Architecture:** The card is the master copy; the controller keeps its NVS copy so the machine still runs with the screen unplugged or the card absent. The controller cannot read the card — it is on the CYD's SPI bus — so the CYD pushes settings to the controller rather than the controller pulling. Reconciliation reuses the existing `hello` and `settings` UART messages, so the link protocol does not change.
 
-**Tech Stack:** Arduino ESP32 core 3.3.10, ArduinoJson 7.4.3 (already a display dependency via `link.cpp`), SD/FS (already mounted by `store.cpp`), LVGL 8.4.0, TFT_eSPI 2.5.43.
+**Tech Stack:** Arduino ESP32 core 3.3.11, ArduinoJson 7.4.3 (already a display dependency via `link.cpp`), SD/FS (already mounted by `store.cpp`), LVGL 8.4.0, TFT_eSPI 2.5.43.
 
 **Spec:** `docs/superpowers/specs/2026-07-21-sd-settings-json-design.md` (status: approved)
 
