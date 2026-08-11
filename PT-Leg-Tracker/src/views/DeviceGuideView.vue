@@ -1,17 +1,29 @@
 <script setup lang="ts">
 // หน้าวิธีใช้เครื่อง: แนะนำการใช้งานทีละขั้น พร้อมแสดงสถานะออนไลน์/ออฟไลน์
 // Device guide screen: step-by-step usage with an online/offline indicator.
-import { ref, computed, onMounted, onUnmounted } from 'vue'
-import guide from '@/content/deviceGuide.json'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { loadDeviceGuide, type DeviceGuideContent } from '@/lib/content'
 
 const stepIndex = ref(0)
 const online = ref(navigator.onLine)
+const guide = ref<DeviceGuideContent | null>(null)
+const loading = ref(true)
+const contentError = ref(false)
 const setOnline = () => (online.value = true)
 const setOffline = () => (online.value = false)
 
-onMounted(() => {
+const currentStep = computed(() => guide.value?.steps[stepIndex.value] ?? null)
+
+onMounted(async () => {
   window.addEventListener('online', setOnline)
   window.addEventListener('offline', setOffline)
+  try {
+    guide.value = await loadDeviceGuide()
+  } catch {
+    contentError.value = true
+  } finally {
+    loading.value = false
+  }
 })
 
 onUnmounted(() => {
@@ -19,36 +31,56 @@ onUnmounted(() => {
   window.removeEventListener('offline', setOffline)
 })
 
-const currentStep = computed(() => guide.steps[stepIndex.value]!)
 </script>
 
 <template>
   <main class="page">
-    <div class="card step">
-      <img :src="currentStep.image" :alt="currentStep.title" />
-      <h2>{{ currentStep.title }}</h2>
-      <p>{{ currentStep.caption }}</p>
-      <div class="nav">
-        <button :disabled="stepIndex === 0" @click="stepIndex--">← ก่อนหน้า</button>
-        <span>{{ stepIndex + 1 }} / {{ guide.steps.length }}</span>
-        <button :disabled="stepIndex === guide.steps.length - 1" @click="stepIndex++">
-          ถัดไป →
-        </button>
+    <p v-if="loading">กำลังโหลดเนื้อหา…</p>
+    <p v-else-if="contentError" class="error">
+      โหลดเนื้อหาไม่สำเร็จ กรุณาตรวจสอบ public/editable-content/README.md
+    </p>
+    <template v-else-if="guide && currentStep">
+      <div class="card step">
+        <img :src="currentStep.image" :alt="currentStep.title" />
+        <h2>{{ currentStep.title }}</h2>
+        <p>{{ currentStep.caption }}</p>
+        <div class="nav">
+          <button :disabled="stepIndex === 0" @click="stepIndex--">← ก่อนหน้า</button>
+          <span>{{ stepIndex + 1 }} / {{ guide!.steps.length }}</span>
+          <button :disabled="stepIndex === guide!.steps.length - 1" @click="stepIndex++">
+            ถัดไป →
+          </button>
+        </div>
       </div>
-    </div>
 
-    <h2>วิดีโอสาธิต</h2>
-    <p v-if="guide.videoIds.length === 0">ยังไม่มีวิดีโอ</p>
-    <template v-else-if="online">
-      <div v-for="id in guide.videoIds" :key="id" class="video">
-        <iframe
-          :src="`https://www.youtube.com/embed/${id}`"
-          title="วิดีโอสาธิต"
-          allowfullscreen
-        ></iframe>
-      </div>
+      <h2>วิดีโอสาธิต</h2>
+      <p v-if="guide.videos.length === 0">ยังไม่มีวิดีโอ</p>
+      <template
+        v-for="video in guide.videos"
+        :key="video.type === 'youtube' ? `yt-${video.id}` : `file-${video.src}`"
+      >
+        <div v-if="video.type === 'youtube' && online" class="video">
+          <iframe
+            :src="`https://www.youtube.com/embed/${video.id}`"
+            :title="video.title"
+            allowfullscreen
+          ></iframe>
+        </div>
+        <p v-else-if="video.type === 'youtube'" class="card">
+          วิดีโอ YouTube ต้องใช้อินเทอร์เน็ต กรุณาเชื่อมต่อแล้วลองใหม่
+        </p>
+        <div v-else class="local-video">
+          <video
+            controls
+            playsinline
+            preload="metadata"
+            :src="video.src"
+            :title="video.title"
+          ></video>
+          <p>{{ video.title }}</p>
+        </div>
+      </template>
     </template>
-    <p v-else class="card">วิดีโอต้องใช้อินเทอร์เน็ต กรุณาเชื่อมต่อแล้วลองใหม่</p>
   </main>
 </template>
 
@@ -78,5 +110,21 @@ const currentStep = computed(() => guide.steps[stepIndex.value]!)
   height: 100%;
   border: 0;
   border-radius: 0.75rem;
+}
+
+.local-video {
+  margin-bottom: 0.75rem;
+}
+
+.local-video video {
+  display: block;
+  width: 100%;
+  border-radius: 0.75rem;
+  background: #000;
+}
+
+.error {
+  color: #b91c1c;
+  font-weight: 600;
 }
 </style>
