@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300" viewBox="0 0 400 300" role="img" aria-label="อาการปวดเข่าเวลาขึ้นลงบันได">
+  <!-- [TH] อาการเด่น: ปวดเข่าเวลาขึ้นลงบันได ข้อฝืด มีเสียงในข้อ -->
+  <!-- Hallmark symptoms: stair pain, morning stiffness, joint noise. -->
+  <rect width="400" height="300" fill="#f7f5f0"/>
+  <text x="200" y="38" font-family="'Noto Sans Thai','Sarabun',sans-serif" font-size="24" text-anchor="middle" fill="#24395e">ปวดเข่าเวลาขึ้นลงบันได</text>
+
+  <!-- บันได / stairs -->
+  <path d="M40 250 h70 v-34 h70 v-34 h70 v-34 h70 v102 z" fill="#ffffff" stroke="#24395e" stroke-width="3" stroke-linejoin="round"/>
+
+  <!-- คนกำลังขึ้นบันได / person climbing -->
+  <g>
+    <circle cx="188" cy="102" r="14" fill="#ffffff" stroke="#24395e" stroke-width="3"/>
+    <path d="M188 116 v40" stroke="#24395e" stroke-width="4" stroke-linecap="round"/>
+    <path d="M188 128 l-24 14" stroke="#24395e" stroke-width="4" stroke-linecap="round"/>
+    <path d="M188 128 l24 10" stroke="#24395e" stroke-width="4" stroke-linecap="round"/>
+    <path d="M188 156 l-22 12 l-2 20" fill="none" stroke="#24395e" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M188 156 l24 8 l0 18" fill="none" stroke="#24395e" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+    <!-- จุดปวดที่เข่า / pain point at the knee -->
+    <circle cx="212" cy="164" r="12" fill="#8c2f39" opacity="0.25"/>
+    <circle cx="212" cy="164" r="6" fill="#8c2f39"/>
+    <path d="M232 150 l14 -8 M234 164 h16 M232 178 l14 8" stroke="#8c2f39" stroke-width="4" stroke-linecap="round"/>
+  </g>
+
+  <text x="200" y="286" font-family="'Noto Sans Thai','Sarabun',sans-serif" font-size="17" text-anchor="middle" fill="#56607a">ข้อฝืดตอนเช้า • มีเสียงในข้อ • เดินลำบาก</text>
+</svg>
