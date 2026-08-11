@@ -2,7 +2,10 @@
 // หน้าวิธีใช้เครื่อง: แนะนำการใช้งานทีละขั้น พร้อมแสดงสถานะออนไลน์/ออฟไลน์
 // Device guide screen: step-by-step usage with an online/offline indicator.
 import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { Capacitor } from '@capacitor/core'
+import { Network } from '@capacitor/network'
 import { loadDeviceGuide, type DeviceGuideContent } from '@/lib/content'
+import { createNativeNetworkStatusMonitor } from '@/lib/network-status'
 
 const stepIndex = ref(0)
 const online = ref(navigator.onLine)
@@ -11,12 +14,20 @@ const loading = ref(true)
 const contentError = ref(false)
 const setOnline = () => (online.value = true)
 const setOffline = () => (online.value = false)
+let stopNativeNetworkStatus: (() => Promise<void>) | undefined
 
 const currentStep = computed(() => guide.value?.steps[stepIndex.value] ?? null)
 
 onMounted(async () => {
-  window.addEventListener('online', setOnline)
-  window.addEventListener('offline', setOffline)
+  if (Capacitor.isNativePlatform()) {
+    stopNativeNetworkStatus = await createNativeNetworkStatusMonitor(Network, (connected) => {
+      online.value = connected
+    })
+  } else {
+    window.addEventListener('online', setOnline)
+    window.addEventListener('offline', setOffline)
+  }
+
   try {
     guide.value = await loadDeviceGuide()
   } catch {
@@ -29,6 +40,7 @@ onMounted(async () => {
 onUnmounted(() => {
   window.removeEventListener('online', setOnline)
   window.removeEventListener('offline', setOffline)
+  void stopNativeNetworkStatus?.()
 })
 </script>
 
