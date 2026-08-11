@@ -5,17 +5,35 @@ import BigButton from '@/components/BigButton.vue'
 import AppIcon from '@/components/AppIcon.vue'
 import { useProfileStore } from '@/stores/profile'
 import { useQuizStore } from '@/stores/quiz'
-import logoUrl from '@/assets/logo.png'
+import { onMounted, ref } from 'vue'
+import { loadAppContent, type AppContent } from '@/lib/content'
 
 const store = useProfileStore()
 const quizStore = useQuizStore()
+const appContent = ref<AppContent | null>(null)
+const loading = ref(true)
+const contentError = ref(false)
+
+onMounted(async () => {
+  try {
+    appContent.value = await loadAppContent()
+  } catch {
+    contentError.value = true
+  } finally {
+    loading.value = false
+  }
+})
 </script>
 
 <template>
   <main class="page">
-    <img :src="logoUrl" alt="ตราวิทยาลัยการอาชีพฝาง" class="logo" />
+    <p v-if="loading">กำลังโหลดเนื้อหา…</p>
+    <p v-else-if="contentError" class="error">
+      โหลดเนื้อหาไม่สำเร็จ กรุณาตรวจสอบ public/editable-content/README.md
+    </p>
+    <img v-if="appContent" :src="appContent.logo" :alt="appContent.logoAlt" class="logo" />
     <h1>สวัสดี คุณ{{ store.profile?.name }}</h1>
-    <p class="sub">เครื่องช่วยบริหารกล้ามเนื้อต้นขา Smart OA Knee</p>
+    <p v-if="appContent" class="sub">{{ appContent.homeSubtitle }}</p>
     <div v-if="!quizStore.hasTaken('pre')" class="card banner">
       <p>ก่อนเริ่มใช้งาน ทำแบบทดสอบก่อนใช้งานสั้น ๆ ก่อนนะคะ</p>
       <button class="primary" @click="$router.push({ name: 'quiz', params: { quizId: 'pre' } })">
@@ -78,6 +96,11 @@ const quizStore = useQuizStore()
 .sub {
   margin-bottom: 1.5rem;
   color: #57534e;
+}
+
+.error {
+  color: #b91c1c;
+  font-weight: 600;
 }
 
 .settings-link {

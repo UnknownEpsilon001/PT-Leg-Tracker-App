@@ -1,33 +1,57 @@
 <script setup lang="ts">
 // หน้าความรู้: แสดงหัวข้อและบทความเรื่องข้อเข่าเสื่อม แตะเพื่ออ่านรายละเอียด
 // Knowledge screen: lists knee-OA topics and articles; tap to read.
+import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import content from '@/content/knowledge.json'
+import { loadKnowledgeContent, type KnowledgeSection } from '@/lib/content'
 
 const router = useRouter()
-const sections = content.sections
+const sections = ref<KnowledgeSection[]>([])
+const loading = ref(true)
+const contentError = ref(false)
+
+onMounted(async () => {
+  try {
+    sections.value = (await loadKnowledgeContent()).sections
+  } catch {
+    contentError.value = true
+  } finally {
+    loading.value = false
+  }
+})
 </script>
 
 <template>
   <main class="page">
-    <section v-for="section in sections" :key="section.id">
-      <h2>{{ section.title }}</h2>
-      <button
-        v-for="a in section.articles"
-        :key="a.id"
-        class="card item"
-        @click="router.push({ name: 'article', params: { id: a.id } })"
-      >
-        <img v-if="a.image" :src="a.image" alt="" class="thumb" />
-        <span class="title">{{ a.title }} ›</span>
-      </button>
-    </section>
+    <p v-if="loading">กำลังโหลดเนื้อหา…</p>
+    <p v-else-if="contentError" class="error">
+      โหลดเนื้อหาไม่สำเร็จ กรุณาตรวจสอบ public/editable-content/README.md
+    </p>
+    <template v-else>
+      <section v-for="section in sections" :key="section.id">
+        <h2>{{ section.title }}</h2>
+        <button
+          v-for="a in section.articles"
+          :key="a.id"
+          class="card item"
+          @click="router.push({ name: 'article', params: { id: a.id } })"
+        >
+          <img v-if="a.image" :src="a.image" alt="" class="thumb" />
+          <span class="title">{{ a.title }} ›</span>
+        </button>
+      </section>
+    </template>
   </main>
 </template>
 
 <style scoped>
 h2 {
   margin: 1rem 0 0.5rem;
+}
+
+.error {
+  color: #b91c1c;
+  font-weight: 600;
 }
 
 .item {
