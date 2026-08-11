@@ -30,7 +30,6 @@ onUnmounted(() => {
   window.removeEventListener('online', setOnline)
   window.removeEventListener('offline', setOffline)
 })
-
 </script>
 
 <template>

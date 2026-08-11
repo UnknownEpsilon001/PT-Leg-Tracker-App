@@ -11,7 +11,8 @@ const content = ref<KnowledgeContent | null>(null)
 const loading = ref(true)
 const contentError = ref(false)
 const article = computed(() =>
-  content.value?.sections.flatMap((section) => section.articles)
+  content.value?.sections
+    .flatMap((section) => section.articles)
     .find((item) => item.id === route.params.id),
 )
 

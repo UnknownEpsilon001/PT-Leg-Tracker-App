@@ -189,7 +189,8 @@ function validateQuizzes(value: unknown): QuizContent {
           !Number.isInteger(question.correctIndex) ||
           (question.correctIndex as number) < 0 ||
           (question.correctIndex as number) >= choices.length
-        ) throw new Error()
+        )
+          throw new Error()
         result.correctIndex = question.correctIndex as number
       }
       return result

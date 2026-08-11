@@ -48,7 +48,8 @@ describe('editable content loader', () => {
   })
 
   it('throws ContentError when json parsing fails', async () => {
-    vi.stubGlobal('fetch',
+    vi.stubGlobal(
+      'fetch',
       vi.fn().mockResolvedValue({
         ok: true,
         json: async () => {
@@ -67,19 +68,28 @@ describe('editable content loader', () => {
   })
 
   it('accepts knowledge with unique article ids', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response({
-      sections: [{
-        id: 'knowledge',
-        title: 'ความรู้',
-        articles: [{
-          id: 'a1',
-          title: 'หัวข้อ',
-          body: 'เนื้อหา',
-          image: '/editable-content/images/knowledge/a.jpg',
-          imageAlt: 'ภาพ',
-        }],
-      }],
-    })))
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        response({
+          sections: [
+            {
+              id: 'knowledge',
+              title: 'ความรู้',
+              articles: [
+                {
+                  id: 'a1',
+                  title: 'หัวข้อ',
+                  body: 'เนื้อหา',
+                  image: '/editable-content/images/knowledge/a.jpg',
+                  imageAlt: 'ภาพ',
+                },
+              ],
+            },
+          ],
+        }),
+      ),
+    )
 
     await expect(loadKnowledgeContent()).resolves.toMatchObject({ sections: [{ id: 'knowledge' }] })
   })
@@ -92,29 +102,41 @@ describe('editable content loader', () => {
       image: '/editable-content/images/knowledge/a.jpg',
       imageAlt: 'ภาพ',
     }
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response({
-      sections: [
-        { id: 'one', title: 'หนึ่ง', articles: [article] },
-        { id: 'two', title: 'สอง', articles: [article] },
-      ],
-    })))
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        response({
+          sections: [
+            { id: 'one', title: 'หนึ่ง', articles: [article] },
+            { id: 'two', title: 'สอง', articles: [article] },
+          ],
+        }),
+      ),
+    )
 
     await expect(loadKnowledgeContent()).rejects.toMatchObject({ file: 'knowledge.json' })
   })
 
   it('accepts youtube and local guide videos', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response({
-      steps: [{
-        id: 'step-1',
-        title: 'ขั้นตอน',
-        caption: 'คำอธิบาย',
-        image: '/editable-content/images/guide/step.jpg',
-      }],
-      videos: [
-        { type: 'youtube', id: 'abc123', title: 'ออนไลน์' },
-        { type: 'file', src: '/editable-content/videos/demo.mp4', title: 'ออฟไลน์' },
-      ],
-    })))
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        response({
+          steps: [
+            {
+              id: 'step-1',
+              title: 'ขั้นตอน',
+              caption: 'คำอธิบาย',
+              image: '/editable-content/images/guide/step.jpg',
+            },
+          ],
+          videos: [
+            { type: 'youtube', id: 'abc123', title: 'ออนไลน์' },
+            { type: 'file', src: '/editable-content/videos/demo.mp4', title: 'ออฟไลน์' },
+          ],
+        }),
+      ),
+    )
 
     await expect(loadDeviceGuide()).resolves.toMatchObject({
       videos: [{ type: 'youtube' }, { type: 'file' }],
@@ -122,29 +144,43 @@ describe('editable content loader', () => {
   })
 
   it('rejects an unknown guide video type', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response({
-      steps: [{
-        id: 'step-1',
-        title: 'ขั้นตอน',
-        caption: 'คำอธิบาย',
-        image: '/editable-content/images/guide/step.jpg',
-      }],
-      videos: [{ type: 'vimeo', id: 'x', title: 'x' }],
-    })))
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        response({
+          steps: [
+            {
+              id: 'step-1',
+              title: 'ขั้นตอน',
+              caption: 'คำอธิบาย',
+              image: '/editable-content/images/guide/step.jpg',
+            },
+          ],
+          videos: [{ type: 'vimeo', id: 'x', title: 'x' }],
+        }),
+      ),
+    )
 
     await expect(loadDeviceGuide()).rejects.toMatchObject({ file: 'device-guide.json' })
   })
 
   it('rejects a local guide video with an unsupported extension', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response({
-      steps: [{
-        id: 'step-1',
-        title: 'ขั้นตอน',
-        caption: 'คำอธิบาย',
-        image: '/editable-content/images/guide/step.jpg',
-      }],
-      videos: [{ type: 'file', src: '/editable-content/videos/demo.mov', title: 'ออฟไลน์' }],
-    })))
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        response({
+          steps: [
+            {
+              id: 'step-1',
+              title: 'ขั้นตอน',
+              caption: 'คำอธิบาย',
+              image: '/editable-content/images/guide/step.jpg',
+            },
+          ],
+          videos: [{ type: 'file', src: '/editable-content/videos/demo.mov', title: 'ออฟไลน์' }],
+        }),
+      ),
+    )
 
     await expect(loadDeviceGuide()).rejects.toMatchObject({ file: 'device-guide.json' })
   })
@@ -153,11 +189,22 @@ describe('editable content loader', () => {
     const q = (id: string, correctIndex?: number) => ({
       id,
       title: id,
-      questions: [{ text: 'คำถาม', choices: ['ก', 'ข'], ...(correctIndex === undefined ? {} : { correctIndex }) }],
+      questions: [
+        {
+          text: 'คำถาม',
+          choices: ['ก', 'ข'],
+          ...(correctIndex === undefined ? {} : { correctIndex }),
+        },
+      ],
     })
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response({
-      quizzes: [q('pre', 0), q('post', 1), q('satisfaction')],
-    })))
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        response({
+          quizzes: [q('pre', 0), q('post', 1), q('satisfaction')],
+        }),
+      ),
+    )
 
     await expect(loadQuizContent()).resolves.toMatchObject({
       quizzes: [{ id: 'pre' }, { id: 'post' }, { id: 'satisfaction' }],
@@ -168,11 +215,22 @@ describe('editable content loader', () => {
     const q = (id: string, correctIndex?: number) => ({
       id,
       title: id,
-      questions: [{ text: 'คำถาม', choices: ['ก', 'ข'], ...(correctIndex === undefined ? {} : { correctIndex }) }],
+      questions: [
+        {
+          text: 'คำถาม',
+          choices: ['ก', 'ข'],
+          ...(correctIndex === undefined ? {} : { correctIndex }),
+        },
+      ],
     })
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response({
-      quizzes: [q('pre', 0), q('post', 1), q('followup')],
-    })))
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        response({
+          quizzes: [q('pre', 0), q('post', 1), q('followup')],
+        }),
+      ),
+    )
 
     await expect(loadQuizContent()).rejects.toMatchObject({ file: 'quizzes.json' })
   })
@@ -183,13 +241,18 @@ describe('editable content loader', () => {
       title: 'pre',
       questions: [{ text: 'คำถาม', choices: ['ก'], correctIndex: 1 }],
     }
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response({
-      quizzes: [
-        quiz,
-        { ...quiz, id: 'post' },
-        { ...quiz, id: 'satisfaction', questions: [{ text: 'คำถาม', choices: ['ก'] }] },
-      ],
-    })))
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        response({
+          quizzes: [
+            quiz,
+            { ...quiz, id: 'post' },
+            { ...quiz, id: 'satisfaction', questions: [{ text: 'คำถาม', choices: ['ก'] }] },
+          ],
+        }),
+      ),
+    )
 
     await expect(loadQuizContent()).rejects.toMatchObject({ file: 'quizzes.json' })
   })
