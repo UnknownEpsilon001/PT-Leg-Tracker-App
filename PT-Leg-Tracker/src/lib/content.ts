@@ -98,17 +98,41 @@ function list(value: unknown): unknown[] {
   return value
 }
 
-function localPath(value: unknown): string {
+function imagePath(value: unknown): string {
   const path = text(value)
-  if (!path.startsWith('/editable-content/')) throw new Error()
+  if (
+    !/^\/editable-content\/images\/(?:[a-z0-9]+(?:-[a-z0-9]+)*\/)*[a-z0-9]+(?:-[a-z0-9]+)*\.(png|jpg|jpeg|webp|svg)$/.test(
+      path,
+    )
+  ) {
+    throw new Error()
+  }
   return path
+}
+
+function videoPath(value: unknown): string {
+  const path = text(value)
+  if (
+    !/^\/editable-content\/videos\/(?:[a-z0-9]+(?:-[a-z0-9]+)*\/)*[a-z0-9]+(?:-[a-z0-9]+)*\.(mp4|webm)$/.test(
+      path,
+    )
+  ) {
+    throw new Error()
+  }
+  return path
+}
+
+function youtubeId(value: unknown): string {
+  const id = text(value)
+  if (!/^[A-Za-z0-9_-]{11}$/.test(id)) throw new Error()
+  return id
 }
 
 function validateApp(value: unknown): AppContent {
   const item = record(value)
   return {
     homeSubtitle: text(item.homeSubtitle),
-    logo: localPath(item.logo),
+    logo: imagePath(item.logo),
     logoAlt: text(item.logoAlt),
   }
 }
@@ -126,7 +150,7 @@ function validateKnowledge(value: unknown): KnowledgeContent {
         id,
         title: text(article.title),
         body: text(article.body),
-        image: localPath(article.image),
+        image: imagePath(article.image),
         imageAlt: text(article.imageAlt),
       }
     })
@@ -147,7 +171,7 @@ function validateGuide(value: unknown): DeviceGuideContent {
       id,
       title: text(step.title),
       caption: text(step.caption),
-      image: localPath(step.image),
+      image: imagePath(step.image),
     }
   })
   if (steps.length === 0) throw new Error()
@@ -156,11 +180,10 @@ function validateGuide(value: unknown): DeviceGuideContent {
     const video = record(videoValue)
     const title = text(video.title)
     if (video.type === 'youtube') {
-      return { type: 'youtube', id: text(video.id), title }
+      return { type: 'youtube', id: youtubeId(video.id), title }
     }
     if (video.type === 'file') {
-      const src = localPath(video.src)
-      if (!/\.(mp4|webm)$/i.test(src)) throw new Error()
+      const src = videoPath(video.src)
       return { type: 'file', src, title }
     }
     throw new Error()

@@ -14,16 +14,32 @@ export interface NativeNetworkStatusSource {
   ): Promise<NativeNetworkStatusListener> | NativeNetworkStatusListener
 }
 
-export async function createNativeNetworkStatusMonitor(
+export function createNativeNetworkStatusMonitor(
   network: NativeNetworkStatusSource,
   update: (connected: boolean) => void,
-): Promise<() => Promise<void>> {
-  update((await network.getStatus()).connected)
-  const listener = await network.addListener('networkStatusChange', (status) => {
-    update(status.connected)
-  })
+  fallback: () => void,
+): () => void {
+  let disposed = false
+  let listener: NativeNetworkStatusListener | undefined
 
-  return async () => {
-    await listener.remove()
+  void (async () => {
+    try {
+      const initialStatus = await network.getStatus()
+      if (disposed) return
+      update(initialStatus.connected)
+
+      const resolvedListener = await network.addListener('networkStatusChange', (status) => {
+        if (!disposed) update(status.connected)
+      })
+      listener = resolvedListener
+      if (disposed) await listener.remove()
+    } catch {
+      if (!disposed) fallback()
+    }
+  })()
+
+  return () => {
+    disposed = true
+    if (listener) void listener.remove()
   }
 }

@@ -131,7 +131,7 @@ describe('editable content loader', () => {
             },
           ],
           videos: [
-            { type: 'youtube', id: 'abc123', title: 'ออนไลน์' },
+            { type: 'youtube', id: 'dQw4w9WgXcQ', title: 'ออนไลน์' },
             { type: 'file', src: '/editable-content/videos/demo.mp4', title: 'ออฟไลน์' },
           ],
         }),
@@ -255,5 +255,111 @@ describe('editable content loader', () => {
     )
 
     await expect(loadQuizContent()).rejects.toMatchObject({ file: 'quizzes.json' })
+  })
+
+  it('accepts a canonical eleven-character YouTube video ID', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        response({
+          steps: [
+            {
+              id: 'step-1',
+              title: 'Step',
+              caption: 'Caption',
+              image: '/editable-content/images/guide/step-1.svg',
+            },
+          ],
+          videos: [{ type: 'youtube', id: 'dQw4w9WgXcQ', title: 'Online video' }],
+        }),
+      ),
+    )
+
+    await expect(loadDeviceGuide()).resolves.toMatchObject({
+      videos: [{ type: 'youtube', id: 'dQw4w9WgXcQ' }],
+    })
+  })
+
+  it.each([
+    'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+    'https://youtu.be/dQw4w9WgXcQ',
+    ' dQw4w9WgXcQ ',
+    'dQw4w9WgXc',
+    'not a video',
+  ])('rejects a non-canonical YouTube video ID: %s', async (id) => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        response({
+          steps: [
+            {
+              id: 'step-1',
+              title: 'Step',
+              caption: 'Caption',
+              image: '/editable-content/images/guide/step-1.svg',
+            },
+          ],
+          videos: [{ type: 'youtube', id, title: 'Online video' }],
+        }),
+      ),
+    )
+
+    await expect(loadDeviceGuide()).rejects.toBeInstanceOf(ContentError)
+  })
+
+  it.each([
+    '/editable-content/images/guide/../branding/logo.png',
+    '/editable-content/images/guide\\step-1.svg',
+    '/editable-content/images/guide/step-1.svg?version=2',
+    '/editable-content/images/guide/step-1.svg#image',
+    '/editable-content/images/guide/step 1.svg',
+    '/editable-content/videos/device-demo.mp4',
+    '/editable-content/images/guide/step-1.gif',
+  ])('rejects a non-canonical image path: %s', async (image) => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        response({
+          sections: [
+            {
+              id: 'knowledge',
+              title: 'Knowledge',
+              articles: [{ id: 'a1', title: 'Title', body: 'Body', image, imageAlt: 'Image' }],
+            },
+          ],
+        }),
+      ),
+    )
+
+    await expect(loadKnowledgeContent()).rejects.toBeInstanceOf(ContentError)
+  })
+
+  it.each([
+    '/editable-content/videos/../device-demo.mp4',
+    '/editable-content/videos/device\\demo.mp4',
+    '/editable-content/videos/device-demo.mp4?version=2',
+    '/editable-content/videos/device-demo.mp4#video',
+    '/editable-content/videos/device demo.mp4',
+    '/editable-content/images/guide/device-demo.mp4',
+    '/editable-content/videos/device-demo.avi',
+  ])('rejects a non-canonical local video path: %s', async (src) => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        response({
+          steps: [
+            {
+              id: 'step-1',
+              title: 'Step',
+              caption: 'Caption',
+              image: '/editable-content/images/guide/step-1.svg',
+            },
+          ],
+          videos: [{ type: 'file', src, title: 'Offline video' }],
+        }),
+      ),
+    )
+
+    await expect(loadDeviceGuide()).rejects.toBeInstanceOf(ContentError)
   })
 })

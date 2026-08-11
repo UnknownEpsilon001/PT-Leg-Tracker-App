@@ -14,33 +14,42 @@ const loading = ref(true)
 const contentError = ref(false)
 const setOnline = () => (online.value = true)
 const setOffline = () => (online.value = false)
-let stopNativeNetworkStatus: (() => Promise<void>) | undefined
+let stopNativeNetworkStatus: (() => void) | undefined
 
 const currentStep = computed(() => guide.value?.steps[stepIndex.value] ?? null)
 
-onMounted(async () => {
+onMounted(() => {
+  window.addEventListener('online', setOnline)
+  window.addEventListener('offline', setOffline)
+
   if (Capacitor.isNativePlatform()) {
-    stopNativeNetworkStatus = await createNativeNetworkStatusMonitor(Network, (connected) => {
-      online.value = connected
-    })
-  } else {
-    window.addEventListener('online', setOnline)
-    window.addEventListener('offline', setOffline)
+    stopNativeNetworkStatus = createNativeNetworkStatusMonitor(
+      Network,
+      (connected) => {
+        online.value = connected
+      },
+      () => {
+        online.value = navigator.onLine
+      },
+    )
   }
 
-  try {
-    guide.value = await loadDeviceGuide()
-  } catch {
-    contentError.value = true
-  } finally {
-    loading.value = false
-  }
+  void loadDeviceGuide()
+    .then((content) => {
+      guide.value = content
+    })
+    .catch(() => {
+      contentError.value = true
+    })
+    .finally(() => {
+      loading.value = false
+    })
 })
 
 onUnmounted(() => {
   window.removeEventListener('online', setOnline)
   window.removeEventListener('offline', setOffline)
-  void stopNativeNetworkStatus?.()
+  stopNativeNetworkStatus?.()
 })
 </script>
 
