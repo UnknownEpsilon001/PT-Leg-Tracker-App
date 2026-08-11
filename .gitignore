@@ -8,3 +8,6 @@ docs/*.pdf
 
 # superpowers working scratch (progress ledger etc.)
 .superpowers/
+
+# local isolated implementation worktrees
+.worktrees/
