@@ -1,22 +1,34 @@
 <script setup lang="ts">
 // หน้าแบบทดสอบความรู้ (ก่อน/หลัง/ความพึงพอใจ): ทำทีละข้อ ให้คะแนน และบันทึกผล
 // Quiz screen (pre/post/satisfaction): answer per question, score, and save the result.
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import data from '@/content/quizzes.json'
+import { loadQuizContent, type QuizContent } from '@/lib/content'
 import { scoreQuiz } from '@/lib/quiz'
 import { useQuizStore } from '@/stores/quiz'
-import type { QuizResult } from '@/types'
 
 const route = useRoute()
 const router = useRouter()
 const store = useQuizStore()
 
-const quiz = computed(() => data.quizzes.find((q) => q.id === route.params.quizId))
+const data = ref<QuizContent | null>(null)
+const loading = ref(true)
+const contentError = ref(false)
+const quiz = computed(() => data.value?.quizzes.find((q) => q.id === route.params.quizId))
 const qIndex = ref(0)
 const answers = ref<number[]>([])
 const done = ref(false)
 const finalScore = ref(0)
+
+onMounted(async () => {
+  try {
+    data.value = await loadQuizContent()
+  } catch {
+    contentError.value = true
+  } finally {
+    loading.value = false
+  }
+})
 
 watch(
   () => route.params.quizId,
@@ -35,12 +47,9 @@ async function answer(choiceIndex: number) {
     qIndex.value++
     return
   }
-  finalScore.value = scoreQuiz(
-    quiz.value.questions as { correctIndex?: number }[],
-    answers.value,
-  )
+  finalScore.value = scoreQuiz(quiz.value.questions as { correctIndex?: number }[], answers.value)
   await store.addResult({
-    quizId: quiz.value.id as QuizResult['quizId'],
+    quizId: quiz.value.id,
     answers: [...answers.value],
     score: finalScore.value,
     timestamp: new Date().toISOString(),
@@ -51,7 +60,11 @@ async function answer(choiceIndex: number) {
 
 <template>
   <main class="page">
-    <p v-if="!quiz">ไม่พบแบบทดสอบ</p>
+    <p v-if="loading">กำลังโหลดเนื้อหา…</p>
+    <p v-else-if="contentError" class="error">
+      โหลดเนื้อหาไม่สำเร็จ กรุณาตรวจสอบ public/editable-content/README.md
+    </p>
+    <p v-else-if="!quiz">ไม่พบแบบทดสอบ</p>
 
     <template v-else-if="!done">
       <p class="progress">ข้อ {{ qIndex + 1 }} / {{ quiz.questions.length }}</p>
@@ -82,6 +95,11 @@ async function answer(choiceIndex: number) {
 .progress {
   color: #57534e;
   margin-bottom: 0.5rem;
+}
+
+.error {
+  color: #b91c1c;
+  font-weight: 600;
 }
 
 .choice {
