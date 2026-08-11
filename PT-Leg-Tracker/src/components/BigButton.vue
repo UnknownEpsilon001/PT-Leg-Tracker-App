@@ -30,8 +30,16 @@ const router = useRouter()
   text-align: left;
 }
 
+/* [TH] ป้ายยาว ๆ ต้องตัดบรรทัดได้ ไม่ล้นปุ่ม (ไทยไม่มีเว้นวรรคระหว่างคำ) */
+/* Long Thai labels must wrap; Thai has no inter-word spaces. */
+.label {
+  overflow-wrap: anywhere;
+  line-height: 1.35;
+}
+
 .icon-wrap {
   display: flex;
+  flex-shrink: 0;
   align-items: center;
   justify-content: center;
   width: 3rem;

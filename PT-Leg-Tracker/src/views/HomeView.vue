@@ -15,16 +15,34 @@ const quizStore = useQuizStore()
   <main class="page">
     <img :src="logoUrl" alt="ตราวิทยาลัยการอาชีพฝาง" class="logo" />
     <h1>สวัสดี คุณ{{ store.profile?.name }}</h1>
-    <p class="sub">แอปดูแลข้อเข่าเสื่อม Smart OA Knee</p>
+    <p class="sub">เครื่องช่วยบริหารกล้ามเนื้อต้นขา Smart OA Knee</p>
     <div v-if="!quizStore.hasTaken('pre')" class="card banner">
       <p>ก่อนเริ่มใช้งาน ทำแบบทดสอบก่อนใช้งานสั้น ๆ ก่อนนะคะ</p>
       <button class="primary" @click="$router.push({ name: 'quiz', params: { quizId: 'pre' } })">
         <AppIcon name="clipboard" /> ทำแบบทดสอบก่อนใช้งาน
       </button>
     </div>
-    <BigButton class="stagger" style="--i: 0" icon="book-open" label="ความรู้เรื่องข้อเข่าเสื่อม" to="knowledge" />
-    <BigButton class="stagger" style="--i: 1" icon="wrench" label="วิธีใช้เครื่องบริหารเข่า" to="guide" />
-    <BigButton class="stagger" style="--i: 2" icon="activity" label="เริ่มออกกำลังกาย" to="session" />
+    <BigButton
+      class="stagger"
+      style="--i: 0"
+      icon="book-open"
+      label="ความรู้เกี่ยวกับเรื่องข้อเข่าเสื่อมและการออกกำลังกายต้นขา"
+      to="knowledge"
+    />
+    <BigButton
+      class="stagger"
+      style="--i: 1"
+      icon="wrench"
+      label="วิธีใช้เครื่องบริหารเข่า"
+      to="guide"
+    />
+    <BigButton
+      class="stagger"
+      style="--i: 2"
+      icon="activity"
+      label="เริ่มออกกำลังกาย"
+      to="session"
+    />
     <BigButton class="stagger" style="--i: 3" icon="bar-chart" label="บันทึกของฉัน" to="records" />
     <button class="settings-link" @click="$router.push({ name: 'settings' })">
       <AppIcon name="settings" /> ตั้งค่า
