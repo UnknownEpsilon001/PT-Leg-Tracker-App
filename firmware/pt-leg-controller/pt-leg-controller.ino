@@ -146,6 +146,34 @@ static void onLinkSettings(const LinkSettings& s) {
   //      ทั้งสองมาถึงในลูปรอบเดียวกันได้ตอนที่รอบทำงานจบพอดี
   //      poll() จะนำค่านี้ไปใช้ แล้วบล็อกที่รออยู่ด้านล่างจะเขียนทับด้วยค่าเก่ากว่าและบันทึกค่านั้นแทน
   gPendingSettings = false;
+  // Same collision as the held branch above, but on the idle path applySettings
+  // writes straight into gSettings instead of into gPending, so there is no later
+  // commit point to fold the live value into — it has to happen right here, before
+  // the write. gLink.poll() can dispatch several messages from one UART drain, so
+  // a target-dial message and this settings message can both land in the same
+  // call: if the target one was dispatched first, gTargetDirty is already true and
+  // gSettings.targetReps already holds the newer value by the time this runs.
+  // d.targetReps only knows what THIS settings message's own field said, which can
+  // be an arbitrarily old snapshot — e.g. a settings screen opened before the
+  // operator ever touched the target dial — regardless of which message the UART
+  // happened to deliver last. A live target is the one unambiguous signal of
+  // current intent, so it wins over a bundled settings field whenever one is
+  // outstanding; when none is outstanding (gTargetDirty false) this changes
+  // nothing and the settings message's own target applies exactly as before.
+  // [TH] ชนกันแบบเดียวกับบล็อกที่พักไว้ด้านบน แต่บนเส้นทางที่เครื่องว่าง applySettings
+  //      เขียนลง gSettings ตรงๆ ไม่ผ่าน gPending จึงไม่มีจุดค่อยรวมค่าทีหลัง ต้องทำตรงนี้ก่อนเขียน
+  //      gLink.poll() ดึงข้อความได้หลายฉบับต่อการเรียกหนึ่งครั้ง ข้อความปรับเป้าหมายแบบสด
+  //      กับข้อความตั้งค่านี้จึงมาถึงในการเรียกเดียวกันได้ ถ้าข้อความเป้าหมายมาก่อน
+  //      gTargetDirty จะเป็นจริงแล้วและ gSettings.targetReps ก็มีค่าใหม่อยู่แล้วตอนโค้ดนี้ทำงาน
+  //      ส่วน d.targetReps รู้แค่ค่าที่ข้อความตั้งค่าฉบับนี้บอกมา ซึ่งอาจเป็นภาพเก่าแค่ไหนก็ได้
+  //      เช่นหน้าตั้งค่าที่เปิดค้างไว้ก่อนผู้ใช้จะไปหมุนปุ่มเป้าหมาย ไม่ว่า UART จะส่งฉบับไหนถึงทีหลัง
+  //      ค่าเป้าหมายแบบสดคือสัญญาณเดียวที่ชัดเจนว่าเป็นความตั้งใจล่าสุด จึงชนะฟิลด์ที่แนบมากับ
+  //      ข้อความตั้งค่าทุกครั้งที่มีค่าค้างอยู่ ถ้าไม่มีค้าง (gTargetDirty เป็นเท็จ) ก็ไม่เปลี่ยนอะไร
+  //      ค่าเป้าหมายของข้อความตั้งค่าเองก็มีผลตามปกติ
+  if (gTargetDirty) {
+    d.targetReps = gSettings.targetReps;
+    gTargetDirty = false;
+  }
   applySettings(d);
   gLink.sendSettings(currentAsLink());
 }
