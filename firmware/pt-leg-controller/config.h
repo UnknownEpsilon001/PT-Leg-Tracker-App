@@ -11,91 +11,95 @@
 // #define RELAY_ACTIVE_LOW  // uncomment if relay board is active-low
 // [TH] เปิดบรรทัดนี้ถ้าบอร์ดรีเลย์เป็นแบบ active-low (สั่งงานด้วยลอจิก LOW)
 
-// limit switches (controller GPIOs that support INPUT_PULLUP — NOT 34/35/36/39)
-// [TH] ลิมิตสวิตช์ ต้องใช้ขาที่รองรับ INPUT_PULLUP เท่านั้น (ห้ามใช้ 34/35/36/39)
-#define PIN_SWITCH_TOP 32     // closes when leg fully up — สวิตช์บน: ปิดเมื่อขายกสุด
-#define PIN_SWITCH_BOTTOM 33  // closes when leg fully down — สวิตช์ล่าง: ปิดเมื่อขาลงสุด
-#define SWITCH_NC             // limit switches are normally-closed (fail-safe on wire break)
-// [TH] กำหนดถ้าใช้สวิตช์แบบ NC (ปกติปิด) เพื่อให้ปลอดภัยเมื่อสายขาด
-#define SWITCH_DEBOUNCE_MS 25 // เวลากันเด้งสัญญาณสวิตช์ (มิลลิวินาที)
+// The top and bottom limit switches are gone. Travel is timed now: LIFT drives
+// the UP relay for liftSec and LOWER drives DOWN for lowerSec, both editable.
+// GPIO 32 became the yellow lamp; GPIO 33 is free.
+//
+// What this costs, stated once so nobody rediscovers it the hard way: the board
+// has no measurement of where the leg is. A slipping belt, a jammed actuator and
+// a clean stroke are the same event to this firmware — "the relay was energized
+// for lowerSec". The actuator energize cap is the only backstop left, so the
+// machine must not run unattended with a leg loaded on it.
+// [TH] ลิมิตสวิตช์บนและล่างถูกยกเลิกแล้ว ตอนนี้การเคลื่อนที่ใช้เวลาเป็นตัวกำหนด
+//      สถานะยกขาจ่ายไฟรีเลย์ขึ้นเป็นเวลา liftSec และสถานะลดลงจ่ายไฟรีเลย์ลงเป็นเวลา lowerSec ปรับได้ทั้งคู่
+//      ขา 32 กลายเป็นไฟเหลือง ส่วนขา 33 ว่าง
+//      สิ่งที่ต้องแลก บอกไว้ครั้งเดียวเพื่อไม่ให้ต้องไปค้นพบเองตอนเกิดเรื่อง
+//      บอร์ดไม่มีการวัดตำแหน่งขาเลย สายพานลื่น ชุดขับเคลื่อนติดขัด และการเคลื่อนที่ปกติ
+//      เป็นเหตุการณ์เดียวกันหมดสำหรับเฟิร์มแวร์นี้ คือ "รีเลย์จ่ายไฟครบ lowerSec"
+//      เหลือเพียงเพดานเวลาจ่ายไฟของชุดขับเคลื่อนเป็นด่านสุดท้าย
+//      จึงต้องไม่ปล่อยให้เครื่องทำงานโดยไม่มีคนดูขณะที่มีขาวางอยู่
 
-// panel buttons (momentary, INPUT_PULLUP) — two of them
-// RUN is a toggle: it starts a session when the machine is idle with the leg
-// down, and stops (by lowering) in every other state. One button rather than a
-// separate START and STOP, because the panel only has room for two.
-// [TH] ปุ่มหน้าปัด (กดชั่วขณะ) ใช้ INPUT_PULLUP มีสองปุ่ม
-//      ปุ่ม RUN เป็นแบบสลับ: กดตอนว่างและขาอยู่ล่างสุด = เริ่มรอบ กดตอนอื่นทั้งหมด = หยุดโดยลดขาลง
-//      ใช้ปุ่มเดียวแทนที่จะแยก START กับ STOP เพราะหน้าปัดมีที่ให้แค่สองปุ่ม
-#define PIN_BTN_RUN 25     // start / stop toggle — ปุ่มสลับ เริ่ม/หยุด
-#define PIN_BTN_RESET 4    // clear reps + FAULT when idle — ล้างจำนวนครั้งและสถานะ FAULT ตอนว่าง
-// GPIO 26 was the old dedicated STOP pin and is now free.
-// [TH] ขา 26 เคยเป็นปุ่ม STOP แยก ตอนนี้ว่างแล้ว
+// panel buttons (momentary, INPUT_PULLUP) — two of them, one job each
+// START begins a session; STOP ends one, and when the machine is already idle it
+// clears the rep count and any latched FAULT. Separate pins rather than one
+// toggle, so a press means the same thing in every phase and the interrupt latch
+// can go back to being wired to STOP alone.
+// [TH] ปุ่มหน้าปัด (กดชั่วขณะ) ใช้ INPUT_PULLUP มีสองปุ่ม ปุ่มละหน้าที่
+//      START เริ่มรอบ STOP จบรอบ และถ้าเครื่องว่างอยู่แล้วจะล้างจำนวนครั้งและสถานะ FAULT ที่ค้างอยู่
+//      ใช้ขาแยกกันแทนปุ่มสลับปุ่มเดียว การกดจึงมีความหมายเดียวกันในทุกสถานะ
+//      และกลไกจับค้างของอินเทอร์รัปต์กลับไปผูกกับปุ่ม STOP เพียงปุ่มเดียวได้เหมือนเดิม
+#define PIN_BTN_START 25
+#define PIN_BTN_STOP 26
 
-// Per-button contact type: 1 = normally-closed, 0 = normally-open. Separate from
-// SWITCH_NC and from each other, because panel buttons are often sourced as
-// mixed parts and a wrong guess reads as a button held down forever.
-// NC used to be the clear fail-safe choice, back when STOP was its own button: a
-// cut wire read as pressed and stopped the machine. RUN is both start and stop,
-// so neither polarity is purely fail-safe for it. NC means a wire that breaks
-// mid-session raises one press, which stops - good - and then reads pressed
-// forever, which kills the button for the rest of the power cycle; a wire that
-// breaks while idle raises one press too, which the state machine turns into a
-// lower or a no-op, never a start (see SessionSM::toggle). NO means a broken RUN
-// wire is simply dead, with no stop from the panel at all. NC is kept for that
-// reason, but set these to match the real parts.
-// [TH] ชนิดหน้าสัมผัสของแต่ละปุ่ม: 1 = ปกติปิด (NC), 0 = ปกติเปิด (NO) แยกจาก SWITCH_NC และแยกจากกัน
-//      เพราะปุ่มมักซื้อคนละล็อตและคนละแบบ ถ้าตั้งผิดจะอ่านได้เหมือนกดค้างตลอดเวลา
-//      สมัยที่ STOP เป็นปุ่มแยก แบบ NC ปลอดภัยชัดเจน เพราะสายขาด = เหมือนกด = เครื่องหยุด
-//      แต่ปุ่ม RUN ทำทั้งเริ่มและหยุด จึงไม่มีขั้วไหนปลอดภัยล้วนๆ
-//      แบบ NC: สายขาดกลางรอบจะเกิดการกดหนึ่งครั้งซึ่งสั่งหยุด (ดี) แล้วอ่านว่ากดค้างตลอดจนกว่าจะปิดเครื่อง
-//      ส่วนสายที่ขาดตอนว่างก็เกิดการกดหนึ่งครั้งเช่นกัน ซึ่งเครื่องสถานะจะแปลเป็นการลดขาหรือไม่ทำอะไร
-//      ไม่มีทางกลายเป็นการเริ่มรอบ (ดู SessionSM::toggle)
-//      แบบ NO: สาย RUN ที่ขาดจะตายเงียบ ไม่มีปุ่มหยุดที่หน้าปัดเลย จึงยังเลือก NC ไว้
-//      แต่ต้องตั้งให้ตรงกับปุ่มจริง
+// Per-button contact type: 1 = normally-closed, 0 = normally-open.
+// Both are NO on this panel. An NO button that loses its wire is simply dead —
+// it cannot raise an edge, and it cannot read as held down either. That kills the
+// old fail-safe argument for NC in both directions: a broken STOP wire no longer
+// stops the machine by failing, and a broken START wire no longer jams the panel.
+// The stuck-line guard in buttons.cpp covers what is left, which on an NO button
+// is a SHORT rather than a break.
+// [TH] ชนิดหน้าสัมผัสของแต่ละปุ่ม: 1 = ปกติปิด (NC), 0 = ปกติเปิด (NO)
+//      หน้าปัดชุดนี้เป็น NO ทั้งคู่ ปุ่มแบบ NO ที่สายขาดจะตายเงียบ
+//      คือไม่เกิดขอบสัญญาณ และไม่อ่านได้ว่ากดค้างด้วย
+//      เหตุผลเรื่องความปลอดภัยของแบบ NC จึงหมดไปทั้งสองทาง
+//      สาย STOP ที่ขาดไม่ได้ทำให้เครื่องหยุดอีกต่อไป และสาย START ที่ขาดก็ไม่ได้ทำให้หน้าปัดใช้ไม่ได้
+//      ส่วนที่เหลือคือกลไกตรวจสายค้างใน buttons.cpp ซึ่งบนปุ่ม NO คือสายลัดวงจร ไม่ใช่สายขาด
 // Guarded so a bench build can flip one with
-// --build-property compiler.cpp.extra_flags=-DBTN_RUN_NC=0 --clean
-// while the committed value keeps describing the real panel.
-// [TH] ครอบด้วย #ifndef เพื่อให้ทดสอบสลับขั้วผ่าน build flag ได้ โดยค่าที่ commit ยังตรงกับแผงปุ่มจริง
-#ifndef BTN_RUN_NC
-#define BTN_RUN_NC 1
+// --build-property compiler.cpp.extra_flags=-DBTN_START_NC=1 --clean
+// [TH] ครอบด้วย #ifndef เพื่อให้สลับขั้วผ่าน build flag ตอนทดสอบได้
+#ifndef BTN_START_NC
+#define BTN_START_NC 0
 #endif
-#ifndef BTN_RESET_NC
-#define BTN_RESET_NC 1
+#ifndef BTN_STOP_NC
+#define BTN_STOP_NC 0
 #endif
 #define BUTTON_DEBOUNCE_MS 25 // เวลากันเด้งของปุ่ม (มิลลิวินาที)
 
-// Panel status LED — 12 V, switched by a mechanical relay off this pin.
-// Lit while a session is in progress, dark otherwise. One bit, no blinking: a
-// relay charges a contact operation and an audible click for every change, so
-// patterns that toggle on their own would wear it out. See status_led.h.
+// Panel lamps — 12 V, each switched by a mechanical relay off its pin. Exactly
+// one is lit at any moment:
+//   green   a session is in progress and the actuator may move — keep clear
+//   yellow  idle, or a latched FAULT; nothing is going to move on its own
+// A FAULT reads yellow because it is not running and the relays really are off.
+// The lamp answers "is it about to move", nothing else; a fault is diagnosed on
+// the CYD, the serial log and the card row.
 //
-// 23 is free, is not a strapping pin, and does not glitch at boot the way
-// 0/2/5/12/15 can — 12 in particular is read at reset to pick the flash voltage,
-// and an LED pulling it up stops the board booting until the wire comes off.
+// No blinking and no heartbeat, on either lamp. Each change of state is a contact
+// operation on a mechanical relay, so a 5 Hz blink is 18,000 operations an hour
+// and eats a ~100k-operation relay in a few hours of one latched fault. Solid
+// states cost four operations per session (two lamps, on and off).
+// [TH] ไฟหน้าปัด 12 โวลต์ แต่ละดวงสั่งผ่านรีเลย์ของตัวเอง ติดครั้งละดวงเดียวเสมอ
+//      เขียว = อยู่ในรอบการทำงาน ชุดขับเคลื่อนอาจเคลื่อนที่ ให้อยู่ห่างไว้
+//      เหลือง = ว่าง หรือค้างสถานะผิดพลาด จะไม่มีอะไรเคลื่อนที่เอง
+//      สถานะผิดพลาดแสดงเป็นสีเหลือง เพราะไม่ได้กำลังทำงานและรีเลย์ดับจริงๆ
+//      หลอดตอบแค่คำถามเดียวว่า "กำลังจะเคลื่อนที่ไหม" การวินิจฉัยให้ดูที่จอ พอร์ตอนุกรม และแถวข้อมูลบนการ์ด
+//      ห้ามกะพริบและห้ามวาบเป็นจังหวะทั้งสองดวง ทุกการเปลี่ยนสถานะคือการตัดต่อหน้าสัมผัสของรีเลย์กลไก
+//      การกะพริบ 5 ครั้งต่อวินาทีคือ 18,000 ครั้งต่อชั่วโมง
+//      กินอายุรีเลย์ที่ทนได้ราวแสนครั้งจนหมดในไม่กี่ชั่วโมงจากความผิดพลาดที่ค้างอยู่ครั้งเดียว
+//      การใช้สถานะติดค้างหรือดับสนิทเสียแค่สี่ครั้งต่อรอบ (สองดวง ติดและดับ)
 //
-// GPIO 26, which the retired STOP button freed, would work equally well and is
-// not reserved for anything. The only reason not to use it is if a STOP button
-// is still physically wired to that header on an older machine: an output tied
-// to a switch that shorts to GND is a dead short on every press. On a panel
-// built to this two-button design there is no such wire.
-// [TH] ขา 23 ว่าง ไม่ใช่ขา strapping และไม่มีสัญญาณแกว่งตอนบูตแบบขา 0/2/5/12/15
-//      โดยเฉพาะขา 12 ที่ถูกอ่านตอนรีเซ็ตเพื่อเลือกแรงดันแฟลช ถ้ามี LED ดึงขึ้นจะบูตไม่ขึ้นจนกว่าจะถอดสาย
-//      ส่วนขา 26 ที่ว่างลงจากการเลิกใช้ปุ่ม STOP ก็ใช้ได้ดีเท่ากันและไม่ได้กันไว้ให้อะไร
-//      เหตุผลเดียวที่ไม่ควรใช้คือถ้าเครื่องรุ่นเก่ายังมีปุ่ม STOP ต่อสายอยู่ที่หัวต่อนั้นจริงๆ
-//      เพราะขาออกที่ไปต่อกับสวิตช์ซึ่งลัดลง GND จะกลายเป็นการลัดวงจรทุกครั้งที่กด
-//      หน้าปัดที่สร้างตามแบบสองปุ่มนี้ไม่มีสายเส้นนั้น
-#define PIN_STATUS_LED 23
-// Uncomment for an active-low relay board — most cheap opto-isolated modules are,
-// and they energize on LOW. Check yours before first power-up: get this backwards
-// and the lamp is lit whenever the machine is idle and dark while it is working,
-// which is the dangerous way round. The motor relays are active-high (see
-// RELAY_ACTIVE_LOW above), but the lamp relay is a separate part and need not match.
-// [TH] เปิดบรรทัดนี้ถ้าบอร์ดรีเลย์เป็นแบบสั่งงานด้วยลอจิกต่ำ
-//      โมดูลออปโตราคาถูกส่วนใหญ่เป็นแบบนี้ คือทำงานเมื่อได้รับ LOW
-//      ต้องตรวจก่อนเปิดเครื่องครั้งแรก ถ้าตั้งกลับด้าน หลอดจะติดตอนเครื่องว่างและดับตอนเครื่องทำงาน
-//      ซึ่งเป็นด้านที่อันตราย
-//      รีเลย์มอเตอร์เป็นแบบสั่งงานด้วยลอจิกสูง (ดู RELAY_ACTIVE_LOW ด้านบน)
-//      แต่รีเลย์ของหลอดเป็นคนละตัว ไม่จำเป็นต้องเหมือนกัน
+// 23 was already the status lamp. 32 is the pin the TOP limit switch freed; it is
+// not a strapping pin and does not glitch at boot the way 0/2/5/12/15 can.
+// [TH] ขา 23 เคยเป็นไฟแสดงสถานะอยู่แล้ว ส่วนขา 32 คือขาที่ว่างจากลิมิตสวิตช์บน
+//      ไม่ใช่ขา strapping และไม่มีสัญญาณแกว่งตอนบูตแบบขา 0/2/5/12/15
+#define PIN_LAMP_GREEN 23
+#define PIN_LAMP_YELLOW 32
+// Uncomment for an active-low relay board — most cheap opto-isolated modules are.
+// Covers BOTH lamps, on the assumption they are two channels of one board. Check
+// before first power-up: backwards, green is lit whenever the machine is idle,
+// which is the dangerous way round.
+// [TH] เปิดบรรทัดนี้ถ้าบอร์ดรีเลย์เป็นแบบสั่งงานด้วยลอจิกต่ำ ซึ่งโมดูลออปโตราคาถูกส่วนใหญ่เป็นแบบนั้น
+//      ใช้กับหลอดทั้งสองดวง โดยถือว่าเป็นสองช่องของบอร์ดเดียวกัน
+//      ต้องตรวจก่อนเปิดเครื่องครั้งแรก ถ้ากลับด้าน ไฟเขียวจะติดตอนเครื่องว่าง ซึ่งเป็นด้านที่อันตราย
 // #define LED_ACTIVE_LOW
 
 // DS3231 real-time clock on the controller I2C bus. Not the ESP32 default pair
@@ -121,7 +125,13 @@
 // [TH] เพดานความปลอดภัย: เวลาสูงสุดที่มอเตอร์วิ่งได้ต่อจังหวะก่อนขึ้นสถานะ FAULT
 #define DEFAULT_MAX_TRAVEL_SEC 8
 
-// cycle defaults (seconds) — user-adjustable in settings UI
+// cycle defaults (seconds) — user-adjustable in the settings UI
 // [TH] ค่าตั้งต้นของรอบ (วินาที) ผู้ใช้ปรับได้ในหน้าตั้งค่า
+#define DEFAULT_LIFT_SEC 4  // เวลาที่รีเลย์ยกขึ้นจ่ายไฟ
+#define DEFAULT_LOWER_SEC 4 // เวลาที่รีเลย์ลดลงจ่ายไฟ
 #define DEFAULT_HOLD_SEC 10 // เวลาค้างตอนยกสุด
 #define DEFAULT_REST_SEC 10 // เวลาพักตอนลงสุด
+
+// How many reps a session runs before it stops itself. 0 = run until STOP.
+// [TH] จำนวนครั้งที่รอบหนึ่งทำก่อนหยุดเอง ค่า 0 = ทำไปเรื่อยๆ จนกว่าจะกด STOP
+#define DEFAULT_TARGET_REPS 10
