@@ -210,12 +210,22 @@ Endpoints:
   live value, not the desired one) so the app displays what the machine will
   actually do.
 
-Range validation (0–99) lives in the route; the controller clamps again.
+- `POST /api/sessions/timings?deviceId=` — body with any subset of `liftSec`,
+  `lowerSec`, `holdSec`, `restSec`, `maxTravelSec`, for the app's debug settings
+  group. Handed to the device on the same command poll. Unlike the target these
+  expire after 30 s instead of waiting for an acknowledgement, because nothing
+  echoes them back: repeating them indefinitely would let a stale edit overwrite
+  a controller that had since been reconfigured at its own screen.
+
+Range validation (targets 0–99, timings to the clamp table above) lives in the
+route; the controller clamps again, and only it knows the live `maxTravelSec`
+that `liftSec`/`lowerSec` are bounded by.
 
 ## Vue app
 
 - `lib/device.ts`: `queueStart(serverUrl, code, targetReps?)`, new
-  `setTarget(serverUrl, code, reps)`, `getCurrent` returns `targetReps`.
+  `setTarget(serverUrl, code, reps)` and `setTimings(serverUrl, code, timings)`,
+  `getCurrent` returns `targetReps`.
 - `types`: `CurrentSession.targetReps: number`.
 - `SessionView.vue`: a rep-target stepper shown before start and while running.
   It displays the value from `/current` — never a local copy — so a change made
