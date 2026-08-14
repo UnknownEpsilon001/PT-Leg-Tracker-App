@@ -1,6 +1,6 @@
-// กันเด้งปุ่มแบบเดียวกับ switches.cpp แล้วยกธง "เพิ่งกด" หนึ่งครั้งเมื่อค่านิ่งเปลี่ยนจากไม่กด->กด
-// Debounce like switches.cpp, then raise a one-shot "just pressed" flag when the
-// stable state transitions not-pressed -> pressed.
+// กันเด้งแต่ละเส้นด้วยซอฟต์แวร์ แล้วยกธง "เพิ่งกด" หนึ่งครั้งเมื่อค่านิ่งเปลี่ยนจากไม่กด->กด
+// Debounce each line in software, then raise a one-shot "just pressed" flag when
+// the stable state transitions not-pressed -> pressed.
 #include "buttons.h"
 #include <Arduino.h>
 #include "config.h"
@@ -28,7 +28,7 @@ struct Btn {
   volatile bool isrPressed;
   volatile bool isrDown;       // a press is in progress — กำลังกดอยู่
   volatile uint32_t isrDownMs; // when it started — เวลาที่เริ่มกด
-  bool isrMayEdge;   // may the latch raise an edge? not RESET — ให้ยกขอบสัญญาณได้ไหม ไม่ให้สำหรับปุ่ม RESET
+  bool isrMayEdge;   // may the latch raise an edge? not START — ให้ยกขอบสัญญาณได้ไหม ไม่ให้สำหรับปุ่ม START
   bool bootPressed;  // read as pressed at power-up — อ่านได้ว่ากดอยู่ตั้งแต่เปิดเครื่อง
 };
 

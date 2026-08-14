@@ -51,8 +51,14 @@ void settingsLoad(DeviceSettings& s) {
   s.deviceCode = p.getString("code", DEFAULT_DEVICE_CODE);
   s.maxTravelSec = clampSec(p.getUShort("maxtravel", DEFAULT_MAX_TRAVEL_SEC), 1, 20,
                             DEFAULT_MAX_TRAVEL_SEC, "maxtravel");
+  s.liftSec = clampSec(p.getUShort("lift", DEFAULT_LIFT_SEC), 1, s.maxTravelSec, DEFAULT_LIFT_SEC,
+                       "lift");
+  s.lowerSec = clampSec(p.getUShort("lower", DEFAULT_LOWER_SEC), 1, s.maxTravelSec,
+                        DEFAULT_LOWER_SEC, "lower");
   s.holdSec = clampSec(p.getUShort("hold", DEFAULT_HOLD_SEC), 1, 60, DEFAULT_HOLD_SEC, "hold");
   s.restSec = clampSec(p.getUShort("rest", DEFAULT_REST_SEC), 1, 60, DEFAULT_REST_SEC, "rest");
+  s.targetReps = clampSec(p.getUShort("target", DEFAULT_TARGET_REPS), 0, 99, DEFAULT_TARGET_REPS,
+                          "target");
   p.end();
 }
 
@@ -65,7 +71,10 @@ void settingsSave(const DeviceSettings& s) {
   p.putString("server", s.serverUrl);
   p.putString("code", s.deviceCode);
   p.putUShort("maxtravel", s.maxTravelSec);
+  p.putUShort("lift", s.liftSec);
+  p.putUShort("lower", s.lowerSec);
   p.putUShort("hold", s.holdSec);
   p.putUShort("rest", s.restSec);
+  p.putUShort("target", s.targetReps);
   p.end();
 }

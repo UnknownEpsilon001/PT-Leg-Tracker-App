@@ -103,13 +103,14 @@
 // #define LED_ACTIVE_LOW
 
 // DS3231 real-time clock on the controller I2C bus. Not the ESP32 default pair
-// (21/22): 22 drives a relay, and 25 — the pin the plan first picked for SCL —
-// is now RUN. 21 and 19 are what is left free after relays 22/27, UART 16/17,
-// limits 32/33 and buttons 25/4. Left as they are now that 26 has freed up:
-// moving a working I2C bus buys nothing and invalidates every wiring photo.
+// (21/22): 22 drives a relay, and 25 is now START. 21 and 19 are what is left
+// free after relays 22/27, UART 16/17, the START/STOP buttons on 25/26, and the
+// yellow lamp on 32 — 4 and 33 are free. Left as they are: moving a working I2C
+// bus buys nothing and invalidates every wiring photo.
 // [TH] นาฬิกา DS3231 ต่อผ่าน I2C ของบอร์ดคอนโทรลเลอร์
-//      ใช้ขา 21/19 เพราะขา 22 เป็นรีเลย์ และขา 25 ถูกใช้เป็นปุ่ม RUN ไปแล้ว
-//      ถึงตอนนี้ขา 26 จะว่างแล้วก็ไม่ย้าย เพราะบัส I2C ที่ใช้งานได้อยู่แล้วย้ายไปก็ไม่ได้อะไรเพิ่ม
+//      ใช้ขา 21/19 เพราะขา 22 เป็นรีเลย์ และขา 25 เป็นปุ่ม START ไปแล้ว
+//      ขาที่เหลือว่างหลังหักรีเลย์ 22/27, UART 16/17, ปุ่ม START/STOP 25/26 และไฟเหลืองที่ขา 32
+//      คือขา 4 และ 33 ยังว่างอยู่ ไม่ย้ายบัสนี้ เพราะบัส I2C ที่ใช้งานได้อยู่แล้วย้ายไปก็ไม่ได้อะไรเพิ่ม
 //      มีแต่จะทำให้รูปการต่อสายทั้งหมดใช้ไม่ได้
 #define PIN_RTC_SDA 21
 #define PIN_RTC_SCL 19
