@@ -294,7 +294,7 @@ void setup() {
 }
 
 void loop() {
-  // [TH] ลำดับสำคัญ: อ่านสวิตช์ -> เดินเครื่องสถานะ -> สั่งรีเลย์ -> ตรวจเพดานเวลา ก่อนงานเครือข่าย
+  // [TH] ลำดับสำคัญ: อ่านปุ่ม -> เดินเครื่องสถานะ -> สั่งรีเลย์ -> ตรวจเพดานเวลา ก่อนงานเครือข่าย
   uint32_t now = millis();
   buttonsPoll(now);
   gSession.tick(now);
@@ -515,6 +515,36 @@ void loop() {
   //      ควรให้ข้อมูลของรอบนั้นถูกส่งออกไปก่อน
   if (gPendingSettings && !gSession.running()) {
     gPendingSettings = false;
+    // A live target change and a held settings-save are two independent UART
+    // messages, and either can land first within one running session. onLinkTarget
+    // writes the new value straight into gSettings.targetReps (it has to — it is
+    // applied live) but never touches gPending; onLinkSettings snapshots whatever
+    // target ITS OWN message carried into gPending.targetReps, which is stale the
+    // moment a live change lands before or after it. Applying gPending unexamined
+    // would silently revert the operator's live change and then confirm the
+    // reverted number back to the CYD as "what actually took effect" — the same
+    // class of hazard the comment above (line ~142) already covers for two
+    // settings messages, just between a settings message and a live-target one.
+    // gSettings.targetReps is always the most recent value regardless of which
+    // message arrived last, because onLinkTarget is the only thing that writes it
+    // while a session runs, so folding it into gPending here — and clearing the
+    // flag unconditionally so it can never dangle into a stray extra save — makes
+    // the live target the one that survives to NVS and to the CYD's confirmation.
+    // [TH] การเปลี่ยนเป้าหมายแบบสดกับข้อความตั้งค่าที่พักไว้เป็นคนละข้อความ UART
+    //      มาถึงก่อนหลังกันได้ในรอบทำงานเดียวกัน onLinkTarget เขียนค่าใหม่ลง
+    //      gSettings.targetReps ตรงๆ (ต้องทำแบบนั้นเพราะใช้ทันที) แต่ไม่แตะ gPending เลย
+    //      ส่วน onLinkSettings สแนปช็อตเป้าหมายจากข้อความของตัวเองลง gPending.targetReps
+    //      ซึ่งจะเก่าทันทีถ้ามีการเปลี่ยนสดมาก่อนหรือหลังก็ตาม
+    //      ถ้านำ gPending ไปใช้ตรงๆ จะย้อนค่าที่ผู้ใช้เพิ่งเปลี่ยนสดโดยไม่รู้ตัว
+    //      แล้วยืนยันค่าที่ย้อนกลับไปนั้นกลับไปให้จอว่า "มีผลใช้งานจริง"
+    //      เป็นปัญหาแบบเดียวกับที่คอมเมนต์ด้านบน (บรรทัด ~142) พูดถึงไว้แล้วสำหรับข้อความตั้งค่าสองอัน
+    //      ต่างกันแค่เป็นระหว่างข้อความตั้งค่ากับข้อความเป้าหมายแบบสด
+    //      gSettings.targetReps เป็นค่าล่าสุดเสมอไม่ว่าข้อความไหนจะมาถึงทีหลัง
+    //      เพราะระหว่างที่รอบทำงานอยู่มีแต่ onLinkTarget เท่านั้นที่เขียนค่านี้
+    //      จึงรวมเข้า gPending ตรงนี้ และล้างธงทิ้งเสมอไม่ให้ค้างไปกระตุ้นการบันทึกซ้ำที่ผิด
+    //      ค่าเป้าหมายแบบสดจึงเป็นค่าที่รอดไปถึง NVS และไปถึงการยืนยันของจอ
+    if (gTargetDirty) gPending.targetReps = gSettings.targetReps;
+    gTargetDirty = false;
     Serial.println("settings: applying the ones held during the session");
     applySettings(gPending);
     gLink.sendSettings(currentAsLink());  // confirm what actually took effect
