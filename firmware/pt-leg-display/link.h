@@ -11,13 +11,14 @@ struct LinkState {  // สถานะที่คอนโทรลเลอร
   int phase;        // หมายเลขสถานะ (ตรงกับ enum Phase)
   uint32_t elapsed; // เวลาที่ผ่านไป (วินาที)
   uint16_t reps;    // จำนวนครั้ง
+  uint16_t target;  // 0 = ไม่จำกัด — the display shows reps/target when non-zero
   bool wifi;        // สถานะเชื่อมต่อ WiFi
   bool server;      // สถานะเชื่อมต่อเซิร์ฟเวอร์
 };
 
 struct LinkSettings {  // ค่าตั้งค่าที่รับส่งกันสองทางระหว่างจอกับคอนโทรลเลอร์
   String ssid, pass, server, code;
-  uint16_t maxTravel, hold, rest;
+  uint16_t maxTravel, lift, lower, hold, rest, target;
 };
 
 // ส่งครั้งเดียวตอนจบรอบการทำงาน (หยุดปกติหรือขึ้น FAULT) เพื่อให้จอบันทึกลง SD
@@ -40,6 +41,7 @@ class Link {
   void sendState(const LinkState& st);
   void sendDone(const LinkDone& d);
   void sendPing();
+  void sendTarget(uint16_t reps);
   uint32_t lastRxMs() const { return _lastRx; }
 
   // [TH] คอลแบ็กแยกตามฝั่ง: บางตัวใช้ฝั่งคอนโทรลเลอร์ บางตัวใช้ฝั่งจอ
@@ -48,6 +50,13 @@ class Link {
   void (*onState)(const LinkState&) = nullptr;         // display side — จอรับสถานะมาแสดง
   void (*onSettingsReply)(const LinkSettings&) = nullptr; // display side — จอรับค่าตั้งค่าที่คอนโทรลเลอร์ตอบกลับ
   void (*onDone)(const LinkDone&) = nullptr;           // display side — จอรับผลสรุปตอนจบรอบไปบันทึก
+  // display -> controller, applied live. Kept off the `settings` path on purpose:
+  // that one commits NVS and restarts Wi-Fi, so it is deferred until a session
+  // ends, and a rep target the operator is turning right now cannot wait for that.
+  // [TH] จอส่งให้คอนโทรลเลอร์ นำไปใช้ทันที จงใจไม่ใช้เส้นทาง settings
+  //      เพราะเส้นทางนั้นบันทึก NVS และรีสตาร์ต WiFi จึงถูกเลื่อนไปจนกว่ารอบจะจบ
+  //      แต่เป้าหมายจำนวนครั้งที่ผู้ใช้กำลังหมุนอยู่รอแบบนั้นไม่ได้
+  void (*onTarget)(uint16_t) = nullptr;  // controller side
 
  private:
   void dispatch(const String& line);

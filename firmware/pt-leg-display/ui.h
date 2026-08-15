@@ -36,8 +36,13 @@ void uiShowFinish(const char* patientName, uint32_t durationSec, uint16_t reps,
 // [TH] linkUp เป็น false = ไม่ได้รับข้อมูลจากคอนโทรลเลอร์เมื่อเร็วๆ นี้
 //      จอต้องไม่แสดงสถานะเก่าราวกับว่ายังสด
 void uiUpdateMain(bool running, Phase phase, uint32_t elapsedSec, uint16_t reps,
-                  bool wifiUp, bool serverUp, bool linkUp);
+                  uint16_t target, bool wifiUp, bool serverUp, bool linkUp);
 void uiSetDeviceCode(const char* code);  // ตั้งรหัสอุปกรณ์ที่แสดงบนจอ
+// Main-screen target stepper. The controller owns the target: this only reports
+// a change the operator made; the label itself follows the next state message.
+// [TH] ปุ่มปรับจำนวนครั้งเป้าหมายบนหน้าหลัก คอนโทรลเลอร์เป็นเจ้าของค่า ตรงนี้แค่รายงานการเปลี่ยนแปลง
+//      ป้ายตัวเลขจะเปลี่ยนตามข้อความสถานะครั้งถัดไปเท่านั้น
+void uiSetTargetChanged(void (*cb)(uint16_t));
 void uiOpenSettings(const DeviceSettings& current);  // เปิดหน้าตั้งค่าพร้อมค่าปัจจุบัน
 void uiSetSettingsSaved(void (*onSave)(const DeviceSettings&));
 // SAVE stays disabled until the controller has sent its settings at least once,
