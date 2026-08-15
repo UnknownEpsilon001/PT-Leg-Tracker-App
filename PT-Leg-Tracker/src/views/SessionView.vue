@@ -102,20 +102,44 @@ function failOffline() {
   errorMsg.value = 'เครื่องออฟไลน์'
 }
 
-// The controller owns the target: this just sends the change and waits for the
-// next poll to bring back the real value, so the phone stays in sync with the
-// machine even when the target was changed on the machine's own screen.
-// [TH] ค่าเป้าหมายเป็นของเครื่อง ตรงนี้แค่ส่งคำขอเปลี่ยน แล้วรอค่าจริงจากการอ่านสถานะรอบถัดไป
-//      หน้าจอจะได้ตรงกับเครื่องเสมอ รวมถึงตอนที่มีคนเปลี่ยนค่าที่หน้าจอ CYD
+// The controller owns the target: this sends the change, then re-reads /current
+// once to bring the real value back, so the phone stays in sync with the
+// machine even when the target was changed on the machine's own screen. The
+// re-read (not a local echo of `next`) is what lets this run before a session
+// has started, when no poll loop exists yet to pick the change up on its own —
+// without it, a successful edit here would sit unseen until start() sent the
+// stale pre-edit number back to the device, silently undoing the user's tap.
+// [TH] ค่าเป้าหมายเป็นของเครื่อง ตรงนี้ส่งคำขอเปลี่ยนแล้วอ่านสถานะ /current ซ้ำอีกครั้งเพื่อดึงค่าจริงกลับมา
+//      หน้าจอจะได้ตรงกับเครื่องเสมอ รวมถึงตอนที่มีคนเปลี่ยนค่าที่หน้าจอ CYD การอ่านซ้ำ (ไม่ใช่การจำค่า next ไว้เอง)
+//      คือสิ่งที่ทำให้ใช้งานได้ก่อนเริ่มเซสชัน ตอนที่ยังไม่มีลูปอ่านสถานะทำงานอยู่ ถ้าไม่อ่านซ้ำ การกดที่สำเร็จ
+//      จะไม่ถูกแสดงเลย จนกว่า start() จะส่งค่าเก่าก่อนแก้ไขกลับไปทับโดยที่ผู้ใช้ไม่รู้ตัว
+let targetOpSeq = 0 // guards against a slower earlier tap's re-read landing after a later tap's
 async function stepTarget(delta: number) {
   if (target.value === null) return // unknown baseline: wait for a real value first
   const next = Math.min(99, Math.max(0, target.value + delta))
   if (next === target.value) return
+  const opSeq = ++targetOpSeq
   try {
     await setTarget(serverUrl.value, deviceCode.value, next)
   } catch {
     // a failed change is simply not applied; the next poll re-reads the truth
     // [TH] ถ้าเปลี่ยนไม่สำเร็จก็ถือว่าไม่เปลี่ยน การอ่านสถานะรอบถัดไปจะดึงค่าจริงกลับมาเอง
+    return
+  }
+  try {
+    const cur = await getCurrent(serverUrl.value, deviceCode.value)
+    if (disposed) return
+    // A newer tap has since started its own request — let that one's result
+    // win instead of overwriting it with this now-stale read.
+    // [TH] ถ้ามีการกดครั้งใหม่กว่าเริ่มไปแล้ว ให้ผลของครั้งใหม่ชนะ ไม่เอาค่าเก่าที่เพิ่งอ่านมาทับ
+    if (opSeq !== targetOpSeq) return
+    target.value = cur.targetReps
+  } catch {
+    // the re-read failed: keep the last known value rather than clearing it
+    // to null or guessing `next` — the change may or may not have reached
+    // the device, and only a server read is allowed to say which.
+    // [TH] อ่านซ้ำไม่สำเร็จ: คงค่าล่าสุดที่รู้ไว้ ไม่ล้างเป็น null และไม่เดาว่าเป็น next
+    //      เพราะการเปลี่ยนอาจจะถึงเครื่องแล้วหรือยังก็ได้ ต้องให้การอ่านจากเซิร์ฟเวอร์เท่านั้นเป็นคนบอก
   }
 }
 
