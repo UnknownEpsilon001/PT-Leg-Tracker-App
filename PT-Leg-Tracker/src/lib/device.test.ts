@@ -1,7 +1,15 @@
 // ทดสอบไคลเอนต์สั่งงานอุปกรณ์ผ่านเซิร์ฟเวอร์ และการจัดการข้อผิดพลาด (device.ts)
 // Tests for the server-mediated device-control client and its error handling.
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { DeviceError, claimSession, getCurrent, queueStart, queueStop } from './device'
+import {
+  DeviceError,
+  claimSession,
+  getCurrent,
+  queueStart,
+  queueStop,
+  setTarget,
+  setTimings,
+} from './device'
 
 function mockFetchOnce(response: Partial<Response> | Error) {
   const fn = vi.fn()
@@ -71,6 +79,43 @@ describe('queueStart', () => {
   })
 })
 
+describe('setTarget', () => {
+  it('POSTs the target and resolves on 202', async () => {
+    const fn = mockFetchOnce(jsonRes(202, { queued: true }))
+    await expect(setTarget('http://srv/', 'D1', 6)).resolves.toBeUndefined()
+    expect(fn).toHaveBeenCalledWith(
+      'http://srv/api/sessions/target?deviceId=D1',
+      expect.objectContaining({
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ targetReps: 6 }),
+      }),
+    )
+  })
+
+  it('throws no-device when the device code is blank', async () => {
+    await expect(setTarget('http://srv', '  ', 6)).rejects.toMatchObject({ kind: 'no-device' })
+  })
+})
+
+describe('queueStart with a target', () => {
+  it('sends the target in the body', async () => {
+    const fn = mockFetchOnce(jsonRes(202, { queued: true }))
+    await queueStart('http://srv', 'D1', 4)
+    expect(fn).toHaveBeenCalledWith(
+      'http://srv/api/sessions/start?deviceId=D1',
+      expect.objectContaining({ body: JSON.stringify({ targetReps: 4 }) }),
+    )
+  })
+
+  it('sends no body when no target is given', async () => {
+    const fn = mockFetchOnce(jsonRes(202, { queued: true }))
+    await queueStart('http://srv', 'D1')
+    expect(fn).toHaveBeenCalledTimes(1)
+    expect(fn.mock.calls[0]![1]).not.toHaveProperty('body')
+  })
+})
+
 describe('queueStop', () => {
   it('POSTs to /api/sessions/stop and resolves on 202', async () => {
     const fn = mockFetchOnce(jsonRes(202, { queued: true }))
@@ -103,6 +148,7 @@ describe('getCurrent', () => {
       elapsedSec: 42,
       reps: 7,
       deviceOnline: true,
+      targetReps: 0,
     })
   })
   it('parses a starting view with null sessionId', async () => {
@@ -121,11 +167,35 @@ describe('getCurrent', () => {
       elapsedSec: 0,
       reps: 0,
       deviceOnline: false,
+      targetReps: 0,
     })
   })
   it('throws unreachable on malformed state', async () => {
     mockFetchOnce(jsonRes(200, { state: 'weird' }))
     await expect(getCurrent('http://srv', 'D1')).rejects.toMatchObject({ kind: 'unreachable' })
+  })
+})
+
+describe('getCurrent targetReps', () => {
+  it('reads the target', async () => {
+    mockFetchOnce(jsonRes(200, { state: 'idle', targetReps: 8 }))
+    await expect(getCurrent('http://srv', 'D1')).resolves.toMatchObject({ targetReps: 8 })
+  })
+
+  it('defaults to 0 when the server omits it', async () => {
+    mockFetchOnce(jsonRes(200, { state: 'idle' }))
+    await expect(getCurrent('http://srv', 'D1')).resolves.toMatchObject({ targetReps: 0 })
+  })
+})
+
+describe('setTimings', () => {
+  it('POSTs only the fields it was given', async () => {
+    const fn = mockFetchOnce(jsonRes(202, { queued: true }))
+    await expect(setTimings('http://srv', 'D1', { liftSec: 3 })).resolves.toBeUndefined()
+    expect(fn).toHaveBeenCalledWith(
+      'http://srv/api/sessions/timings?deviceId=D1',
+      expect.objectContaining({ body: JSON.stringify({ liftSec: 3 }) }),
+    )
   })
 })
 

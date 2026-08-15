@@ -46,4 +46,5 @@ export interface CurrentSession {
   elapsedSec: number
   reps: number
   deviceOnline: boolean
+  targetReps: number
 }
