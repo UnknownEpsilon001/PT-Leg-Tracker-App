@@ -118,11 +118,24 @@ class DeviceState:
             self._desired_timings = None
         return self._desired_timings
 
-    def heartbeat(self, state: str, elapsed_sec: int, reps: int, target: int = 0) -> None:
+    def heartbeat(
+        self, state: str, elapsed_sec: int, reps: int, target: int | None = None
+    ) -> None:
+        # target is None, not 0, for a heartbeat that omits the field entirely
+        # (an ESP32 still on a pre-target-echo image) — 0 is itself a valid
+        # desired value (unlimited reps), so treating a missing field as 0
+        # would ack that desire away and clobber a live_target the device
+        # never actually reported. Skip both when the field was not sent.
+        # [TH] target เป็น None ไม่ใช่ 0 สำหรับสัญญาณชีพที่ไม่มีฟิลด์นี้เลย
+        #      (ESP32 รุ่นเก่าก่อนมีการยืนยันเป้าหมายกลับ) เพราะ 0 เองก็เป็นค่าเป้าหมายที่ถูกต้อง
+        #      (ทำไม่จำกัดจำนวนครั้ง) ถ้าถือว่าฟิลด์ที่หายไปคือ 0 จะไปยืนยันความต้องการนั้นทิ้งไป
+        #      และทับ live_target ด้วยค่าที่อุปกรณ์ไม่ได้รายงานมาจริง จึงข้ามทั้งสองกรณีถ้าไม่มีฟิลด์นี้ส่งมา
         self._last_heartbeat_at = self._now()
         self.live_state = state
         self.live_elapsed_sec = elapsed_sec
         self.live_reps = reps
+        if target is None:
+            return
         self.live_target = target
         if self._desired_target is not None and target == self._desired_target:
             self._desired_target = None

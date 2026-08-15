@@ -117,6 +117,25 @@ def test_desired_timings_are_handed_out_until_the_ttl_expires():
     assert dev.fetch_desired_timings() is None
 
 
+def test_heartbeat_omitting_target_does_not_ack_a_desired_zero():
+    # A heartbeat that omits `target` entirely (an ESP32 still running a
+    # pre-target-echo image) must not be read as acking a desired target of
+    # exactly 0 -- an app user picking "unlimited" would have that request
+    # silently discarded forever.
+    dev = DeviceState()
+    dev.set_desired_target(0)
+    dev.heartbeat("idle", 0, 0)  # no target= passed, defaults to None
+    assert dev.fetch_desired_target() == 0
+
+
+def test_heartbeat_omitting_target_does_not_clobber_live_target():
+    dev = DeviceState()
+    dev.heartbeat("running", 10, 2, target=5)
+    assert dev.live_target == 5
+    dev.heartbeat("running", 11, 2)  # a later heartbeat that omits target
+    assert dev.live_target == 5
+
+
 def test_device_online_tracking(clock):
     state = DeviceState(now=clock)
     assert state.device_online() is False

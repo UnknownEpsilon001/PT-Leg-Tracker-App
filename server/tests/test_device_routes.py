@@ -85,6 +85,17 @@ def test_heartbeat_accepts_and_clears_a_target(clock):
     assert client.get("/api/sessions/current").json()["targetReps"] == 9
 
 
+def test_heartbeat_without_a_target_field_does_not_ack_a_desired_zero(clock):
+    # A pre-branch ESP32 image posts a heartbeat with no `target` field at
+    # all. That must not be read as the device confirming a desired target of
+    # exactly 0 ("unlimited") -- the app's request would otherwise be
+    # silently dropped and never retried.
+    client = make_client(clock)
+    client.post("/api/sessions/target", json={"targetReps": 0})
+    client.post("/api/device/heartbeat", json={"state": "idle"})
+    assert client.get("/api/device/command").json()["targetReps"] == 0
+
+
 def test_heartbeat_tofu_creates_device(clock):
     client = make_client(clock)
     client.post(

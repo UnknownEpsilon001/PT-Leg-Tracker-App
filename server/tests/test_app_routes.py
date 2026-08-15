@@ -92,6 +92,17 @@ def test_post_target_returns_202_and_queues_it(clock):
     assert client.get("/api/device/command").json()["targetReps"] == 6
 
 
+def test_post_target_is_visible_in_current_without_a_heartbeat(clock):
+    # This is the seam test_heartbeat_accepts_and_clears_a_target (in
+    # test_device_routes.py) steps around by heartbeating the echo before
+    # checking /current -- the app's re-read after POST /target runs long
+    # before any heartbeat can land, so /current has to reflect the edit on
+    # its own.
+    client = make_client(clock)
+    client.post("/api/sessions/target", json={"targetReps": 11})
+    assert client.get("/api/sessions/current").json()["targetReps"] == 11
+
+
 def test_post_target_rejects_out_of_range(clock):
     client = make_client(clock)
     assert client.post("/api/sessions/target", json={"targetReps": 100}).status_code == 422

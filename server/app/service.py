@@ -105,7 +105,7 @@ class SessionService:
         state: str,
         elapsed_sec: int,
         reps: int,
-        target: int = 0,
+        target: int | None = None,
         device_id: str = DEFAULT_DEVICE_ID,
     ) -> None:
         dev = self._device(device_id)
@@ -153,6 +153,17 @@ class SessionService:
         dev = self._device(device_id)
         online = dev.device_online()
         open_session = db.get_open_session(device_id)
+        # An edit the device has not yet echoed back over a heartbeat must
+        # still show up here immediately: the app's re-read after setTarget()
+        # relies on it, and live_target alone is the pre-edit number until the
+        # device's next heartbeat. Fall back to live_target only once nothing
+        # is outstanding.
+        # [TH] การแก้ไขที่อุปกรณ์ยังไม่ได้ส่งสัญญาณชีพยืนยันกลับมาต้องยังปรากฏตรงนี้ทันที
+        #      การอ่านซ้ำของแอปหลังเรียก setTarget() พึ่งพาค่านี้อยู่ และ live_target อย่างเดียว
+        #      จะเป็นตัวเลขก่อนแก้ไขจนกว่าจะถึงสัญญาณชีพครั้งถัดไปของอุปกรณ์
+        #      ใช้ live_target ก็ต่อเมื่อไม่มีค่าค้างอยู่เท่านั้น
+        desired_target = dev.fetch_desired_target()
+        target_reps = desired_target if desired_target is not None else dev.live_target
         if open_session is not None:
             return {
                 "sessionId": open_session["id"],
@@ -160,7 +171,7 @@ class SessionService:
                 "elapsedSec": dev.live_elapsed_sec,
                 "reps": dev.live_reps,
                 "deviceOnline": online,
-                "targetReps": dev.live_target,
+                "targetReps": target_reps,
             }
         state = (
             "starting"
@@ -173,7 +184,7 @@ class SessionService:
             "elapsedSec": 0,
             "reps": 0,
             "deviceOnline": online,
-            "targetReps": dev.live_target,
+            "targetReps": target_reps,
         }
 
     def claim(self, session_id: str, patient_code: str) -> bool:
