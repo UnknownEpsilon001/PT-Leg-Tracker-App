@@ -26,10 +26,25 @@ class SessionSM {
   // first: with no limit switches there is no way to know where it is, and
   // lowering a leg that is already down costs one stroke against the bottom stop
   // while lifting one that is already up drives it into the top.
+  //
+  // The same is true from Idle right after boot: a reboot does not put the
+  // machine in Fault, it puts it in Idle, and a mains blip or brown-out that
+  // lands mid-Lift leaves the leg raised with the state machine none the
+  // wiser. legPositionUnknown is what catches that case — it starts true and
+  // is cleared only once a Lower stroke has actually run to completion, so
+  // the first START after any boot takes the Fault branch too, however the
+  // machine got to Idle.
   // [TH] จากสถานะว่างหรือผิดพลาดไปสถานะยกขา ถ้ามาจากสถานะผิดพลาดจะล้างสถานะและลดขาลงก่อน
   //      เพราะไม่มีลิมิตสวิตช์แล้วจึงไม่รู้ว่าขาอยู่ตรงไหน
   //      การลดขาที่อยู่ล่างสุดอยู่แล้วเสียแค่การเคลื่อนที่หนึ่งครั้งชนกลไกด้านล่าง
   //      แต่การยกขาที่อยู่บนสุดอยู่แล้วคือการดันเข้าหากลไกด้านบน
+  //
+  //      เรื่องเดียวกันนี้จริงสำหรับสถานะว่างหลังเปิดเครื่องใหม่ด้วย: การรีเซ็ตเครื่องไม่ได้พาไปสถานะ
+  //      ผิดพลาด แต่พาไปสถานะว่าง และไฟตกหรือไฟกระตุกกลางจังหวะยกขาจะทิ้งขาไว้ข้างบน
+  //      โดยที่เครื่องสถานะไม่รู้ตัว legPositionUnknown คือสิ่งที่จับกรณีนี้ไว้
+  //      เริ่มต้นเป็นจริงและจะถูกล้างก็ต่อเมื่อการเคลื่อนที่ลงทำงานจบครบจริงเท่านั้น
+  //      ปุ่มเริ่มครั้งแรกหลังเปิดเครื่องทุกครั้งจึงเข้าเส้นทางเดียวกับสถานะผิดพลาดเสมอ
+  //      ไม่ว่าเครื่องจะมาถึงสถานะว่างด้วยวิธีใด
   void start(uint32_t nowMs);
 
   // Running -> SafeLower -> Idle, reporting the session.
@@ -44,6 +59,22 @@ class SessionSM {
 
   void forceFault(uint32_t nowMs);   // external safety trip (actuator cap)
                                      // [TH] บังคับเข้าสถานะผิดพลาดจากภายนอก (เพดานเวลารีเลย์)
+
+  // Drop a start queued behind a recovery lowering, without touching the
+  // lowering itself. For a genuine actuator-cap trip that lands mid-SafeLower
+  // and is deliberately swallowed there (the descent must not be aborted the
+  // same iteration it was entered) — but a trip is a trip, and a start still
+  // queued behind that descent must not fire the instant the timer expires:
+  // the cap may have been reached because the descent itself is in trouble,
+  // and lifting straight into that is the same hazard forceFault exists to
+  // stop for every other trip.
+  // [TH] ยกเลิกคำสั่งเริ่มที่เข้าคิวรออยู่หลังการลดขากู้สถานการณ์ โดยไม่แตะการลดขาเอง
+  //      ใช้กับการตัดเพดานเวลาจริงที่เกิดกลางสถานะลดขาเพื่อหยุดและถูกกลืนไปโดยตั้งใจตรงนั้น
+  //      (การลดขาต้องไม่ถูกยกเลิกในลูปเดียวกับที่เพิ่งเข้าสถานะนี้)
+  //      แต่การตัดก็คือการตัด คำสั่งเริ่มที่ยังเข้าคิวรออยู่หลังการลดขานั้นต้องไม่ทำงานทันทีที่หมดเวลา
+  //      เพราะเพดานอาจถูกชนเนื่องจากการลดขาเองกำลังมีปัญหา การยกขึ้นทันทีจึงเป็นอันตรายแบบเดียว
+  //      กับที่ forceFault มีไว้ป้องกันสำหรับการตัดอื่นทุกครั้ง
+  void cancelQueuedStart() { startAfterRecovery = false; }
 
   // Change the target mid-session as well as at rest, because both UIs can edit
   // it while the machine runs. Lowering it below the reps already done ends the
@@ -104,4 +135,23 @@ class SessionSM {
   bool startAfterRecovery = false;
   bool strokeRenewEdge = false;
   bool startedEdge = false, stoppedEdge = false;
+  // True until a Lower stroke has run to completion at least once. Set at
+  // construction (and stays true across a reboot, since this is not
+  // persisted) so the first start of any boot is treated like a start out of
+  // Fault: lower first, because a power cut mid-Lift boots to Idle, not
+  // Fault, and leaves the real position unknown. Cleared unconditionally the
+  // moment a Lower or SafeLower stroke reaches its full duration — see
+  // tick() — which is the one signal, timed travel or not, that the leg is
+  // actually at the bottom. Never set back to true except by this class's own
+  // initializer, so it cannot re-arm itself into a lower-forever loop.
+  // [TH] เป็นจริงจนกว่าการเคลื่อนที่ลงจะทำงานจบครบอย่างน้อยหนึ่งครั้ง ตั้งไว้ตั้งแต่สร้างอ็อบเจกต์
+  //      (และเป็นจริงข้ามการเปิดเครื่องใหม่เสมอ เพราะค่านี้ไม่ถูกบันทึกลง NVS)
+  //      เพื่อให้การเริ่มครั้งแรกของการเปิดเครื่องทุกครั้งถูกปฏิบัติเหมือนการเริ่มจากสถานะผิดพลาด
+  //      คือลดขาก่อนเสมอ เพราะไฟตกกลางจังหวะยกขาจะรีเซ็ตเครื่องไปสถานะว่าง ไม่ใช่สถานะผิดพลาด
+  //      และทิ้งตำแหน่งจริงไว้โดยไม่มีใครรู้ ถูกล้างโดยไม่มีเงื่อนไขทันทีที่การเคลื่อนที่ลง
+  //      (ไม่ว่าจะลงปกติหรือลดขาเพื่อหยุด) ทำงานครบเต็มเวลา ดู tick() ซึ่งเป็นสัญญาณเดียวที่บอกว่า
+  //      ขาอยู่ล่างสุดจริง ไม่ว่าจะเป็นการเดินทางแบบจับเวลาหรือไม่ก็ตาม
+  //      ไม่มีที่ใดตั้งค่านี้กลับเป็นจริงอีกนอกจากค่าเริ่มต้นของคลาสนี้เอง จึงไม่มีทางย้อนตัวเองกลับเข้า
+  //      วงวนลดขาไม่รู้จบ
+  bool legPositionUnknown = true;
 };

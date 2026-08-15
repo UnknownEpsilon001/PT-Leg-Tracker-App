@@ -44,7 +44,14 @@ void SessionSM::start(uint32_t nowMs) {
   // [TH] ถ้ามาจากสถานะผิดพลาดที่ค้างอยู่ ให้ลดขาก่อนแล้วค่อยยก
   //      ความผิดพลาดตัดรีเลย์ตรงจุดไหนก็ได้ที่ขาอยู่ และเฟิร์มแวร์นี้ไม่มีทางรู้ว่าตรงไหน
   //      จึงให้การลดขาทำงานก่อน แล้วเข้าคิวเริ่มรอบไว้ข้างหลัง
-  if (ph == Phase::Fault) {
+  // legPositionUnknown covers the reboot case the Fault branch does not: a
+  // power cut mid-Lift boots straight to Idle, not Fault, and the state
+  // machine has no memory of where the leg was left. See session.h for why
+  // this flag exists and when it clears.
+  // [TH] legPositionUnknown ครอบคลุมกรณีเปิดเครื่องใหม่ที่สาขาผิดพลาดครอบคลุมไม่ถึง
+  //      ไฟตกกลางจังหวะยกขาจะบูตตรงไปสถานะว่าง ไม่ใช่ผิดพลาด และเครื่องสถานะไม่มีความจำว่าขาถูกทิ้งไว้ตรงไหน
+  //      ดู session.h ว่าทำไมตัวแปรนี้ถึงมีอยู่และล้างเมื่อไหร่
+  if (ph == Phase::Fault || legPositionUnknown) {
     recovering = true;
     startAfterRecovery = true;
     enter(Phase::SafeLower, nowMs);
@@ -136,7 +143,17 @@ void SessionSM::tick(uint32_t nowMs) {
       if (dt >= cfg.holdMs) enter(Phase::Lower, nowMs);
       return;
     case Phase::Lower:
-      if (dt >= cfg.lowerMs) enter(Phase::Rest, nowMs);
+      // A Lower stroke that ran its full duration is the one proof, under
+      // timed travel, that the leg reached the bottom — clear the unknown
+      // flag before Rest is entered, not after, so a fault raised the moment
+      // Rest begins still finds the position already known.
+      // [TH] การเคลื่อนที่ลงที่ทำงานจบครบเวลาคือหลักฐานเดียวภายใต้การเดินทางแบบจับเวลาว่าขาลงถึงพื้นแล้ว
+      //      ล้างสัญญาณ "ไม่ทราบตำแหน่ง" ก่อนเข้าสถานะพัก ไม่ใช่หลังจากนั้น
+      //      เพื่อให้ความผิดพลาดที่เกิดขึ้นทันทีที่เข้าสถานะพักยังเห็นว่าตำแหน่งเป็นที่ทราบแล้ว
+      if (dt >= cfg.lowerMs) {
+        legPositionUnknown = false;
+        enter(Phase::Rest, nowMs);
+      }
       return;
     case Phase::Rest:
       if (dt < cfg.restMs) return;
@@ -158,6 +175,16 @@ void SessionSM::tick(uint32_t nowMs) {
       return;
     case Phase::SafeLower:
       if (dt < cfg.lowerMs) return;
+      // Same signal as the Lower case above, and set unconditionally before
+      // the branch below, so every exit out of SafeLower — recovering into a
+      // queued start, recovering into Idle, or a clean stop — leaves the
+      // position known. Nothing downstream ever sets this back to true, so
+      // clearing it here cannot strand the machine lowering forever.
+      // [TH] สัญญาณเดียวกับกรณีลดลงด้านบน ตั้งค่าโดยไม่มีเงื่อนไขก่อนแตกสาขาด้านล่าง
+      //      เพื่อให้ทุกทางออกจากสถานะลดขาเพื่อหยุด ไม่ว่าจะกู้สถานการณ์ไปยังคำสั่งเริ่มที่ค้างไว้
+      //      กู้สถานการณ์ไปสถานะว่าง หรือหยุดตามปกติ ตำแหน่งเป็นที่ทราบแล้วเสมอ
+      //      ไม่มีจุดใดตั้งค่านี้กลับเป็นจริงอีก การล้างตรงนี้จึงไม่ทำให้เครื่องค้างวนลดขาไม่รู้จบ
+      legPositionUnknown = false;
       if (recovering) {
         // Lowering after a fault, or ahead of a start that was pressed in one.
         // Either way the session that faulted was already reported, so this ends
