@@ -1027,7 +1027,20 @@ void uiOpenSettings(const DeviceSettings& cur) {
   lv_spinbox_set_value(spinHold, cur.holdSec);
   lv_spinbox_set_value(spinLower, cur.lowerSec);
   lv_spinbox_set_value(spinRest, cur.restSec);
-  lv_spinbox_set_value(spinTarget, cur.targetReps);
+  // Seeded from uiTargetShown, NOT cur.targetReps. cur is gLast, which only
+  // moves on a "settings" reply (boot/hello) — it does not see a live
+  // {"t":"target"} round trip, so it can be behind by however long ago the
+  // operator last dialed the target on the main screen. uiTargetShown is
+  // updated unconditionally from every state message (see uiUpdateMain), so
+  // it is never behind the controller's live value. Using gLast here would
+  // silently reopen the exact bug the live-sync binding above exists to
+  // close: SAVE would carry the stale number.
+  // [TH] ตั้งต้นจาก uiTargetShown ไม่ใช่ cur.targetReps เพราะ cur คือ gLast ซึ่งขยับเฉพาะตอนได้รับ
+  //      คำตอบ "settings" (ตอนบูต/hello) เท่านั้น ไม่เห็นการเปลี่ยนค่าเป้าหมายสดแบบ {"t":"target"}
+  //      จึงอาจค้างอยู่นานเท่าที่ผู้ใช้เพิ่งหมุนค่าจากหน้าหลักมา ส่วน uiTargetShown อัปเดตจากทุกข้อความสถานะ
+  //      โดยไม่มีเงื่อนไข (ดู uiUpdateMain) จึงไม่มีทางตามหลังค่าจริงของคอนโทรลเลอร์
+  //      ถ้าใช้ gLast ตรงนี้จะเปิดช่องให้บั๊กเดิมที่การผูกค่าสดด้านบนตั้งใจปิดกลับมาอีก คือ SAVE จะส่งค่าที่ค้างไป
+  lv_spinbox_set_value(spinTarget, uiTargetShown);
 
   applySdStatus();  // the label exists only now, on the first open — ป้ายเพิ่งมีตัวตนตอนนี้
   thaiKbSetScript(kb, false);  // same reason as the add form — ด้วยเหตุผลเดียวกับฟอร์มลงทะเบียน
