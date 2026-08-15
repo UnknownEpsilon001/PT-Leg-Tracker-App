@@ -6,7 +6,7 @@ import { useRouter } from 'vue-router'
 import AppIcon from '@/components/AppIcon.vue'
 import PainScale from '@/components/PainScale.vue'
 import ConfettiBurst from '@/components/ConfettiBurst.vue'
-import { DeviceError, claimSession, getCurrent, queueStart, queueStop } from '@/lib/device'
+import { DeviceError, claimSession, getCurrent, queueStart, queueStop, setTarget } from '@/lib/device'
 import { usePainLogStore } from '@/stores/painlog'
 import { useProfileStore } from '@/stores/profile'
 import { useSettingsStore } from '@/stores/settings'
@@ -22,6 +22,7 @@ const painAfter = ref<number | null>(null)
 const sessionId = ref<string | null>(null)
 const elapsedSec = ref<number | null>(null)
 const reps = ref(0)
+const target = ref(0)
 const attachAvailable = ref(false)
 const connLost = ref(false)
 const errorMsg = ref('')
@@ -61,6 +62,9 @@ async function poll() {
     const cur = await getCurrent(serverUrl.value, deviceCode.value)
     if (disposed) return
     connLost.value = false
+    // The target is the machine's, not ours — every successful poll re-reads it.
+    // [TH] เป้าหมายเป็นของเครื่อง ไม่ใช่ของแอป การอ่านสถานะทุกครั้งที่สำเร็จจะอัปเดตค่าตามจริงเสมอ
+    target.value = cur.targetReps
     if (cur.state === 'running') {
       phase.value = 'running'
       sessionId.value = cur.sessionId
@@ -87,6 +91,22 @@ function failOffline() {
   errorMsg.value = 'เครื่องออฟไลน์'
 }
 
+// The controller owns the target: this just sends the change and waits for the
+// next poll to bring back the real value, so the phone stays in sync with the
+// machine even when the target was changed on the machine's own screen.
+// [TH] ค่าเป้าหมายเป็นของเครื่อง ตรงนี้แค่ส่งคำขอเปลี่ยน แล้วรอค่าจริงจากการอ่านสถานะรอบถัดไป
+//      หน้าจอจะได้ตรงกับเครื่องเสมอ รวมถึงตอนที่มีคนเปลี่ยนค่าที่หน้าจอ CYD
+async function stepTarget(delta: number) {
+  const next = Math.min(99, Math.max(0, target.value + delta))
+  if (next === target.value) return
+  try {
+    await setTarget(serverUrl.value, deviceCode.value, next)
+  } catch {
+    // a failed change is simply not applied; the next poll re-reads the truth
+    // [TH] ถ้าเปลี่ยนไม่สำเร็จก็ถือว่าไม่เปลี่ยน การอ่านสถานะรอบถัดไปจะดึงค่าจริงกลับมาเอง
+  }
+}
+
 async function start() {
   errorMsg.value = ''
   if (!serverUrl.value) {
@@ -100,7 +120,7 @@ async function start() {
   phase.value = 'starting'
   attachAvailable.value = false
   try {
-    await queueStart(serverUrl.value, deviceCode.value)
+    await queueStart(serverUrl.value, deviceCode.value, target.value)
     if (disposed) return
     startPolling()
   } catch (e) {
@@ -207,7 +227,27 @@ onUnmounted(() => {
         <Transition name="pop" mode="out-in">
           <span :key="reps" class="reps-num">{{ reps }}</span>
         </Transition>
+        <span v-if="target > 0"> / {{ target }}</span>
       </p>
+      <div class="target-stepper">
+        <button
+          class="step"
+          aria-label="ลดจำนวนเป้าหมาย"
+          :disabled="target === 0"
+          @click="stepTarget(-1)"
+        >
+          −
+        </button>
+        <span class="target-label">เป้าหมาย {{ target > 0 ? `${target} ครั้ง` : 'ไม่จำกัด' }}</span>
+        <button
+          class="step"
+          aria-label="เพิ่มจำนวนเป้าหมาย"
+          :disabled="target === 99"
+          @click="stepTarget(1)"
+        >
+          +
+        </button>
+      </div>
       <p class="hint">
         {{ connLost ? 'กำลังเชื่อมต่อ…' : 'เครื่องกำลังทำงาน บริหารเข่าตามจังหวะของอุปกรณ์' }}
       </p>
@@ -305,6 +345,26 @@ onUnmounted(() => {
   text-align: center;
   font-variant-numeric: tabular-nums;
   margin-bottom: 0.5rem;
+}
+
+.target-stepper {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.target-label {
+  min-width: 8rem;
+  text-align: center;
+  font-weight: 600;
+}
+
+.step {
+  min-width: 3rem;
+  font-size: 1.3rem;
+  padding: 0.5rem;
 }
 
 .hint {
