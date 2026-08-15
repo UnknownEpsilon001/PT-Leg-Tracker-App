@@ -56,9 +56,13 @@ def set_timings(body: TimingsBody, request: Request, deviceId: str = "default"):
     # maxTravelSec it actually holds, which is the only place that knows it.
     # [TH] ส่งเฉพาะฟิลด์ที่ถูกระบุมา ค่ายก/ลงจำกัดที่ 20 ตรงนี้เพราะเป็นเพดานของ maxTravelSec เอง
     #      คอนโทรลเลอร์จะจำกัดซ้ำด้วยค่า maxTravelSec ที่ถืออยู่จริง ซึ่งเป็นที่เดียวที่รู้ค่านั้น
-    request.app.state.service.set_timings(
-        body.model_dump(exclude_none=True), deviceId
-    )
+    # An empty body (all fields omitted) would otherwise still queue a 30 s
+    # TTL window on the device for a change that touches nothing.
+    # [TH] เนื้อหาว่างเปล่า (ไม่ส่งฟิลด์ไหนมาเลย) ถ้าไม่กันไว้จะยังไปเปิดหน้าต่าง TTL 30 วินาที
+    #      บนอุปกรณ์สำหรับการเปลี่ยนแปลงที่ไม่แตะอะไรเลย
+    timings = body.model_dump(exclude_none=True)
+    if timings:
+        request.app.state.service.set_timings(timings, deviceId)
     return {"queued": True}
 
 
