@@ -14,8 +14,8 @@ def test_command_endpoint_consumes(clock):
     client = make_client(clock)
     service = client.app.state.service
     service.queue_start()
-    assert client.get("/api/device/command").json() == {"command": "start"}
-    assert client.get("/api/device/command").json() == {"command": None}
+    assert client.get("/api/device/command").json()["command"] == "start"
+    assert client.get("/api/device/command").json()["command"] is None
 
 
 def test_event_started_returns_session_id(clock):
@@ -62,12 +62,27 @@ def test_cors_headers_present(clock):
 def test_command_endpoint_scoped_by_device_id(clock):
     client = make_client(clock)
     client.app.state.service.queue_start("KNEE-01")
-    assert client.get("/api/device/command", params={"deviceId": "KNEE-02"}).json() == {
-        "command": None
-    }
-    assert client.get("/api/device/command", params={"deviceId": "KNEE-01"}).json() == {
-        "command": "start"
-    }
+    assert (
+        client.get("/api/device/command", params={"deviceId": "KNEE-02"}).json()["command"]
+        is None
+    )
+    assert (
+        client.get("/api/device/command", params={"deviceId": "KNEE-01"}).json()["command"]
+        == "start"
+    )
+
+
+def test_command_reports_no_target_when_none_is_wanted(clock):
+    client = make_client(clock)
+    assert client.get("/api/device/command").json()["targetReps"] is None
+
+
+def test_heartbeat_accepts_and_clears_a_target(clock):
+    client = make_client(clock)
+    client.post("/api/sessions/target", json={"targetReps": 9})
+    client.post("/api/device/heartbeat", json={"state": "idle", "target": 9})
+    assert client.get("/api/device/command").json()["targetReps"] is None
+    assert client.get("/api/sessions/current").json()["targetReps"] == 9
 
 
 def test_heartbeat_tofu_creates_device(clock):

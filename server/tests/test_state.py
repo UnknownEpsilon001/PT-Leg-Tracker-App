@@ -82,6 +82,41 @@ def test_clear_start_in_flight_resets_flag(clock):
     assert state.start_in_flight() is False
 
 
+def test_desired_target_is_none_until_set():
+    dev = DeviceState()
+    assert dev.fetch_desired_target() is None
+
+
+def test_desired_target_is_handed_out_until_the_device_echoes_it():
+    dev = DeviceState()
+    dev.set_desired_target(7)
+    # handed out on every poll: one lost response must not lose the target
+    # [TH] ส่งให้ทุกครั้งที่ถาม เพราะถ้าคำตอบหายไปครั้งเดียวต้องไม่ทำให้เป้าหมายหายตาม
+    assert dev.fetch_desired_target() == 7
+    assert dev.fetch_desired_target() == 7
+    dev.heartbeat("idle", 0, 0, target=7)
+    assert dev.fetch_desired_target() is None
+    assert dev.live_target == 7
+
+
+def test_a_heartbeat_with_a_different_target_does_not_clear_the_desire():
+    dev = DeviceState()
+    dev.set_desired_target(7)
+    dev.heartbeat("idle", 0, 0, target=3)
+    assert dev.fetch_desired_target() == 7
+
+
+def test_desired_timings_are_handed_out_until_the_ttl_expires():
+    clock = [1000.0]
+    dev = DeviceState(now=lambda: clock[0])
+    dev.set_desired_timings({"liftSec": 3, "lowerSec": 3, "holdSec": 8, "restSec": 8})
+    assert dev.fetch_desired_timings()["liftSec"] == 3
+    clock[0] += 10
+    assert dev.fetch_desired_timings() is not None
+    clock[0] += 30
+    assert dev.fetch_desired_timings() is None
+
+
 def test_device_online_tracking(clock):
     state = DeviceState(now=clock)
     assert state.device_online() is False

@@ -21,6 +21,10 @@ class DeviceState:
         self.live_state = "idle"
         self.live_elapsed_sec = 0
         self.live_reps = 0
+        self.live_target = 0
+        self._desired_target: int | None = None
+        self._desired_timings: dict | None = None
+        self._timings_queued_at = 0.0
 
     def queue_command(self, command: str) -> None:
         self._pending_command = command
@@ -72,11 +76,56 @@ class DeviceState:
             and self._now() - self._start_fetched_at <= COMMAND_TTL_SEC
         )
 
-    def heartbeat(self, state: str, elapsed_sec: int, reps: int) -> None:
+    def set_desired_target(self, reps: int) -> None:
+        self._desired_target = reps
+
+    def fetch_desired_target(self) -> int | None:
+        """The target the device should adopt, or None when it already has it.
+
+        Not consume-on-read, unlike commands: a command that is applied twice
+        starts two sessions, while a target that is applied twice is idempotent.
+        So it is repeated until the device's own heartbeat reports that value back,
+        which survives a dropped response.
+
+        [TH] ไม่ใช่อ่านแล้วล้างแบบคำสั่ง เพราะคำสั่งที่ถูกใช้ซ้ำจะเริ่มสองรอบ
+             แต่เป้าหมายที่ถูกใช้ซ้ำให้ผลเหมือนเดิม
+             จึงส่งซ้ำไปจนกว่าสัญญาณชีพของอุปกรณ์จะรายงานค่านั้นกลับมา ซึ่งทนต่อการที่คำตอบหายได้
+        """
+        return self._desired_target
+
+    def set_desired_timings(self, timings: dict) -> None:
+        self._desired_timings = timings
+        self._timings_queued_at = self._now()
+
+    def fetch_desired_timings(self) -> dict | None:
+        """Cycle timings the device should adopt, until COMMAND_TTL_SEC passes.
+
+        Unlike the target, nothing echoes these back — the heartbeat has no room
+        for four more fields and there is nothing useful to do with a mismatch —
+        so they expire on a clock instead of on an acknowledgement. Repeating
+        them forever would re-apply a stale edit to a controller that had since
+        been reconfigured at its own screen.
+
+        [TH] ต่างจากเป้าหมายจำนวนครั้ง ตรงที่ไม่มีอะไรส่งค่าเหล่านี้กลับมายืนยัน
+             สัญญาณชีพไม่มีที่ให้อีกสี่ฟิลด์ และถึงรู้ว่าไม่ตรงกันก็ทำอะไรไม่ได้
+             จึงให้หมดอายุตามเวลาแทนการรอการยืนยัน
+             ถ้าส่งซ้ำไปเรื่อยๆ ค่าที่แก้ไว้นานแล้วจะไปทับเครื่องที่ถูกตั้งค่าใหม่จากหน้าจอของตัวเองไปแล้ว
+        """
+        if (
+            self._desired_timings is not None
+            and self._now() - self._timings_queued_at > COMMAND_TTL_SEC
+        ):
+            self._desired_timings = None
+        return self._desired_timings
+
+    def heartbeat(self, state: str, elapsed_sec: int, reps: int, target: int = 0) -> None:
         self._last_heartbeat_at = self._now()
         self.live_state = state
         self.live_elapsed_sec = elapsed_sec
         self.live_reps = reps
+        self.live_target = target
+        if self._desired_target is not None and target == self._desired_target:
+            self._desired_target = None
 
     def device_online(self) -> bool:
         # [TH] อุปกรณ์ออนไลน์ = เพิ่งได้ยินสัญญาณชีพภายในเวลาที่กำหนด

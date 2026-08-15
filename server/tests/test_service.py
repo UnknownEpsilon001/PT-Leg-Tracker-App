@@ -154,6 +154,7 @@ def test_current_idle(clock):
         "elapsedSec": 0,
         "reps": 0,
         "deviceOnline": False,
+        "targetReps": 0,
     }
 
 
@@ -241,6 +242,26 @@ def test_two_devices_have_isolated_queues_and_sessions(clock):
     svc.handle_event("stopped", 40, 2, "KNEE-01")
     assert svc.current("KNEE-01")["state"] == "idle"
     assert svc.current("KNEE-02")["sessionId"] is None
+
+
+def test_queue_start_with_a_target_sets_the_desired_target(clock):
+    svc = make_service(clock)
+    svc.queue_start(target_reps=5)
+    assert svc.fetch_target() == 5
+    assert svc.fetch_command() == "start"
+
+
+def test_set_target_works_while_a_session_runs(clock):
+    svc = make_service(clock)
+    svc.handle_event("started", 0, 0)
+    svc.set_target(12)
+    assert svc.fetch_target() == 12
+
+
+def test_current_reports_the_live_target(clock):
+    svc = make_service(clock)
+    svc.handle_heartbeat("idle", 0, 0, target=8)
+    assert svc.current()["targetReps"] == 8
 
 
 def test_default_device_backcompat(clock):
