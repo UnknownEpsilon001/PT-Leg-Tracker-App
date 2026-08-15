@@ -1,6 +1,6 @@
 // สเก็ตช์หลักของบอร์ดคอนโทรลเลอร์ (ESP32) — สมองของเครื่องกายภาพบำบัดขา
-// รวมทุกโมดูล: อ่านสวิตช์ -> เดินเครื่องสถานะ -> สั่งรีเลย์ -> คุยกับเซิร์ฟเวอร์และจอ
-// Controller main sketch: switches -> state machine -> relays -> server + display.
+// รวมทุกโมดูล: อ่านปุ่ม -> เดินเครื่องสถานะ -> สั่งรีเลย์ -> คุยกับเซิร์ฟเวอร์และจอ
+// Controller main sketch: buttons -> state machine -> relays -> server + display.
 //
 // Bench aid: with no display wired the board says nothing, so panel-button
 // polarity cannot be checked. Enable per-build to print button edges, raw pin
@@ -178,15 +178,23 @@ static void onLinkSettings(const LinkSettings& s) {
   gLink.sendSettings(currentAsLink());
 }
 
-static LinkSettings currentAsLink() {
+// Shared by currentAsLink() (the settings device is actually running on) and
+// the timings change-guard below (which also needs to render gPending, the
+// edit held during a session, in the same shape to compare against it).
+// [TH] ใช้ร่วมกันระหว่าง currentAsLink() (ค่าตั้งค่าที่เครื่องใช้งานอยู่จริง)
+//      กับตัวป้องกันการใช้ค่าเวลาซ้ำด้านล่าง ซึ่งต้องแปลง gPending
+//      (ค่าที่แก้ไขค้างไว้ระหว่างรอบทำงาน) ให้อยู่ในรูปแบบเดียวกันเพื่อเทียบกัน
+static LinkSettings toLink(const DeviceSettings& d) {
   LinkSettings s;
-  s.ssid = gSettings.wifiSsid; s.pass = gSettings.wifiPass;
-  s.server = gSettings.serverUrl; s.code = gSettings.deviceCode;
-  s.maxTravel = gSettings.maxTravelSec; s.hold = gSettings.holdSec;
-  s.rest = gSettings.restSec;
-  s.lift = gSettings.liftSec; s.lower = gSettings.lowerSec; s.target = gSettings.targetReps;
+  s.ssid = d.wifiSsid; s.pass = d.wifiPass;
+  s.server = d.serverUrl; s.code = d.deviceCode;
+  s.maxTravel = d.maxTravelSec; s.hold = d.holdSec;
+  s.rest = d.restSec;
+  s.lift = d.liftSec; s.lower = d.lowerSec; s.target = d.targetReps;
   return s;
 }
+
+static LinkSettings currentAsLink() { return toLink(gSettings); }
 
 // [TH] เมื่อจอทักทาย (hello) ให้ส่งค่าตั้งค่าปัจจุบันกลับไป
 static void onLinkHello() { gLink.sendSettings(currentAsLink()); }
@@ -350,7 +358,17 @@ void loop() {
   //      การลดขาครั้งนั้นมีเพดานเวลาของตัวเองคุมอยู่แล้ว
   if (actuatorTakeCapTrip()) {
     Serial.println("actuator: energize cap opened the relays");
+    // Swallowed here does not mean ignored: a trip that lands mid-SafeLower is
+    // real even though forceFault() is skipped for it (see the comment above),
+    // and a start queued behind that descent must not lift the instant the
+    // descent's timer runs out — the cap may have tripped because the descent
+    // itself is in trouble.
+    // [TH] การกลืนตรงนี้ไม่ได้แปลว่าเพิกเฉย การตัดที่เกิดกลางสถานะลดขาเพื่อหยุดเป็นเรื่องจริง
+    //      แม้จะข้าม forceFault() ไปสำหรับกรณีนี้ (ดูคอมเมนต์ด้านบน)
+    //      คำสั่งเริ่มที่เข้าคิวรออยู่หลังการลดขานั้นต้องไม่ยกขึ้นทันทีที่ตัวจับเวลาของการลดขาหมดเวลา
+    //      เพราะเพดานอาจถูกชนเนื่องจากการลดขาเองกำลังมีปัญหา
     if (gSession.phase() != Phase::SafeLower) gSession.forceFault(now);
+    else gSession.cancelQueuedStart();
   }
 
   // panel buttons: START begins a session, STOP ends one — and when the machine is
@@ -463,13 +481,40 @@ void loop() {
     //      และความยาวจังหวะที่เปลี่ยนกลางจังหวะก็แย่กว่าการรอ
     if (wantTimings.liftSec || wantTimings.lowerSec || wantTimings.holdSec ||
         wantTimings.restSec || wantTimings.maxTravelSec) {
-      LinkSettings s = currentAsLink();
+      // The server hands out the same held timings on every poll until the
+      // device echoes them back or the TTL expires (see fetch_desired_timings
+      // in server/app/state.py) — and nothing echoes timings, so without a
+      // guard this ran on every one of the ~30 polls in that window: 30x
+      // applySettings() (NVS write + WiFi restart) while idle, or 30x
+      // re-arming gPendingSettings and re-echoing the held values to the CYD
+      // mid-session. Mirrors the target guard just below.
+      //
+      // Compared against gPending rather than gSettings whenever an edit is
+      // already held (mid-session): gSettings does not move until the
+      // session ends, so comparing against it would keep reporting a
+      // difference — and re-applying — for as long as the session runs, the
+      // exact mid-session repeat this guard exists to stop.
+      // [TH] เซิร์ฟเวอร์ส่งค่าเวลาที่พักไว้ชุดเดิมทุกครั้งที่โพล จนกว่าอุปกรณ์จะยืนยันกลับ
+      //      หรือหมดอายุตาม TTL (ดู fetch_desired_timings ใน server/app/state.py)
+      //      และไม่มีอะไรยืนยันค่าเวลากลับเลย ถ้าไม่มีตัวป้องกันนี้ ทุกรอบใน ~30 รอบโพลของหน้าต่างนั้น
+      //      จะทำงานซ้ำ: เขียน NVS และรีสตาร์ต WiFi 30 ครั้งตอนว่าง
+      //      หรือตั้งค่าค้างใหม่และส่งค่ากลับไปจอซ้ำ 30 ครั้งระหว่างรอบทำงาน
+      //      เทียบกับตัวป้องกันเป้าหมายด้านล่าง
+      //
+      //      เทียบกับ gPending แทน gSettings ทุกครั้งที่มีค่าค้างไว้อยู่แล้ว (ระหว่างรอบทำงาน)
+      //      เพราะ gSettings จะไม่ขยับจนกว่ารอบจะจบ การเทียบกับมันจะเห็นว่าต่างกันเรื่อยๆ
+      //      และใช้ค่าซ้ำเรื่อยๆ ตลอดเวลาที่รอบยังทำงานอยู่ ซึ่งเป็นการซ้ำระหว่างรอบทำงานที่ตัวป้องกันนี้ตั้งใจกัน
+      LinkSettings baseline = gPendingSettings ? toLink(gPending) : currentAsLink();
+      LinkSettings s = baseline;
       if (wantTimings.maxTravelSec) s.maxTravel = wantTimings.maxTravelSec;
       if (wantTimings.liftSec) s.lift = wantTimings.liftSec;
       if (wantTimings.lowerSec) s.lower = wantTimings.lowerSec;
       if (wantTimings.holdSec) s.hold = wantTimings.holdSec;
       if (wantTimings.restSec) s.rest = wantTimings.restSec;
-      onLinkSettings(s);
+      bool changed = s.maxTravel != baseline.maxTravel || s.lift != baseline.lift ||
+                     s.lower != baseline.lower || s.hold != baseline.hold ||
+                     s.rest != baseline.rest;
+      if (changed) onLinkSettings(s);
     }
     // Applied before the command, so a start that carries a target runs with it
     // rather than with the previous one.
