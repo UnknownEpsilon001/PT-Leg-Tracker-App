@@ -96,6 +96,15 @@ describe('setTarget', () => {
   it('throws no-device when the device code is blank', async () => {
     await expect(setTarget('http://srv', '  ', 6)).rejects.toMatchObject({ kind: 'no-device' })
   })
+
+  it('sends a target of 0 rather than treating it as unset', async () => {
+    const fn = mockFetchOnce(jsonRes(202, { queued: true }))
+    await expect(setTarget('http://srv/', 'D1', 0)).resolves.toBeUndefined()
+    expect(fn).toHaveBeenCalledWith(
+      'http://srv/api/sessions/target?deviceId=D1',
+      expect.objectContaining({ body: JSON.stringify({ targetReps: 0 }) }),
+    )
+  })
 })
 
 describe('queueStart with a target', () => {
@@ -113,6 +122,15 @@ describe('queueStart with a target', () => {
     await queueStart('http://srv', 'D1')
     expect(fn).toHaveBeenCalledTimes(1)
     expect(fn.mock.calls[0]![1]).not.toHaveProperty('body')
+  })
+
+  it('sends a target of 0 (unlimited) rather than treating it as no target', async () => {
+    const fn = mockFetchOnce(jsonRes(202, { queued: true }))
+    await queueStart('http://srv', 'D1', 0)
+    expect(fn).toHaveBeenCalledWith(
+      'http://srv/api/sessions/start?deviceId=D1',
+      expect.objectContaining({ body: JSON.stringify({ targetReps: 0 }) }),
+    )
   })
 })
 

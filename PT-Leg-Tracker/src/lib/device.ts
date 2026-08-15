@@ -82,6 +82,10 @@ export async function setTarget(
   deviceCode: string,
   reps: number,
 ): Promise<void> {
+  // This route never answers 409, unlike start/stop, so there is no conflict
+  // kind to report — any non-ok response is just unreachable.
+  // [TH] เส้นทางนี้ไม่ตอบ 409 เหมือน start/stop จึงไม่มีสถานะชนกันให้รายงาน
+  //      คำตอบที่ไม่ ok จะถือว่าติดต่อไม่ได้เท่านั้น
   await control(serverUrl, deviceCode, '/api/sessions/target', 'unreachable', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -103,6 +107,10 @@ export async function setTimings(
   deviceCode: string,
   timings: DeviceTimings,
 ): Promise<void> {
+  // Same reasoning as setTarget: no 409 from this route, so 'unreachable'
+  // covers every failure.
+  // [TH] เหตุผลเดียวกับ setTarget: เส้นทางนี้ไม่มี 409 จึงใช้ 'unreachable'
+  //      ครอบคลุมความล้มเหลวทั้งหมด
   await control(serverUrl, deviceCode, '/api/sessions/timings', 'unreachable', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
