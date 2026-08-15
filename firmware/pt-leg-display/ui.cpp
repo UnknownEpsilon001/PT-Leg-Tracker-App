@@ -206,7 +206,14 @@ static void initThaiFonts() {
 static void (*cbSettings)() = nullptr;
 static void (*cbData)() = nullptr;
 static bool uiRunning = false;
-static uint16_t uiTargetShown = 0;  // last target reported by the controller — updated from uiUpdateMain
+// last target reported by the controller — updated from uiUpdateMain.
+// Defaulted to 10, matching gLast.targetReps's own default (pt-leg-display.ino),
+// so the spinbox does not flash 0 ("unlimited") before the first state message
+// ever arrives.
+// [TH] ค่าเป้าหมายล่าสุดที่คอนโทรลเลอร์รายงานมา อัปเดตจาก uiUpdateMain
+//      ตั้งต้นเป็น 10 ให้ตรงกับค่าเริ่มต้นของ gLast.targetReps เอง (pt-leg-display.ino)
+//      เพื่อไม่ให้ช่องปรับค่ากะพริบเป็น 0 ("ไม่จำกัด") ก่อนได้รับข้อความสถานะข้อความแรก
+static uint16_t uiTargetShown = 10;
 static void (*cbTarget)(uint16_t) = nullptr;
 
 void uiSetCallbacks(void (*onOpenSettings)(), void (*onOpenData)()) {
@@ -365,7 +372,11 @@ static const char* phaseName(Phase p) {
     case Phase::Lower: return "กำลังลง";
     case Phase::Rest: return "พัก";
     case Phase::SafeLower: return "กำลังหยุด";
-    case Phase::Fault: return "สวิตช์ผิดพลาด";
+    // Not a switch fault: the branch has none to name any more. FAULT now
+    // comes only from the actuator's own energize cap or the UART watchdog.
+    // [TH] ไม่ใช่สวิตช์ผิดพลาดอีกต่อไป สาขานี้ไม่มีสวิตช์ให้เอ่ยชื่อแล้ว
+    //      สถานะผิดพลาดตอนนี้มาจากเพดานเวลาจ่ายไฟของชุดขับเคลื่อนเองหรือตัวเฝ้าระวัง UART เท่านั้น
+    case Phase::Fault: return "ระบบขัดข้อง";
     default: return "พร้อม";
   }
 }
