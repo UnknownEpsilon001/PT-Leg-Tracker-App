@@ -361,7 +361,7 @@ arduino-cli compile --fqbn "esp32:esp32:esp32:PartitionScheme=huge_app" --upload
 
 The script answers `hello`, takes `s`/`x`/`r` on the keyboard in place of the
 controller's panel buttons, and runs the real LIFT/HOLD/LOWER/REST cycle so the
-phases visibly move — shorten it with `-HoldSec`/`-RestSec`. Stop it and the
+phases visibly move — shorten it with `-LiftSec`/`-LowerSec`/`-HoldSec`/`-RestSec`. Stop it and the
 display falls back to `ไม่พบตัวควบคุม` (no link) after ~2.5 s. **Set the switch back to `0` before
 flashing a real machine** — do not use `--build-property` to set it, as flag
 changes against cached objects have produced broken images.

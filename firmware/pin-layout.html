@@ -544,8 +544,8 @@ a{color:var(--pad)}
 <div class="rules">
   <div class="rule" style="--k:var(--fault)">
     <h4><span class="en">GPIO 34, 35, 36, 39 have no pull-up</span><span class="th">ขา 34, 35, 36, 39 ไม่มีตัวต้านทานพูลอัป</span></h4>
-    <p><span class="en">Input-only. Never put a switch or button on them — it's why START, STOP and both lamps all sit on pins that support <code>INPUT_PULLUP</code> (25, 26, 23, 32).</span>
-       <span class="th">เป็นขารับสัญญาณอย่างเดียว ห้ามต่อสวิตช์หรือปุ่ม จึงต้องวางปุ่ม START, STOP และไฟทั้งสองดวงไว้ที่ขาซึ่งรองรับ <code>INPUT_PULLUP</code> (25, 26, 23, 32)</span></p>
+    <p><span class="en">Input-only. Never put a switch or button on them — it's why START and STOP sit on pins that support <code>INPUT_PULLUP</code> (25, 26). The two lamps land on 23 and 32 for a related but different reason: they're <code>OUTPUT</code>, not buttons, and 34–39 can't drive anything at all, input-only or otherwise.</span>
+       <span class="th">เป็นขารับสัญญาณอย่างเดียว ห้ามต่อสวิตช์หรือปุ่ม จึงต้องวางปุ่ม START และ STOP ไว้ที่ขาซึ่งรองรับ <code>INPUT_PULLUP</code> (25, 26) ส่วนไฟทั้งสองดวงมาอยู่ที่ขา 23 และ 32 ด้วยเหตุผลที่เกี่ยวข้องกันแต่ต่างกัน คือเป็นขา <code>OUTPUT</code> ไม่ใช่ปุ่ม และขา 34–39 ขับสัญญาณออกไม่ได้เลยไม่ว่าจะรับสัญญาณอย่างเดียวหรือไม่ก็ตาม</span></p>
   </div>
   <div class="rule" style="--k:var(--green)">
     <h4><span class="en">An unwired NO input reads as released</span><span class="th">ขาที่ไม่ได้ต่อสายแบบ NO จะอ่านว่ายังไม่กด</span></h4>
@@ -835,6 +835,11 @@ a{color:var(--pad)}
   };
   cStop.onclick=function(){
     if(phase==='idle'){ reps=0; repCount.textContent=0; clock(); return; }
+    /* REST is the one non-idle phase where the leg is already down (matches
+       session.cpp's requestStop(): Rest calls finish() immediately, energizing
+       nothing) — so it stops on the spot instead of running a SafeLower stroke
+       the real firmware never drives from there. */
+    if(phase==='rest'){ running=false; enter('idle'); return; }
     running=false; enter('safe');                     // lowers, then stops
   };
   var sp=document.getElementById('cSpeed');
