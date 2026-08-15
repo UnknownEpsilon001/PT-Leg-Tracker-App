@@ -30,8 +30,20 @@ const reps = ref(0)
 //      จะแปลว่า "ทำไปเรื่อยๆ ไม่จำกัด" ดังนั้นถ้ายังไม่รู้ค่า ตอนเริ่ม (start()) จะไม่ส่งค่านี้ไปเลย
 //      แทนที่จะสั่งแบบไม่จำกัดโดยที่ผู้ใช้ไม่ได้ตั้งใจ
 const target = ref<number | null>(null)
+// Distinguishes *why* target is null: "never learned a value" (false) vs "an
+// edit just succeeded on the server but the read that would confirm the new
+// number failed" (true). The second case still renders as unknown — the app
+// declines to assert a number it cannot vouch for, so start() sends no body
+// and the edit that already took effect server-side survives — but the
+// wording tells the user their tap worked rather than looking like it broke.
+// [TH] แยกว่า "ทำไม" ค่าเป้าหมายถึงเป็น null: "ยังไม่เคยรู้ค่าเลย" (false) กับ "เพิ่งแก้ค่าสำเร็จ
+//      ที่เซิร์ฟเวอร์ แต่การอ่านยืนยันค่าใหม่ล้มเหลว" (true) กรณีหลังก็ยังแสดงเป็น "ไม่ทราบ" เหมือนกัน
+//      แอปจะไม่ยืนยันตัวเลขที่พิสูจน์ไม่ได้ ตอนกดเริ่มจะไม่ส่งค่านี้ไป การแก้ไขที่สำเร็จแล้วที่เซิร์ฟเวอร์
+//      จะได้ไม่ถูกทับ แต่ข้อความจะบอกผู้ใช้ว่าที่กดไปนั้นสำเร็จ ไม่ใช่ว่าพัง
+const targetUnconfirmed = ref(false)
 const targetLabel = computed(() => {
-  if (target.value === null) return 'ไม่ทราบค่า'
+  if (target.value === null)
+    return targetUnconfirmed.value ? 'ส่งค่าไปแล้ว แต่ยืนยันค่าจริงไม่ได้' : 'ไม่ทราบค่า'
   return target.value > 0 ? `${target.value} ครั้ง` : 'ไม่จำกัด'
 })
 const attachAvailable = ref(false)
@@ -76,6 +88,7 @@ async function poll() {
     // The target is the machine's, not ours — every successful poll re-reads it.
     // [TH] เป้าหมายเป็นของเครื่อง ไม่ใช่ของแอป การอ่านสถานะทุกครั้งที่สำเร็จจะอัปเดตค่าตามจริงเสมอ
     target.value = cur.targetReps
+    targetUnconfirmed.value = false
     if (cur.state === 'running') {
       phase.value = 'running'
       sessionId.value = cur.sessionId
@@ -134,12 +147,23 @@ async function stepTarget(delta: number) {
     // [TH] ถ้ามีการกดครั้งใหม่กว่าเริ่มไปแล้ว ให้ผลของครั้งใหม่ชนะ ไม่เอาค่าเก่าที่เพิ่งอ่านมาทับ
     if (opSeq !== targetOpSeq) return
     target.value = cur.targetReps
+    targetUnconfirmed.value = false
   } catch {
-    // the re-read failed: keep the last known value rather than clearing it
-    // to null or guessing `next` — the change may or may not have reached
-    // the device, and only a server read is allowed to say which.
-    // [TH] อ่านซ้ำไม่สำเร็จ: คงค่าล่าสุดที่รู้ไว้ ไม่ล้างเป็น null และไม่เดาว่าเป็น next
-    //      เพราะการเปลี่ยนอาจจะถึงเครื่องแล้วหรือยังก็ได้ ต้องให้การอ่านจากเซิร์ฟเวอร์เท่านั้นเป็นคนบอก
+    if (disposed) return
+    if (opSeq !== targetOpSeq) return
+    // The edit reached the server (setTarget above succeeded), but the read
+    // that would confirm the new number failed. Two things are known for
+    // certain here: the server holds a newer target than we do, and we do
+    // not know what it is — the same state as "never learned a value", so
+    // it gets the same treatment: null, not a guess of `next` and not the
+    // stale pre-edit number. That is what keeps start() from sending a body
+    // and overwriting the edit that already took effect server-side.
+    // [TH] การแก้ไขถึงเซิร์ฟเวอร์แล้ว (setTarget ข้างบนสำเร็จ) แต่การอ่านยืนยันค่าใหม่ล้มเหลว
+    //      สิ่งที่รู้แน่ๆ คือเซิร์ฟเวอร์มีค่าใหม่กว่าที่เรามี และเราไม่รู้ว่าเป็นค่าอะไร เหมือนกับ
+    //      "ยังไม่เคยรู้ค่าเลย" จึงจัดการแบบเดียวกัน คือเป็น null ไม่เดาว่าเป็น next และไม่ใช้ค่าเก่า
+    //      ก่อนแก้ไข นี่คือสิ่งที่ทำให้ start() ไม่ส่งค่านี้ไปทับการแก้ไขที่สำเร็จแล้วที่เซิร์ฟเวอร์
+    target.value = null
+    targetUnconfirmed.value = true
   }
 }
 
@@ -225,6 +249,7 @@ onMounted(async () => {
     // [TH] เรียนรู้ค่าเป้าหมายจริงของเครื่องก่อนที่ผู้ใช้จะกดเริ่ม ตัวเลขบนหน้าจอก่อนเริ่ม
     //      จะได้ตรงกับความจริง และตอนกดเริ่มก็มีค่าจริงให้ส่งไป ไม่ต้องเดา
     target.value = cur.targetReps
+    targetUnconfirmed.value = false
     if (cur.state === 'running' && phase.value === 'before') attachAvailable.value = true
   } catch {
     // probe is best-effort; start() reports connection errors. target stays
