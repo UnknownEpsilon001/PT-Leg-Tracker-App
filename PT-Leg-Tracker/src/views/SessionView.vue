@@ -22,7 +22,18 @@ const painAfter = ref<number | null>(null)
 const sessionId = ref<string | null>(null)
 const elapsedSec = ref<number | null>(null)
 const reps = ref(0)
-const target = ref(0)
+// null = we have not yet learned the machine's real target. Never guess a
+// number here — an explicit 0 sent to the device means "run until STOP",
+// so an unlearned target must send no body at all (see start()) rather
+// than silently commanding an unlimited session.
+// [TH] null = ยังไม่รู้ค่าเป้าหมายจริงของเครื่อง ห้ามเดาเป็นตัวเลข เพราะถ้าส่ง 0 ไปตรงๆ
+//      จะแปลว่า "ทำไปเรื่อยๆ ไม่จำกัด" ดังนั้นถ้ายังไม่รู้ค่า ตอนเริ่ม (start()) จะไม่ส่งค่านี้ไปเลย
+//      แทนที่จะสั่งแบบไม่จำกัดโดยที่ผู้ใช้ไม่ได้ตั้งใจ
+const target = ref<number | null>(null)
+const targetLabel = computed(() => {
+  if (target.value === null) return 'ไม่ทราบค่า'
+  return target.value > 0 ? `${target.value} ครั้ง` : 'ไม่จำกัด'
+})
 const attachAvailable = ref(false)
 const connLost = ref(false)
 const errorMsg = ref('')
@@ -97,6 +108,7 @@ function failOffline() {
 // [TH] ค่าเป้าหมายเป็นของเครื่อง ตรงนี้แค่ส่งคำขอเปลี่ยน แล้วรอค่าจริงจากการอ่านสถานะรอบถัดไป
 //      หน้าจอจะได้ตรงกับเครื่องเสมอ รวมถึงตอนที่มีคนเปลี่ยนค่าที่หน้าจอ CYD
 async function stepTarget(delta: number) {
+  if (target.value === null) return // unknown baseline: wait for a real value first
   const next = Math.min(99, Math.max(0, target.value + delta))
   if (next === target.value) return
   try {
@@ -120,7 +132,11 @@ async function start() {
   phase.value = 'starting'
   attachAvailable.value = false
   try {
-    await queueStart(serverUrl.value, deviceCode.value, target.value)
+    // An unlearned target sends no body: device.ts leaves whatever the machine
+    // already holds untouched, rather than us guessing and overwriting it.
+    // [TH] ถ้ายังไม่รู้ค่าเป้าหมายจะไม่ส่งค่านี้ไปเลย เครื่องจะใช้ค่าที่มันถืออยู่เดิม
+    //      แทนที่จะให้แอปเดาแล้วไปเขียนทับ
+    await queueStart(serverUrl.value, deviceCode.value, target.value ?? undefined)
     if (disposed) return
     startPolling()
   } catch (e) {
@@ -178,10 +194,19 @@ onMounted(async () => {
   if (!serverUrl.value || !deviceCode.value) return
   try {
     const cur = await getCurrent(serverUrl.value, deviceCode.value)
-    if (!disposed && cur.state === 'running' && phase.value === 'before')
-      attachAvailable.value = true
+    if (disposed) return
+    // Learn the machine's real target before the user ever presses start, so
+    // the pre-start stepper shows the truth and start() has a real value to
+    // carry through instead of guessing.
+    // [TH] เรียนรู้ค่าเป้าหมายจริงของเครื่องก่อนที่ผู้ใช้จะกดเริ่ม ตัวเลขบนหน้าจอก่อนเริ่ม
+    //      จะได้ตรงกับความจริง และตอนกดเริ่มก็มีค่าจริงให้ส่งไป ไม่ต้องเดา
+    target.value = cur.targetReps
+    if (cur.state === 'running' && phase.value === 'before') attachAvailable.value = true
   } catch {
-    // probe is best-effort; start() reports connection errors
+    // probe is best-effort; start() reports connection errors. target stays
+    // null (unknown) — the stepper is disabled and start() sends no body.
+    // [TH] การตรวจสอบครั้งนี้พลาดได้ไม่เป็นไร start() จะแจ้งปัญหาการเชื่อมต่อเอง
+    //      ค่าเป้าหมายจะยังคงเป็น null (ไม่ทราบ) ปุ่มปรับจะถูกปิด และ start() จะไม่ส่งค่านี้ไป
   }
 })
 
@@ -197,6 +222,25 @@ onUnmounted(() => {
       <div class="card">
         <h2>ก่อนเริ่ม ปวดเข่าแค่ไหน?</h2>
         <PainScale v-model="painBefore" />
+      </div>
+      <div class="target-stepper">
+        <button
+          class="step"
+          aria-label="ลดจำนวนเป้าหมาย"
+          :disabled="target === null || target === 0"
+          @click="stepTarget(-1)"
+        >
+          −
+        </button>
+        <span class="target-label">เป้าหมาย {{ targetLabel }}</span>
+        <button
+          class="step"
+          aria-label="เพิ่มจำนวนเป้าหมาย"
+          :disabled="target === null || target === 99"
+          @click="stepTarget(1)"
+        >
+          +
+        </button>
       </div>
       <p class="card">สวมอุปกรณ์ให้เรียบร้อย (ดูวิธีใช้ได้ที่เมนู "วิธีใช้เครื่อง") แล้วกดเริ่ม</p>
       <p v-if="errorMsg" class="error">{{ errorMsg }}</p>
@@ -227,22 +271,22 @@ onUnmounted(() => {
         <Transition name="pop" mode="out-in">
           <span :key="reps" class="reps-num">{{ reps }}</span>
         </Transition>
-        <span v-if="target > 0"> / {{ target }}</span>
+        <span v-if="target !== null && target > 0"> / {{ target }}</span>
       </p>
       <div class="target-stepper">
         <button
           class="step"
           aria-label="ลดจำนวนเป้าหมาย"
-          :disabled="target === 0"
+          :disabled="target === null || target === 0"
           @click="stepTarget(-1)"
         >
           −
         </button>
-        <span class="target-label">เป้าหมาย {{ target > 0 ? `${target} ครั้ง` : 'ไม่จำกัด' }}</span>
+        <span class="target-label">เป้าหมาย {{ targetLabel }}</span>
         <button
           class="step"
           aria-label="เพิ่มจำนวนเป้าหมาย"
-          :disabled="target === 99"
+          :disabled="target === null || target === 99"
           @click="stepTarget(1)"
         >
           +

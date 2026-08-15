@@ -29,6 +29,8 @@ const syncMessage = ref('')
 const exportMessage = ref('')
 const alarmMessage = ref('')
 
+// Cycle timing fields: kept as the text the user typed, not what the machine
+// currently holds. A field left blank is never sent (it means "don't change it").
 // [TH] ค่าเวลาของรอบ: เก็บเป็นข้อความตามที่ผู้ใช้พิมพ์ ไม่ใช่ค่าที่เครื่องถืออยู่ตอนนี้
 //      ช่องไหนเว้นว่างไว้จะไม่ถูกส่งไป (แปลว่า "ไม่เปลี่ยนค่านั้น")
 const timingLift = ref('')
@@ -100,23 +102,28 @@ function fmtSync(iso: string | null) {
   return iso ? new Date(iso).toLocaleString('th-TH') : 'ยังไม่เคย'
 }
 
-// A blank field means "leave it alone" — parse only what the user actually typed.
-// [TH] ช่องว่างแปลว่า "ไม่ต้องเปลี่ยน" — แปลงเฉพาะค่าที่ผู้ใช้พิมพ์จริง ๆ
-function parsedSeconds(s: string): number | undefined {
+// A blank field means "leave it alone" — parse only what the user actually
+// typed, and clamp it to the documented bounds the same way stepTarget does,
+// so an out-of-range value is corrected here rather than bounced by the
+// server's 422 with a message that would wrongly suggest a network problem.
+// [TH] ช่องว่างแปลว่า "ไม่ต้องเปลี่ยน" — แปลงเฉพาะค่าที่ผู้ใช้พิมพ์จริง ๆ แล้วบีบให้อยู่ในช่วงที่กำหนด
+//      เหมือนกับ stepTarget เพื่อไม่ให้ค่าที่เกินช่วงถูกเซิร์ฟเวอร์ปฏิเสธด้วยข้อความที่บอกผิดว่าเป็นปัญหาการเชื่อมต่อ
+function parsedSeconds(s: string, min: number, max: number): number | undefined {
   const trimmed = s.trim()
   if (trimmed === '') return undefined
   const n = Number(trimmed)
-  return Number.isFinite(n) ? n : undefined
+  if (!Number.isFinite(n)) return undefined
+  return Math.min(max, Math.max(min, n))
 }
 
 async function saveTimings() {
   timingsMessage.value = ''
   const timings: DeviceTimings = {}
-  const lift = parsedSeconds(timingLift.value)
-  const lower = parsedSeconds(timingLower.value)
-  const hold = parsedSeconds(timingHold.value)
-  const rest = parsedSeconds(timingRest.value)
-  const maxTravel = parsedSeconds(timingMaxTravel.value)
+  const lift = parsedSeconds(timingLift.value, 1, 20)
+  const lower = parsedSeconds(timingLower.value, 1, 20)
+  const hold = parsedSeconds(timingHold.value, 1, 60)
+  const rest = parsedSeconds(timingRest.value, 1, 60)
+  const maxTravel = parsedSeconds(timingMaxTravel.value, 1, 20)
   if (lift !== undefined) timings.liftSec = lift
   if (lower !== undefined) timings.lowerSec = lower
   if (hold !== undefined) timings.holdSec = hold
