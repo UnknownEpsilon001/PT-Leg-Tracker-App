@@ -179,5 +179,39 @@ class SessionSM {
   //      เครื่องนี้ไม่มีสัญญาณตำแหน่งใดๆ เลย ตัวจับเวลาของมันหมดเวลาจึงไม่ใช่สัญญาณเดียวกับที่บอกว่า
   //      ขาอยู่ล่างสุดจริง และต้องไม่ล้างสัญญาณนี้ ไม่มีที่ใดตั้งค่านี้กลับเป็นจริงอีกนอกจากค่าเริ่มต้นของคลาสนี้เอง
   //      จึงไม่มีทางย้อนตัวเองกลับเข้าวงวนลดขาไม่รู้จบ
+  //
+  // One case here ends up optimistic rather than exact: a STOP taken at the very
+  // end of a Lift computes a descent longer than lowerMs, caps to lowerMs, and
+  // clears this flag the same as a genuine full-length Lower — but Lift ->
+  // SafeLower is a live reversal, so actuator.cpp parks the new DOWN request
+  // behind DEADTIME_MS (50 ms) while this phase's own timer, started at phase
+  // entry, keeps counting through that gap. A capped full-length SafeLower
+  // entered from Lift therefore only drives DOWN for lowerMs - DEADTIME_MS,
+  // leaving the leg a hair short of the bottom — about 0.6% of travel high at
+  // liftSec=2/lowerSec=8, about 1.2% at 4/4. That is inside the mechanical slop
+  // of a machine with a hard bottom stop, so "at the bottom" here is accurate to
+  // within roughly a percent of travel, not exact.
+  //
+  // The flag also does not clear from the Lift branch at one instant but across
+  // a band: whenever floor(dt*lowerMs/liftMs) + LOWER_MARGIN_MS >= lowerMs,
+  // which is the last 6.25% of the lift at liftSec=2/lowerSec=8 and the last
+  // 12.5% at 4/4. A STOP anywhere in that band caps to lowerMs and clears the
+  // flag exactly like one at the very last instant — the flag does not stay set
+  // for every press short of the absolute end of the lift.
+  // [TH] มีกรณีหนึ่งที่ผลลัพธ์เป็นแค่การมองในแง่ดี ไม่ใช่ค่าที่แม่นจริง: การกด STOP ที่ปลายสุดของ
+  //      สถานะยกขาจะคำนวณได้ระยะเวลาลงมากกว่า lowerMs จึงถูกจำกัดไว้ที่ lowerMs และล้างสัญญาณนี้
+  //      เหมือนกับการลดขาแบบเต็มระยะจริง แต่การเปลี่ยนจากยกขาไปเป็นลดขาเพื่อหยุดคือการกลับทิศขณะกำลัง
+  //      เคลื่อนที่ actuator.cpp จึงต้องพักคำขอลงใหม่ไว้หลัง DEADTIME_MS (50 มิลลิวินาที) ในขณะที่ตัวจับเวลา
+  //      ของสถานะนี้เองซึ่งเริ่มนับตั้งแต่เข้าสถานะยังคงนับต่อไปตลอดช่วงที่รอนั้น การลดขาเพื่อหยุดแบบเต็มระยะ
+  //      ที่เข้ามาจากสถานะยกขาจึงจ่ายไฟลงจริงแค่ lowerMs - DEADTIME_MS ทำให้ขาค้างสูงกว่าพื้นเล็กน้อย
+  //      ประมาณ 0.6% ของระยะเต็มที่ liftSec=2/lowerSec=8 และประมาณ 1.2% ที่ 4/4 ซึ่งยังอยู่ในช่วงความคลาดเคลื่อน
+  //      เชิงกลของเครื่องที่มีกลไกหยุดแข็งด้านล่างอยู่แล้ว คำว่า "อยู่ที่พื้น" ตรงนี้จึงแม่นยำในระดับประมาณหนึ่งเปอร์เซ็นต์
+  //      ของระยะเต็ม ไม่ใช่ค่าที่แน่นอน
+  //
+  //      สัญญาณนี้ยังไม่ได้ถูกล้างจากสาขายกขาที่จุดเดียว แต่ล้างได้ตลอดช่วงหนึ่ง: เมื่อใดก็ตามที่
+  //      floor(dt*lowerMs/liftMs) + LOWER_MARGIN_MS >= lowerMs ซึ่งคือ 6.25% สุดท้ายของช่วงยกขาที่
+  //      liftSec=2/lowerSec=8 และ 12.5% สุดท้ายที่ 4/4 การกด STOP ที่ใดก็ได้ในช่วงนั้นจะถูกจำกัดที่ lowerMs
+  //      และล้างสัญญาณเหมือนกับการกดที่จุดสุดท้ายจริงๆ สัญญาณนี้จึงไม่ได้ค้างเป็นจริงตลอดจนถึงจุดสุดท้ายของ
+  //      การยกขาเสมอไปอย่างที่อาจคาดไว้
   bool legPositionUnknown = true;
 };

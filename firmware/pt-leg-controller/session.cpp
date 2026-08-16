@@ -2,12 +2,18 @@
 // Session state-machine logic. Every transition is a clock; there are no switches.
 #include "session.h"
 
-// Slack added to a shortened safe-lower, so a descent computed from the drive
-// time still reaches the bottom when the leg comes down slower than it went up.
-// A full-length stroke is never shortened below what was actually driven.
-// [TH] เวลาเผื่อที่บวกให้การลดขาแบบย่นระยะ เพื่อให้การลดที่คำนวณจากเวลาที่ขับเคลื่อนไป
-//      ยังลงถึงพื้นได้แม้ขาจะลงช้ากว่าตอนขึ้น
-//      และจะไม่ย่นให้สั้นกว่าระยะที่ขับเคลื่อนไปจริง
+// Fixed slack added on top of the proportional descent figure computed below —
+// NOT what makes a slower descent reach the bottom; that is the lowerMs/liftMs
+// ratio itself. This margin only covers integer truncation in that ratio
+// (which biases the result short by under a millisecond) and a deliberate
+// lean toward over-driving into the bottom stop rather than stopping short of
+// it. Capped by strokeCapMs at cfg.lowerMs, so the margin can never stretch a
+// stroke past a full-travel descent.
+// [TH] เวลาเผื่อคงที่ที่บวกเพิ่มจากตัวเลขสัดส่วนที่คำนวณไว้ด้านล่าง ไม่ใช่สิ่งที่ทำให้การลงช้ากว่ายังถึงพื้นได้
+//      สิ่งนั้นคืออัตราส่วน lowerMs/liftMs เอง เวลาเผื่อนี้ครอบคลุมแค่ความคลาดเคลื่อนจากการปัดเศษจำนวนเต็มในอัตราส่วนนั้น
+//      (ซึ่งทำให้ผลลัพธ์สั้นกว่าความเป็นจริงไม่ถึงหนึ่งมิลลิวินาที)
+//      และแนวโน้มที่ตั้งใจให้ดันเข้าหากลไกด้านล่างมากกว่าจะหยุดสั้นไป
+//      ถูกจำกัดไว้ที่ cfg.lowerMs เสมอโดย strokeCapMs จึงไม่มีทางยืดการเคลื่อนที่เกินกว่าการลดขาแบบเต็มระยะ
 static const uint32_t LOWER_MARGIN_MS = 500;
 
 void SessionSM::enter(Phase p, uint32_t nowMs) {
