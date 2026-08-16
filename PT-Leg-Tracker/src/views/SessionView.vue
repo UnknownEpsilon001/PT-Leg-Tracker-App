@@ -185,6 +185,14 @@ async function stepTarget(delta: number) {
       targetPending.value = null
       targetUnconfirmed.value = true
       return
+    default: {
+      // All TargetStepOutcome kinds must be handled here; adding a new kind to the union
+      // will cause a compile error at this line, which is intentional.
+      // [TH] ต้องจัดการกับ TargetStepOutcome ทุกชนิดที่นี่ ถ้าเพิ่มชนิดใหม่เข้ามา
+      //      คอมไพเลอร์จะหยุดที่บรรทัดนี้ ซึ่งเป็นเจตนาโดยมีจุดประสงค์
+      const _exhaustive: never = outcome
+      return _exhaustive
+    }
   }
 }
 
