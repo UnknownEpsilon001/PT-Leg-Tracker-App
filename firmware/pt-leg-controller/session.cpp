@@ -21,24 +21,43 @@ void SessionSM::enter(Phase p, uint32_t nowMs) {
   if (p == Phase::SafeLower) {
     strokeRenewEdge = true;
     // How long this descent needs, rather than always a full lowerMs. Travel is
-    // timed, so the distance to give back is the distance actually driven: a stop
-    // half a second into a four-second lift needs half a second of DOWN, and the
-    // remaining three and a half were spent stalled against the bottom stop with
-    // the limb loaded — every time, on every early stop.
+    // timed, so the ELEVATION to give back is the fraction of full travel that was
+    // actually driven — the DOWN time for that same fraction, not the UP time spent
+    // reaching it. With equal lift/lower times a stop half a second into a
+    // four-second lift needs half a second of DOWN; with a slower lower it needs
+    // proportionally more. Whatever is left beyond that would be spent stalled
+    // against the bottom stop with the limb loaded — every time, on every early
+    // stop.
     //
     // Only the two phases whose position is known get the short version. From
     // Hold the leg is fully up, and from Fault or Idle the position is unknown by
     // definition, so those keep the full stroke.
     // [TH] คำนวณว่าการลดขาครั้งนี้ต้องใช้เวลาเท่าไร แทนที่จะใช้ค่าเต็มของ lowerMs เสมอ
-    //      เพราะการเดินทางนับด้วยเวลา ระยะที่ต้องคืนจึงเท่ากับระยะที่ขับเคลื่อนไปจริง
-    //      การกดหยุดหลังเริ่มยกไปครึ่งวินาทีจากทั้งหมดสี่วินาที ต้องการการสั่งลงแค่ครึ่งวินาที
-    //      เวลาที่เหลืออีกสามวินาทีครึ่งคือการดันค้างชนกลไกด้านล่างโดยมีขาวางอยู่ ทุกครั้งที่หยุดก่อนกำหนด
+    //      เพราะการเดินทางนับด้วยเวลา ระดับที่ต้องคืนจึงเท่ากับสัดส่วนของระยะเต็มที่ขับเคลื่อนไปจริง
+    //      คือเวลาลงของสัดส่วนเดียวกันนั้น ไม่ใช่เวลาขึ้นที่ใช้ไปกว่าจะถึงจุดนั้น
+    //      ถ้าเวลายกกับเวลาลงเท่ากัน การกดหยุดหลังเริ่มยกไปครึ่งวินาทีจากทั้งหมดสี่วินาที
+    //      ต้องการการสั่งลงแค่ครึ่งวินาที แต่ถ้าลงช้ากว่าก็ต้องการเวลามากขึ้นตามสัดส่วน
+    //      ส่วนที่เหลือเกินกว่านั้นคือการดันค้างชนกลไกด้านล่างโดยมีขาวางอยู่ ทุกครั้งที่หยุดก่อนกำหนด
     //      ให้ใช้เวลาแบบสั้นเฉพาะสองสถานะที่รู้ตำแหน่งเท่านั้น
     //      จากสถานะค้างขาอยู่บนสุด ส่วนจากสถานะผิดพลาดหรือว่างถือว่าไม่รู้ตำแหน่งอยู่แล้ว
     //      สองกรณีหลังจึงใช้ระยะเต็ม
     uint32_t dt = nowMs - phaseStart;
     if (ph == Phase::Lift) {
-      uint32_t need = dt + LOWER_MARGIN_MS;
+      // Travel is timed, not measured, so the elevation reached after dt of
+      // lifting is dt/liftMs of full travel, and the DOWN time that returns
+      // it is that same fraction of lowerMs — not dt itself. The two only
+      // coincide when liftMs and lowerMs happen to match; a slower descent
+      // (the normal case, for patient comfort) needs proportionally more.
+      // cfg.liftMs is >= 1000 by every clamp, so no divide-by-zero, and the
+      // product stays well inside 32 bits even at the 20 s ceiling.
+      // [TH] การเดินทางนับด้วยเวลา ไม่ได้วัดจริง ระยะที่ยกไปหลังจากเวลา dt
+      //      จึงเท่ากับสัดส่วน dt/liftMs ของระยะเต็ม และเวลาลงที่จะคืนระยะนั้น
+      //      ก็ต้องเป็นสัดส่วนเดียวกันของ lowerMs ไม่ใช่ dt ตรงๆ
+      //      ทั้งสองจะเท่ากันก็ต่อเมื่อ liftMs กับ lowerMs บังเอิญเท่ากันเท่านั้น
+      //      การลงที่ช้ากว่า (กรณีปกติ เพื่อความสบายของผู้ป่วย) ต้องการเวลามากขึ้นตามสัดส่วน
+      //      cfg.liftMs มีค่าอย่างน้อย 1000 เสมอจากการจำกัดค่า จึงไม่มีการหารด้วยศูนย์
+      //      และผลคูณยังอยู่ในขอบเขต 32 บิตสบายๆ แม้ที่เพดาน 20 วินาที
+      uint32_t need = (uint32_t)((uint64_t)dt * cfg.lowerMs / cfg.liftMs) + LOWER_MARGIN_MS;
       strokeCapMs = need < cfg.lowerMs ? need : cfg.lowerMs;
     } else if (ph == Phase::Lower) {
       uint32_t left = dt >= cfg.lowerMs ? 0 : cfg.lowerMs - dt;
@@ -222,16 +241,24 @@ void SessionSM::tick(uint32_t nowMs) {
       return;
     case Phase::SafeLower:
       if (dt < strokeCapMs) return;
-      // Same signal as the Lower case above, and set unconditionally before
-      // the branch below, so every exit out of SafeLower — recovering into a
-      // queued start, recovering into Idle, or a clean stop — leaves the
-      // position known. Nothing downstream ever sets this back to true, so
-      // clearing it here cannot strand the machine lowering forever.
-      // [TH] สัญญาณเดียวกับกรณีลดลงด้านบน ตั้งค่าโดยไม่มีเงื่อนไขก่อนแตกสาขาด้านล่าง
-      //      เพื่อให้ทุกทางออกจากสถานะลดขาเพื่อหยุด ไม่ว่าจะกู้สถานการณ์ไปยังคำสั่งเริ่มที่ค้างไว้
-      //      กู้สถานการณ์ไปสถานะว่าง หรือหยุดตามปกติ ตำแหน่งเป็นที่ทราบแล้วเสมอ
-      //      ไม่มีจุดใดตั้งค่านี้กลับเป็นจริงอีก การล้างตรงนี้จึงไม่ทำให้เครื่องค้างวนลดขาไม่รู้จบ
-      legPositionUnknown = false;
+      // Same signal as the Lower case above, but only when this stroke WAS a
+      // full-length one: strokeCapMs == cfg.lowerMs. A shortened SafeLower (a stop
+      // taken mid-Lift or mid-Lower) is an arithmetic inference from the drive
+      // time, not a measurement — this machine has no position feedback at all —
+      // so it must not be trusted to clear the flag just because its own, shorter
+      // timer ran out. Nothing downstream ever sets this back to true, so clearing
+      // it here on a full stroke cannot strand the machine lowering forever, and
+      // leaving it set after a shortened one costs at most one extra full descent
+      // before the next START.
+      // [TH] สัญญาณเดียวกับกรณีลดลงด้านบน แต่เฉพาะเมื่อการลดขาครั้งนี้เป็นแบบเต็มระยะเท่านั้น
+      //      คือ strokeCapMs == cfg.lowerMs การลดขาเพื่อหยุดแบบย่นระยะ (หยุดกลางจังหวะยกหรือกลางจังหวะลง)
+      //      เป็นการอนุมานทางคณิตศาสตร์จากเวลาที่ขับเคลื่อนไป ไม่ใช่การวัดจริง
+      //      เพราะเครื่องนี้ไม่มีสัญญาณตำแหน่งใดๆ เลย จึงไม่อาจเชื่อให้ล้างสัญญาณนี้
+      //      เพียงเพราะตัวจับเวลาที่สั้นกว่าของมันเองหมดเวลา ไม่มีจุดใดตั้งค่านี้กลับเป็นจริงอีก
+      //      การล้างตรงนี้ตอนเป็นการลดขาแบบเต็มระยะจึงไม่ทำให้เครื่องค้างวนลดขาไม่รู้จบ
+      //      ส่วนการปล่อยให้ค่านี้ยังเป็นจริงหลังการลดขาแบบย่นระยะ มีต้นทุนแค่การลงเต็มระยะเพิ่มอีกหนึ่งครั้ง
+      //      ก่อนการกดเริ่มครั้งถัดไป
+      if (strokeCapMs == cfg.lowerMs) legPositionUnknown = false;
       if (recovering) {
         // Lowering after a fault, or ahead of a start that was pressed in one.
         // Either way the session that faulted was already reported, so this ends

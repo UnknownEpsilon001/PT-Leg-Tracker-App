@@ -204,12 +204,17 @@ $steps = @(
     },
     [pscustomobject]@{
         Name    = "STOP lowers and stops"
-        # There is no limit switch any more, so SAFE-LOWER always runs the full
-        # lowerSec (4 s by default) before reaching IDLE - a timed stroke, not
-        # one that ends early. Expected on every bench run, not just this one.
-        Do      = "touch GPIO 26 to GND briefly, any time after START - green stays lit right through the safe-lower and only goes dark, with yellow lighting, once phase reaches IDLE (~4 s later)"
+        # There is no limit switch any more, so SAFE-LOWER is a timed stroke, not
+        # one that reaches a physical bottom. It is no longer always the full
+        # lowerSec, though: a STOP taken mid-LIFT drives DOWN for roughly the same
+        # fraction of lowerSec as the fraction of liftSec already spent lifting,
+        # plus a small margin - not a flat "~4 s regardless of when you pressed".
+        # With the stock 4 s/4 s config that fraction is subtle to eyeball, so the
+        # part of this step that actually proves the arithmetic is right needs
+        # liftSec and lowerSec unequal - see the second Do line.
+        Do      = "(a) with default timings (4 s/4 s), touch GPIO 26 to GND briefly, any time after START - green stays lit right through the safe-lower and only goes dark, with yellow lighting, once phase reaches IDLE roughly (time already spent in LIFT) later, never more than 4 s. (b) then reflash once with DEFAULT_LIFT_SEC=2 and DEFAULT_LOWER_SEC=8 in config.h (both within DEFAULT_MAX_TRAVEL_SEC=8) and repeat, pressing STOP right at the end of LIFT: a CORRECT descent drives DOWN for close to the full 8 s - watch the leg, it should be visibly at the bottom by the time phase=IDLE prints. An UNDER-DRIVEN descent (the bug this step exists to catch) reaches phase=IDLE after only ~2.5 s with the leg still visibly raised - that is a FAIL even though the three Expect patterns below still print, because they only prove the phase transitions happened, not that the leg got anywhere"
         Expect  = @('EDGE STOP', 'phase=SAFE-LOWER', 'phase=IDLE')
-        Hint    = "STOP also lowers out of a latched FAULT, and zeroes the rep count instead when the machine is already idle - so this step passing alone does not by itself prove a fresh session was running. Reaching IDLE always takes lowerSec now; there is nothing to jumper or ground to speed it up."
+        Hint    = "STOP also lowers out of a latched FAULT, and zeroes the rep count instead when the machine is already idle - so this step passing alone does not by itself prove a fresh session was running. The three Expect patterns are timing-blind: they pass whether the descent was proportional or under-driven, so part (b)'s visual check of the leg - still raised at phase=IDLE means FAIL - is the actual test, not optional color."
     },
     [pscustomobject]@{
         Name    = "STOP clears reps when idle"

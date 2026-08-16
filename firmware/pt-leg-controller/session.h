@@ -143,23 +143,29 @@ class SessionSM {
   bool startAfterRecovery = false;
   bool strokeRenewEdge = false;
   bool startedEdge = false, stoppedEdge = false;
-  // True until a Lower stroke has run to completion at least once. Set at
-  // construction (and stays true across a reboot, since this is not
+  // True until a full-length descent has run to completion at least once. Set
+  // at construction (and stays true across a reboot, since this is not
   // persisted) so the first start of any boot is treated like a start out of
   // Fault: lower first, because a power cut mid-Lift boots to Idle, not
-  // Fault, and leaves the real position unknown. Cleared unconditionally the
-  // moment a Lower or SafeLower stroke reaches its full duration — see
-  // tick() — which is the one signal, timed travel or not, that the leg is
-  // actually at the bottom. Never set back to true except by this class's own
+  // Fault, and leaves the real position unknown. Cleared in tick(), on a
+  // Lower that reaches cfg.lowerMs, or a SafeLower whose own strokeCapMs was
+  // set to cfg.lowerMs (i.e. NOT one of the shortened ones enter() computes
+  // from a mid-Lift or mid-Lower stop). A shortened SafeLower runs only as
+  // long as an arithmetic inference from the drive time says it needs to —
+  // this machine has no position feedback at all — so its timer reaching zero
+  // is not the same signal as the leg actually being at the bottom, and must
+  // not clear this flag. Never set back to true except by this class's own
   // initializer, so it cannot re-arm itself into a lower-forever loop.
-  // [TH] เป็นจริงจนกว่าการเคลื่อนที่ลงจะทำงานจบครบอย่างน้อยหนึ่งครั้ง ตั้งไว้ตั้งแต่สร้างอ็อบเจกต์
+  // [TH] เป็นจริงจนกว่าการลดขาแบบเต็มระยะจะทำงานจบครบอย่างน้อยหนึ่งครั้ง ตั้งไว้ตั้งแต่สร้างอ็อบเจกต์
   //      (และเป็นจริงข้ามการเปิดเครื่องใหม่เสมอ เพราะค่านี้ไม่ถูกบันทึกลง NVS)
   //      เพื่อให้การเริ่มครั้งแรกของการเปิดเครื่องทุกครั้งถูกปฏิบัติเหมือนการเริ่มจากสถานะผิดพลาด
   //      คือลดขาก่อนเสมอ เพราะไฟตกกลางจังหวะยกขาจะรีเซ็ตเครื่องไปสถานะว่าง ไม่ใช่สถานะผิดพลาด
-  //      และทิ้งตำแหน่งจริงไว้โดยไม่มีใครรู้ ถูกล้างโดยไม่มีเงื่อนไขทันทีที่การเคลื่อนที่ลง
-  //      (ไม่ว่าจะลงปกติหรือลดขาเพื่อหยุด) ทำงานครบเต็มเวลา ดู tick() ซึ่งเป็นสัญญาณเดียวที่บอกว่า
-  //      ขาอยู่ล่างสุดจริง ไม่ว่าจะเป็นการเดินทางแบบจับเวลาหรือไม่ก็ตาม
-  //      ไม่มีที่ใดตั้งค่านี้กลับเป็นจริงอีกนอกจากค่าเริ่มต้นของคลาสนี้เอง จึงไม่มีทางย้อนตัวเองกลับเข้า
-  //      วงวนลดขาไม่รู้จบ
+  //      และทิ้งตำแหน่งจริงไว้โดยไม่มีใครรู้ ถูกล้างใน tick() เมื่อการลดลงปกติทำงานจบครบ cfg.lowerMs
+  //      หรือเมื่อการลดขาเพื่อหยุดที่มี strokeCapMs ของตัวเองเท่ากับ cfg.lowerMs พอดี
+  //      (คือไม่ใช่แบบย่นระยะที่ enter() คำนวณจากการหยุดกลางจังหวะยกหรือกลางจังหวะลง)
+  //      การลดขาเพื่อหยุดแบบย่นระยะทำงานสั้นเท่าที่การอนุมานทางคณิตศาสตร์จากเวลาที่ขับเคลื่อนไปบอกว่าต้องใช้เท่านั้น
+  //      เครื่องนี้ไม่มีสัญญาณตำแหน่งใดๆ เลย ตัวจับเวลาของมันหมดเวลาจึงไม่ใช่สัญญาณเดียวกับที่บอกว่า
+  //      ขาอยู่ล่างสุดจริง และต้องไม่ล้างสัญญาณนี้ ไม่มีที่ใดตั้งค่านี้กลับเป็นจริงอีกนอกจากค่าเริ่มต้นของคลาสนี้เอง
+  //      จึงไม่มีทางย้อนตัวเองกลับเข้าวงวนลดขาไม่รู้จบ
   bool legPositionUnknown = true;
 };
