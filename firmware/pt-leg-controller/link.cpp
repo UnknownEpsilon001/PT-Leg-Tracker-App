@@ -53,7 +53,16 @@ void Link::dispatch(const String& line) {
     s.lower = d["lower"] | (uint16_t)0;
     s.hold = d["hold"] | 0;
     s.rest = d["rest"] | 0;
-    s.target = d["target"] | (uint16_t)0;
+    // 0 is a legal target ("run until STOP"), unlike lift/lower/hold/rest above,
+    // so an absent field cannot decode to 0 the way theirs do — that would
+    // silently switch a machine configured to stop after N reps into running
+    // unlimited. LINK_TARGET_ABSENT is the out-of-range sentinel instead; see
+    // link.h and link-protocol.md.
+    // [TH] ค่า 0 เป็นเป้าหมายที่ถูกต้อง (หมายถึง "ทำไปเรื่อยๆ จนกว่าจะกด STOP") ต่างจาก lift/lower/hold/rest
+    //      ข้างบน ฟิลด์ที่หายไปจึงถอดรหัสเป็น 0 แบบเดียวกับฟิลด์เหล่านั้นไม่ได้
+    //      เพราะจะเปลี่ยนเครื่องที่ตั้งให้หยุดหลังครบ N ครั้งให้กลายเป็นทำไม่จำกัดแบบเงียบๆ
+    //      จึงใช้ LINK_TARGET_ABSENT เป็นค่าบอกสถานะนอกช่วงแทน ดู link.h และ link-protocol.md
+    s.target = d["target"] | LINK_TARGET_ABSENT;
     if (onSettings) onSettings(s);            // controller consumes a save — ฝั่งคอนโทรลเลอร์นำไปบันทึก
     else if (onSettingsReply) onSettingsReply(s);  // display consumes a reply — ฝั่งจอรับค่าที่ตอบกลับ
   } else if (!strcmp(t, "done")) {

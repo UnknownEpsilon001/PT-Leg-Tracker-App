@@ -210,10 +210,23 @@ async function start() {
   attachAvailable.value = false
   try {
     // An unlearned target sends no body: device.ts leaves whatever the machine
-    // already holds untouched, rather than us guessing and overwriting it.
+    // already holds untouched, rather than us guessing and overwriting it. The
+    // same applies while a stepTarget() edit is still in flight (targetPending
+    // non-null): targetShown may already read ahead of `target` from taps the
+    // server has not confirmed yet, and `target` itself is stale until it does.
+    // Sending it here would win the race against that outstanding setTarget and
+    // silently revert the in-flight edit the moment the device polls this start.
     // [TH] ถ้ายังไม่รู้ค่าเป้าหมายจะไม่ส่งค่านี้ไปเลย เครื่องจะใช้ค่าที่มันถืออยู่เดิม
-    //      แทนที่จะให้แอปเดาแล้วไปเขียนทับ
-    await queueStart(serverUrl.value, deviceCode.value, target.value ?? undefined)
+    //      แทนที่จะให้แอปเดาแล้วไปเขียนทับ กรณีที่การแก้ไขจาก stepTarget() ยังค้างอยู่ก็เช่นกัน
+    //      (targetPending ไม่เป็น null): ค่าที่หน้าจอแสดง (targetShown) อาจนำหน้า target ไปแล้ว
+    //      จากการกดที่เซิร์ฟเวอร์ยังไม่ยืนยัน และ target เองก็เป็นค่าเก่าจนกว่าจะยืนยันเสร็จ
+    //      ถ้าส่งค่านี้ไปตอนนี้จะไปแข่งกับ setTarget ที่ยังค้างอยู่ และอาจทับการแก้ไขที่ค้างอยู่นั้น
+    //      เงียบๆ ทันทีที่เครื่องโพลคำสั่งเริ่มนี้
+    await queueStart(
+      serverUrl.value,
+      deviceCode.value,
+      targetPending.value !== null ? undefined : (target.value ?? undefined),
+    )
     if (disposed) return
     startPolling()
   } catch (e) {

@@ -122,16 +122,23 @@ class DeviceState:
     def fetch_desired_timings(self) -> dict | None:
         """Cycle timings the device should adopt, until COMMAND_TTL_SEC passes.
 
-        Unlike the target, nothing echoes these back — the heartbeat has no room
-        for four more fields and there is nothing useful to do with a mismatch —
-        so they expire on a clock instead of on an acknowledgement. Repeating
-        them forever would re-apply a stale edit to a controller that had since
-        been reconfigured at its own screen.
+        Nothing echoes these back — the heartbeat has no room for four more
+        fields and there is nothing useful to do with a mismatch — so a clock
+        is the only way they ever expire. The target beside it now expires on
+        that same COMMAND_TTL_SEC clock too (see fetch_desired_target), so this
+        is no longer the difference between the two: the real difference is
+        that the target also clears itself early, the moment the device's own
+        heartbeat reports the value back, while timings have no such echo and
+        always ride the clock out. Repeating a stale edit forever would
+        re-apply it to a controller that had since been reconfigured at its own
+        screen.
 
-        [TH] ต่างจากเป้าหมายจำนวนครั้ง ตรงที่ไม่มีอะไรส่งค่าเหล่านี้กลับมายืนยัน
-             สัญญาณชีพไม่มีที่ให้อีกสี่ฟิลด์ และถึงรู้ว่าไม่ตรงกันก็ทำอะไรไม่ได้
-             จึงให้หมดอายุตามเวลาแทนการรอการยืนยัน
-             ถ้าส่งซ้ำไปเรื่อยๆ ค่าที่แก้ไว้นานแล้วจะไปทับเครื่องที่ถูกตั้งค่าใหม่จากหน้าจอของตัวเองไปแล้ว
+        [TH] สัญญาณชีพไม่มีที่ให้อีกสี่ฟิลด์ และถึงรู้ว่าไม่ตรงกันก็ทำอะไรไม่ได้
+             จึงหมดอายุได้ด้วยการจับเวลาเท่านั้น เป้าหมายจำนวนครั้งที่อยู่ข้างกันตอนนี้
+             ก็หมดอายุตาม COMMAND_TTL_SEC เดียวกันนี้เช่นกัน (ดู fetch_desired_target)
+             จึงไม่ใช่จุดต่างระหว่างสองค่านี้อีกต่อไป ความต่างจริงคือเป้าหมายจะล้างตัวเองก่อนเวลาได้
+             ทันทีที่สัญญาณชีพของอุปกรณ์รายงานค่านั้นกลับมา ส่วนค่าเวลาของรอบไม่มีการยืนยันกลับแบบนั้น
+             จึงต้องรอจนหมดเวลาเสมอ ถ้าส่งซ้ำไปเรื่อยๆ ค่าที่แก้ไว้นานแล้วจะไปทับเครื่องที่ถูกตั้งค่าใหม่จากหน้าจอของตัวเองไปแล้ว
         """
         if (
             self._desired_timings is not None

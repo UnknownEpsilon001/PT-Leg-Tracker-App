@@ -65,27 +65,38 @@
 #endif
 #define BUTTON_DEBOUNCE_MS 25 // เวลากันเด้งของปุ่ม (มิลลิวินาที)
 
-// Panel lamps — 12 V, each switched by a mechanical relay off its pin. Exactly
-// one is lit at any moment:
-//   green   a session is in progress and the actuator may move — keep clear
-//   yellow  idle, or a latched FAULT; nothing is going to move on its own
-// A FAULT reads yellow because it is not running and the relays really are off.
-// The lamp answers "is it about to move", nothing else; a fault is diagnosed on
-// the CYD, the serial log and the card row.
+// Panel lamps — 12 V, each switched by a mechanical relay off its pin.
+//   green only    a session is in progress and the actuator may move — keep clear
+//   yellow only   idle; nothing is going to move on its own
+//   both lit      a latched FAULT — the relays are off, but the leg may be raised
+// Exactly one lamp is lit in both normal states, so both lit is unmistakably
+// abnormal without anything blinking. A fault used to read plain yellow, which
+// looked identical to idle; on a machine running without a CYD the panel is the
+// only indicator there is, and "ready" is the one impression it must not give
+// about a machine that faulted with the leg raised. What a fault IS is still
+// diagnosed on the CYD, the serial log and the card row — the lamps only ever
+// answer "is it about to move", plus this one exception.
 //
 // No blinking and no heartbeat, on either lamp. Each change of state is a contact
 // operation on a mechanical relay, so a 5 Hz blink is 18,000 operations an hour
-// and eats a ~100k-operation relay in a few hours of one latched fault. Solid
-// states cost four operations per session (two lamps, on and off).
-// [TH] ไฟหน้าปัด 12 โวลต์ แต่ละดวงสั่งผ่านรีเลย์ของตัวเอง ติดครั้งละดวงเดียวเสมอ
-//      เขียว = อยู่ในรอบการทำงาน ชุดขับเคลื่อนอาจเคลื่อนที่ ให้อยู่ห่างไว้
-//      เหลือง = ว่าง หรือค้างสถานะผิดพลาด จะไม่มีอะไรเคลื่อนที่เอง
-//      สถานะผิดพลาดแสดงเป็นสีเหลือง เพราะไม่ได้กำลังทำงานและรีเลย์ดับจริงๆ
-//      หลอดตอบแค่คำถามเดียวว่า "กำลังจะเคลื่อนที่ไหม" การวินิจฉัยให้ดูที่จอ พอร์ตอนุกรม และแถวข้อมูลบนการ์ด
+// and eats a ~100k-operation relay in a few hours of one latched fault. A fault
+// costs two extra contact operations over the old rule (both lamps flip instead
+// of one), not a blink, so this argument is untouched.
+// [TH] ไฟหน้าปัด 12 โวลต์ แต่ละดวงสั่งผ่านรีเลย์ของตัวเอง
+//      ติดเขียวดวงเดียว = อยู่ในรอบการทำงาน ชุดขับเคลื่อนอาจเคลื่อนที่ ให้อยู่ห่างไว้
+//      ติดเหลืองดวงเดียว = ว่าง จะไม่มีอะไรเคลื่อนที่เอง
+//      ติดทั้งสองดวง = ค้างสถานะผิดพลาด รีเลย์ดับแล้วแต่ขาอาจยังยกอยู่
+//      สถานะปกติทั้งสองจะติดดวงเดียวเสมอ การติดทั้งคู่จึงผิดปกติอย่างชัดเจนโดยไม่ต้องกะพริบ
+//      เดิมความผิดพลาดแสดงเป็นสีเหลืองเฉยๆ ซึ่งดูเหมือนสถานะว่างตามปกติ
+//      บนเครื่องที่ใช้งานโดยไม่มีจอ CYD หน้าปัดคือตัวบอกสถานะเพียงอย่างเดียวที่มี
+//      การที่ผู้ใช้อ่านว่า "พร้อมใช้งาน" บนเครื่องที่ผิดพลาดค้างอยู่โดยขายังยกอยู่
+//      คือความเข้าใจผิดเดียวที่หน้าปัดนี้ต้องไม่สร้างขึ้น
+//      รายละเอียดว่าผิดพลาดอะไรยังดูได้จากจอ CYD บันทึกทางพอร์ตอนุกรม และแถวข้อมูลบนการ์ด
 //      ห้ามกะพริบและห้ามวาบเป็นจังหวะทั้งสองดวง ทุกการเปลี่ยนสถานะคือการตัดต่อหน้าสัมผัสของรีเลย์กลไก
 //      การกะพริบ 5 ครั้งต่อวินาทีคือ 18,000 ครั้งต่อชั่วโมง
 //      กินอายุรีเลย์ที่ทนได้ราวแสนครั้งจนหมดในไม่กี่ชั่วโมงจากความผิดพลาดที่ค้างอยู่ครั้งเดียว
-//      การใช้สถานะติดค้างหรือดับสนิทเสียแค่สี่ครั้งต่อรอบ (สองดวง ติดและดับ)
+//      ความผิดพลาดหนึ่งครั้งเสียการตัดต่อหน้าสัมผัสเพิ่มสองครั้งจากกฎเดิม (ไฟติดทั้งสองดวงแทนดวงเดียว) ไม่ใช่การกะพริบ
+//      เหตุผลเรื่องอายุรีเลย์ข้างต้นจึงยังใช้ได้เหมือนเดิม
 //
 // 23 was already the status lamp. 32 is the pin the TOP limit switch freed; it is
 // not a strapping pin and does not glitch at boot the way 0/2/5/12/15 can.

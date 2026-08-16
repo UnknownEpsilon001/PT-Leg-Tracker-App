@@ -27,7 +27,11 @@ $to = Join-Path $root "pt-leg-display"
 # reaches hardware. Worse, the documented remedy (run without -Check) would have
 # copied the controller's whole state machine over the display's minimal header.
 # The one thing that must still match is the enumerator ORDER, since the wire's
-# "phase":int is that order; both copies carry a comment saying so.
+# "phase":int is that order. That is documented in a comment in BOTH copies,
+# which is the only thing holding the coupling together — this script cannot
+# enforce it, since neither file is its to sync or edit. The soft check below
+# reads both and says out loud if either comment goes missing, rather than
+# leaving a silent gap.
 # [TH] จงใจไม่ใส่ session.h ไว้ตรงนี้ ฝั่งจอใช้สำเนาแบบย่อ คือมีแต่ enum ของสถานะ
 #      เพราะบอร์ดนั้นรับหมายเลขสถานะมาทางลิงก์และไม่ได้เดินเครื่องสถานะเอง สองไฟล์จึงตั้งใจให้ต่างกัน
 #      การใส่ไว้ทำให้ -Check รายงานว่าไฟล์ไม่ตรงกันทั้งที่ยังไม่มีการแก้อะไร
@@ -35,8 +39,32 @@ $to = Join-Path $root "pt-leg-display"
 #      ซึ่งเป็นทางที่ความไม่ตรงกันจริงๆ ของ link.h จะหลุดไปถึงฮาร์ดแวร์
 #      แย่กว่านั้นคือวิธีแก้ที่เขียนไว้ (รันโดยไม่ใส่ -Check) จะเอาเครื่องสถานะทั้งหมดของคอนโทรลเลอร์
 #      ไปทับไฟล์แบบย่อของจอ สิ่งเดียวที่ยังต้องตรงกันคือลำดับของค่าใน enum
-#      เพราะ "phase":int บนสายอ้างอิงลำดับนั้นโดยตรง ทั้งสองไฟล์มีคอมเมนต์กำกับไว้แล้ว
+#      เพราะ "phase":int บนสายอ้างอิงลำดับนั้นโดยตรง เรื่องนี้ควรมีคอมเมนต์กำกับไว้ในไฟล์ทั้งสองชุด
+#      ตอนนี้มีคอมเมนต์กำกับไว้ทั้งสองไฟล์แล้ว ซึ่งเป็นสิ่งเดียวที่ยึดความสัมพันธ์นี้ไว้
+#      สคริปต์นี้บังคับให้ตรงกันไม่ได้ เพราะไม่ใช่ไฟล์ที่สคริปต์นี้ดูแลหรือแก้ได้
+#      การตรวจแบบไม่บังคับด้านล่างจะอ่านทั้งสองไฟล์แล้วบอกออกมาถ้าคอมเมนต์ใดหายไป แทนการปล่อยผ่านเงียบๆ
 $shared = @("link.h", "link.cpp", "settings.h")
+
+# Soft, informational only — never changes the exit code. -Check's exit code is
+# reserved for the byte-identical $shared files above; failing the build over a
+# missing comment in a file this script does not own and cannot fix would be a
+# gate nobody could act on without editing session.h by hand anyway.
+# [TH] เป็นแค่ข้อมูลแจ้งเตือน ไม่มีผลต่อรหัสออกของสคริปต์ รหัสออกของ -Check สงวนไว้สำหรับไฟล์ใน
+#      $shared ที่ต้องตรงกันทุกไบต์ด้านบนเท่านั้น การทำให้บิลด์ล้มเหลวเพราะคอมเมนต์ที่ขาดไปในไฟล์ที่
+#      สคริปต์นี้ไม่ได้ดูแลและแก้เองไม่ได้ จะเป็นประตูตรวจที่ไม่มีใครทำอะไรกับมันได้นอกจากไปแก้ session.h เอง
+$marker = "enumerator order"
+$ctrlSessionH = Join-Path $from "session.h"
+$dispSessionH = Join-Path $to "session.h"
+if ((Test-Path $ctrlSessionH) -and (Test-Path $dispSessionH)) {
+    $ctrlHasNote = (Select-String -Path $ctrlSessionH -Pattern $marker -SimpleMatch -Quiet)
+    $dispHasNote = (Select-String -Path $dispSessionH -Pattern $marker -SimpleMatch -Quiet)
+    if (-not $ctrlHasNote) {
+        Write-Host "NOTE: pt-leg-controller/session.h has no comment documenting that the Phase enumerator order is the wire's `"phase`":int (pt-leg-display/session.h has one)." -ForegroundColor Yellow
+    }
+    if (-not $dispHasNote) {
+        Write-Host "NOTE: pt-leg-display/session.h has no comment documenting that the Phase enumerator order is the wire's `"phase`":int." -ForegroundColor Yellow
+    }
+}
 
 $drift = @()
 foreach ($f in $shared) {

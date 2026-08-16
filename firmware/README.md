@@ -297,9 +297,10 @@ out as boxes. That is what `shot` is for.
 
 ## Shared files between the two sketches
 
-`link.h`, `link.cpp`, `session.h` and `settings.h` exist in **both** sketch
-directories because an Arduino sketch cannot include sources from outside its own
-folder. The copies in `pt-leg-controller/` are the source of truth.
+`link.h`, `link.cpp` and `settings.h` exist in **both** sketch directories
+because an Arduino sketch cannot include sources from outside its own folder,
+and `sync-shared.ps1` keeps the display's copies identical to the
+controller's, which are the source of truth.
 
 ```powershell
 .\firmware\sync-shared.ps1          # copy controller -> display
@@ -309,6 +310,16 @@ folder. The copies in `pt-leg-controller/` are the source of truth.
 Run the `-Check` form before flashing a release. Undetected drift means the UART
 `settings` message silently loses a field and the boards disagree about the
 machine's configuration.
+
+`session.h` also exists in both directories but is **not** synced by the
+script, and deliberately so: the display's copy is a reduced one — just the
+`Phase` enum, because that board receives a phase number over the link and
+never runs the state machine, so the two files are meant to differ line for
+line. The one thing that still must match between them is the enumerator
+**order**, since the wire's `"phase":int` is that order. There is no automated
+check for this — it relies on both copies documenting it in a comment, and both
+now do. `sync-shared.ps1` reads the two files and prints a note if either
+comment goes missing, which is as close to a gate as this coupling gets.
 
 ## Build
 

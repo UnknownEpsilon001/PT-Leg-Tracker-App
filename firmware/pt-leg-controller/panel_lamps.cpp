@@ -43,22 +43,28 @@ void panelLampsBegin() {
   beginLamp(PIN_LAMP_YELLOW);
   gLastGreen = gLastYellow = -1;  // force the first set to write — ให้การเรียกครั้งแรกเขียนขาเสมอ
   // Idle is the boot state, so yellow comes on and stays on. That is not a lamp
-  // test and must not become one: the machine is specified to show exactly one
-  // lamp at all times, and a green flash at power-up would read as the machine
-  // starting by itself, which is the one impression this panel must never give.
+  // test and must not become one: boot is a normal (non-fault) idle state, so it
+  // shows exactly one lamp like every other normal state, and a green flash at
+  // power-up would read as the machine starting by itself, which is the one
+  // impression this panel must never give.
   // [TH] สถานะตอนเปิดเครื่องคือว่าง ไฟเหลืองจึงติดและติดค้างไว้
   //      นี่ไม่ใช่การทดสอบหลอดและต้องไม่กลายเป็นการทดสอบหลอด
-  //      ข้อกำหนดคือให้มีไฟติดดวงเดียวตลอดเวลา
+  //      ตอนเปิดเครื่องคือสถานะว่างตามปกติ (ไม่ใช่ความผิดพลาด) จึงติดไฟดวงเดียวเหมือนสถานะปกติอื่นๆ
   //      การวาบไฟเขียวตอนเปิดเครื่องจะถูกอ่านว่าเครื่องเริ่มทำงานเอง
   //      ซึ่งเป็นความรู้สึกเดียวที่หน้าปัดนี้ต้องไม่สร้างขึ้นเลย
   panelLampsSet(false, false);
 }
 
 void panelLampsSet(bool inProgress, bool faulted) {
-  // A fault lights both. Green is still only ever on when the actuator may move,
-  // so an operator who reads nothing but the green lamp is not misled by this.
-  // [TH] ความผิดพลาดจะติดทั้งสองดวง ไฟเขียวยังคงติดเฉพาะตอนที่ชุดขับเคลื่อนอาจเคลื่อนที่ได้เท่านั้น
-  //      ผู้ใช้ที่ดูแค่ไฟเขียวจึงไม่ถูกทำให้เข้าใจผิดจากกฎนี้
+  // A fault lights both, so green no longer means "may move" on its own — it
+  // must be read together with yellow. Green-alone (yellow off) still means the
+  // actuator may move; green-with-yellow means the opposite, a latched fault
+  // with the relays off. The ambiguity is bounded to those two cases, both
+  // documented in panel_lamps.h.
+  // [TH] ความผิดพลาดจะติดทั้งสองดวง ไฟเขียวเพียงลำพังจึงไม่ได้แปลว่า "อาจเคลื่อนที่" อีกต่อไป
+  //      ต้องอ่านคู่กับไฟเหลืองเสมอ ไฟเขียวติดดวงเดียว (เหลืองดับ) ยังคงแปลว่าชุดขับเคลื่อนอาจเคลื่อนที่ได้
+  //      ส่วนไฟเขียวติดพร้อมเหลืองแปลว่าตรงข้ามกัน คือค้างสถานะผิดพลาดและรีเลย์ดับแล้ว
+  //      ความกำกวมถูกจำกัดอยู่แค่สองกรณีนี้ ซึ่งอธิบายไว้ใน panel_lamps.h
   writeLamp(PIN_LAMP_GREEN, gLastGreen, inProgress || faulted);
   writeLamp(PIN_LAMP_YELLOW, gLastYellow, !inProgress || faulted);
 }

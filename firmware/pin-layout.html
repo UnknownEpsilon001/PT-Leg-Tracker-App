@@ -689,6 +689,9 @@ a{color:var(--pad)}
   if(!leg) return;
 
   var LIFT=4, LOWER=4, HOLD=10, REST=10;      // seconds, as the firmware ships
+  // Matches LOWER_MARGIN_MS in session.cpp: slack added to a shortened
+  // safe-lower so it still reaches bottom when LOWER runs slower than LIFT.
+  var LOWER_MARGIN=0.5;                       // seconds
   /* ×10 crosses a 4 s stroke in 400 ms, which reads as a jump rather than a
      motion. ×4 is the slowest playback that still gets through a rep while
      you are looking at it. */
@@ -786,9 +789,11 @@ a{color:var(--pad)}
     else if(!on&&ticker){ clearInterval(ticker); ticker=0; }
   }
 
-  /* A timed stroke always runs its full duration — travel is no longer
-     proportional to how far the leg has to go, matching the firmware now
-     that there is no limit switch to end it early. */
+  /* A normal LIFT or LOWER always runs its full duration — travel is timed,
+     not switch-terminated, so there is nothing to end it early. A SAFE-LOWER
+     (STOP mid-stroke) is the one exception: it is shortened to match the
+     travel actually driven, the same as session.cpp's enter(SafeLower, ...).
+     See the safe-lower branch below for how. */
   function enter(ph){
     pos=posNow();
     if(phase!=='idle') sessAcc+=phaseSec();
@@ -804,7 +809,22 @@ a{color:var(--pad)}
       runBar('hold',ms);
       after(ms,function(){enter('lower');});
     }else if(ph==='lower'||ph==='safe'){
-      ms=LOWER/speed*1000;
+      var durSec=LOWER;
+      if(ph==='safe'){
+        /* pos (0..1, captured above by pos=posNow() before phase flips) is the
+           fraction of full travel the leg is actually at right now — up from a
+           partial LIFT, or still up by some fraction partway through a normal
+           LOWER. Timed travel gives the firmware no such measurement, so
+           session.cpp infers the same fraction from elapsed drive time instead
+           (dt/liftMs while lifting; the remaining dt of lowerMs while already
+           lowering) and both of its branches reduce to this one formula once
+           expressed as a fraction of travel rather than of time. A stop from
+           HOLD leaves pos===1, so this also falls out to the full LOWER on its
+           own — no separate case needed, unlike session.cpp, which cannot
+           avoid one because it has no `pos` to read. */
+        durSec=Math.min(LOWER, pos*LOWER+LOWER_MARGIN);
+      }
+      ms=durSec/speed*1000;
       moveLeg(0,ms); runBar('lower',ms);
       after(ms,function(){
         pos=0;tDur=0;

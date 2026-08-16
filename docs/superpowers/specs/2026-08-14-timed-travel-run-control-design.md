@@ -72,9 +72,15 @@ strand a session; both UIs clamp their spinboxes to 1–99.
 Deleted with the switches — `switches.cpp`, `switches.h`, `downConfirmed()`,
 `seedLegPosition()`, `liftedSinceBottom`, `strokeFresh`, `bottomWasClear`,
 `alreadyDown`, `recoveryFailed`, the net-2 "both switches pressed" fault, and
-`LIFT_COMMIT_MS`. `SafeLower` drives for `lowerMs` and always ends in `Idle`;
-there is no unconfirmed-arrival case left to re-latch a fault for, so
-`recovering` collapses to "this lowering does not report a session".
+`LIFT_COMMIT_MS`. `SafeLower` always ends in `Idle`; there is no
+unconfirmed-arrival case left to re-latch a fault for, so `recovering`
+collapses to "this lowering does not report a session". Its duration is no
+longer always the full `lowerMs`: from `Lift` it is computed from how far the
+leg actually rose — the fraction of `liftMs` driven, converted to the
+equivalent fraction of `lowerMs` — so an early stop does not spend the rest of
+`lowerMs` stalled against the bottom stop with the limb loaded. From `Hold`,
+`Fault` or `Idle` the position is either fully up or unknown by definition, so
+those keep the full stroke.
 
 `Phase` keeps all seven values. `Fault` remains reachable from the actuator
 energize cap and the UART watchdog — only the travel-timeout fault goes away.
@@ -130,11 +136,15 @@ start, and with separate pins the rule needs no knowledge of the phase.
 void statusLampsSet(bool inProgress);  // green = inProgress, yellow = !inProgress
 ```
 
-Exactly one lamp is lit at all times, including FAULT, which reads yellow
-because it is not running. Both are still written only on change — the
+Exactly one lamp is lit in both normal states (green running, yellow idle).
+FAULT is the one exception: it lights **both** lamps rather than reading as
+plain yellow, because plain yellow is indistinguishable from ordinary idle,
+and on a panel-only machine with no CYD attached the panel is the only
+indicator there is — it must not tell an operator a machine that faulted with
+the leg raised is "ready". Both are still written only on change — the
 mechanical-relay wear argument in `status_led.h` is unchanged and still forbids
-blinking. Two lamps means two contact operations per state change instead of
-one; still four per session.
+blinking; a fault costs two extra contact operations (both lamps instead of
+one), not a blink.
 
 `LED_ACTIVE_LOW` stays a single switch covering both lamps, on the assumption
 they are two channels of the same relay board.
@@ -192,7 +202,10 @@ State (`state.py`) gains a desired target set by the app and a live target
 reported by the device:
 
 - `desired_target: int | None` — set by `POST /api/sessions/target`, cleared
-  when the device acknowledges it by reporting that value in a heartbeat.
+  when the device acknowledges it by reporting that value in a heartbeat, or
+  after 30 s regardless, on the same clock as the timings below (a device on
+  a pre-target-echo image can never acknowledge, so the clock is the only exit
+  for it).
 - `live_target: int` — from the heartbeat.
 
 Endpoints:
@@ -212,10 +225,12 @@ Endpoints:
 
 - `POST /api/sessions/timings?deviceId=` — body with any subset of `liftSec`,
   `lowerSec`, `holdSec`, `restSec`, `maxTravelSec`, for the app's debug settings
-  group. Handed to the device on the same command poll. Unlike the target these
-  expire after 30 s instead of waiting for an acknowledgement, because nothing
-  echoes them back: repeating them indefinitely would let a stale edit overwrite
-  a controller that had since been reconfigured at its own screen.
+  group. Handed to the device on the same command poll. These expire after
+  30 s on the same clock as the target above, because nothing echoes them
+  back: repeating them indefinitely would let a stale edit overwrite a
+  controller that had since been reconfigured at its own screen. The target
+  additionally clears itself early on acknowledgement; timings have no such
+  echo to clear on, so the clock is their only exit.
 
 Range validation (targets 0–99, timings to the clamp table above) lives in the
 route; the controller clamps again, and only it knows the live `maxTravelSec`
@@ -228,8 +243,11 @@ that `liftSec`/`lowerSec` are bounded by.
   `getCurrent` returns `targetReps`.
 - `types`: `CurrentSession.targetReps: number`.
 - `SessionView.vue`: a rep-target stepper shown before start and while running.
-  It displays the value from `/current` — never a local copy — so a change made
-  on the CYD appears here within one poll. Progress reads `reps / target`.
+  It displays the value from `/current` — never a local copy that outlives its
+  own request — so a change made on the CYD appears here within one poll. The
+  one local value it does keep, the pending value of a tap still in flight, is
+  held only until that tap's own request resolves and is never sent on to the
+  device as if it were confirmed. Progress reads `reps / target`.
 - `SettingsView.vue`: a debug/advanced group for `liftSec`, `lowerSec`,
   `holdSec`, `restSec`, `maxTravelSec`. These are device settings, so they are
   sent to the machine, not stored in the app's own settings store.

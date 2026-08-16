@@ -117,6 +117,7 @@ static void onLinkSettings(const LinkSettings& s) {
   // sends a settings message without those keys, link.cpp decodes the absent
   // fields as 0, and clamping 0 up to the low bound would silently reconfigure
   // both strokes to one second and persist that to NVS with nothing reported.
+  // target below reuses the same INTENT but not the same trick — see there.
   // [TH] ค่าศูนย์แปลว่า "ไม่ได้ส่งฟิลด์นี้มา" ไม่ใช่ "ศูนย์วินาที"
   //      เป็นข้อตกลงเดียวกับที่ netPollCommand ใช้กับค่าเวลาจากเซิร์ฟเวอร์อยู่แล้ว
   //      และไม่มีค่าใดในกลุ่มนี้ที่ใช้ 0 ได้จริง
@@ -124,13 +125,27 @@ static void onLinkSettings(const LinkSettings& s) {
   //      จะส่งข้อความตั้งค่าที่ไม่มีคีย์เหล่านั้น link.cpp จะถอดรหัสฟิลด์ที่หายไปเป็น 0
   //      การบีบ 0 ขึ้นไปหาขอบล่างจะเปลี่ยนการเคลื่อนที่ทั้งสองทางเป็นหนึ่งวินาทีแบบเงียบๆ
   //      แล้วบันทึกลง NVS โดยไม่มีการรายงานใดๆ
+  //      target ด้านล่างใช้เจตนาเดียวกันนี้แต่ไม่ใช้กลวิธีเดียวกัน ดูที่นั่น
   d.maxTravelSec = clampSec(s.maxTravel ? s.maxTravel : gSettings.maxTravelSec, 1, 20,
                             "maxTravelSec");
   d.liftSec = clampSec(s.lift ? s.lift : gSettings.liftSec, 1, d.maxTravelSec, "liftSec");
   d.lowerSec = clampSec(s.lower ? s.lower : gSettings.lowerSec, 1, d.maxTravelSec, "lowerSec");
   d.holdSec = clampSec(s.hold ? s.hold : gSettings.holdSec, 1, 60, "holdSec");
   d.restSec = clampSec(s.rest ? s.rest : gSettings.restSec, 1, 60, "restSec");
-  d.targetReps = clampSec(s.target, 0, 99, "targetReps");
+  // Unlike the fields above, 0 is a legal target ("run until STOP"), so an
+  // absent field cannot decode to 0 and fall through a falsy check the way
+  // theirs do — that reading is indistinguishable from an operator who typed
+  // 0 on purpose. link.cpp decodes an absent field to the out-of-range
+  // LINK_TARGET_ABSENT sentinel instead; treat it the same as the others'
+  // absent case, keep the current value, before it ever reaches the clamp.
+  // [TH] ต่างจากฟิลด์ข้างบน ค่า 0 เป็นเป้าหมายที่ถูกต้อง (หมายถึง "ทำไปเรื่อยๆ จนกว่าจะกด STOP")
+  //      ฟิลด์ที่หายไปจึงถอดรหัสเป็น 0 แล้วใช้เงื่อนไขแบบ falsy check เหมือนฟิลด์อื่นไม่ได้
+  //      เพราะจะแยกไม่ออกจากผู้ใช้ที่ตั้งใจพิมพ์ 0 เอง link.cpp จึงถอดรหัสฟิลด์ที่หายไปเป็นค่า
+  //      บอกสถานะนอกช่วง LINK_TARGET_ABSENT แทน ให้จัดการเหมือนกรณี "ไม่มีอยู่" ของฟิลด์อื่น
+  //      คือคงค่าปัจจุบันไว้ ก่อนจะส่งเข้า clamp
+  d.targetReps =
+      clampSec(s.target == LINK_TARGET_ABSENT ? gSettings.targetReps : s.target, 0, 99,
+               "targetReps");
   if (gSession.running()) {
     gPending = d;
     gPendingSettings = true;
@@ -407,15 +422,18 @@ void loop() {
   // Right after the relays, and before the network work: the lamp then agrees
   // with the actuator command issued in the same iteration, and it still updates
   // on the iterations where netLoop() later blocks on an unreachable server.
-  // running() is the whole rule — true for Lift/Hold/Lower/Rest and for the
-  // safe-lower, false for Idle and for a latched Fault, which is exactly "the
-  // actuator may move" and exactly what the lamp is for.
+  // Two arguments now. running() is still "the actuator may move" — true for
+  // Lift/Hold/Lower/Rest and for the safe-lower, false for Idle and for a
+  // latched Fault. faulted() is passed alongside it so a latched Fault lights
+  // both lamps instead of reading identically to ordinary Idle, which matters
+  // on a panel-only machine with no CYD to say which one it is.
   // [TH] วางไว้ต่อจากการสั่งรีเลย์และก่อนงานเครือข่าย
   //      หลอดจะได้ตรงกับคำสั่งชุดขับเคลื่อนที่ออกไปในลูปรอบเดียวกัน
   //      และยังถูกอัปเดตในรอบที่ netLoop() ไปค้างรอเซิร์ฟเวอร์ที่ติดต่อไม่ได้ด้วย
-  //      ใช้ running() เป็นกฎทั้งหมด เป็นจริงตอนยกขึ้น/ค้าง/ลดลง/พัก และตอนลดขาเพื่อหยุด
-  //      เป็นเท็จตอนว่างและตอนค้างสถานะผิดพลาด ซึ่งตรงกับความหมาย "ชุดขับเคลื่อนอาจเคลื่อนที่" พอดี
-  //      และตรงกับหน้าที่ของหลอดพอดี
+  //      ตอนนี้รับสองอาร์กิวเมนต์ running() ยังคงหมายถึง "ชุดขับเคลื่อนอาจเคลื่อนที่"
+  //      เป็นจริงตอนยกขึ้น/ค้าง/ลดลง/พัก และตอนลดขาเพื่อหยุด เป็นเท็จตอนว่างและตอนค้างสถานะผิดพลาด
+  //      ส่วน faulted() ถูกส่งเข้าไปด้วยเพื่อให้สถานะผิดพลาดที่ค้างอยู่ติดไฟทั้งสองดวง
+  //      แทนที่จะดูเหมือนสถานะว่างตามปกติ ซึ่งสำคัญบนเครื่องที่มีแค่หน้าปัดโดยไม่มีจอ CYD บอกว่าเป็นสถานะไหน
   panelLampsSet(gSession.running(), gSession.faulted());
   // The trip raised by actuatorTick's own software check is consumed at the top of
   // the NEXT iteration, alongside the hardware timer's. Both go through the one

@@ -16,6 +16,21 @@ ArduinoJson. Malformed lines are dropped. Lines over 512 chars reset the buffer.
   is held until the session ends — the NVS commit and the Wi-Fi restart must not
   happen with a relay energized — so a SAVE during a session takes effect once
   the leg is down.
+
+  **A field this message omits means "keep whatever the controller already
+  has", not "set this to zero" — this matters because the two boards are
+  flashed separately, so a display running an image older than a given field
+  can send a `settings` message without it.** The two fields use different
+  sentinels for "absent" because they have different legal ranges:
+  - `maxtravel`, `lift`, `lower`, `hold`, `rest` — none of these has a legal
+    value of 0, so a plain `0` (or an omitted key, which ArduinoJson also
+    reads as `0`) means "absent, keep current".
+  - `target` — 0 is legal (run until STOP), so it cannot double as the
+    "absent" sentinel without losing that value. The controller instead
+    decodes an omitted key as the out-of-range value `0xFFFF`
+    (`LINK_TARGET_ABSENT` in `link.h`) and treats that as "absent, keep
+    current". A real `target` is always 0-99, so `0xFFFF` can never collide
+    with one.
 - `{"t":"target","reps":n}` — live rep-target change from the main screen.
   Applied immediately, including mid-session; the NVS write is deferred to the
   end of the session. Unlike `settings` it is never held, because that path
