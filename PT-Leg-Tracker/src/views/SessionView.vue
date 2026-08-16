@@ -6,7 +6,15 @@ import { useRouter } from 'vue-router'
 import AppIcon from '@/components/AppIcon.vue'
 import PainScale from '@/components/PainScale.vue'
 import ConfettiBurst from '@/components/ConfettiBurst.vue'
-import { DeviceError, claimSession, getCurrent, queueStart, queueStop, setTarget } from '@/lib/device'
+import {
+  DeviceError,
+  claimSession,
+  getCurrent,
+  queueStart,
+  queueStop,
+  setTarget,
+} from '@/lib/device'
+import { performTargetStep, planTargetStep } from '@/lib/target-step'
 import { usePainLogStore } from '@/stores/painlog'
 import { useProfileStore } from '@/stores/profile'
 import { useSettingsStore } from '@/stores/settings'
@@ -143,52 +151,40 @@ function failOffline() {
 //      จะไม่ถูกแสดงเลย จนกว่า start() จะส่งค่าเก่าก่อนแก้ไขกลับไปทับโดยที่ผู้ใช้ไม่รู้ตัว
 let targetOpSeq = 0 // guards against a slower earlier tap's re-read landing after a later tap's
 async function stepTarget(delta: number) {
-  // Stepped from what the stepper is showing, not from the last confirmed value,
-  // so taps made while an earlier request is still in flight accumulate instead
-  // of all landing on the same number.
-  // [TH] นับจากค่าที่ปุ่มปรับแสดงอยู่ ไม่ใช่จากค่าที่ยืนยันล่าสุด
-  //      การกดระหว่างที่คำขอก่อนหน้ายังไม่ได้คำตอบจึงสะสมกันไป ไม่ใช่ตกลงที่ตัวเลขเดียวกันหมด
-  const base = targetShown.value
-  if (base === null) return // unknown baseline: wait for a real value first
-  const next = Math.min(99, Math.max(0, base + delta))
-  if (next === base) return
+  // The decision branching (setTarget success/fail × re-read success/fail × a stale tap)
+  // lives in src/lib/target-step.ts, where it is covered by tests that do not need to mount
+  // this component. This function only owns the refs: it plans the step, shows the pending
+  // value immediately, and applies whatever outcome the module reports.
+  // [TH] เงื่อนไขการตัดสินใจ (setTarget สำเร็จ/ล้มเหลว × อ่านยืนยันสำเร็จ/ล้มเหลว × การกดที่ค้างเก่า)
+  //      อยู่ใน src/lib/target-step.ts ซึ่งมีชุดทดสอบครอบคลุมโดยไม่ต้อง mount คอมโพเนนต์นี้
+  //      ฟังก์ชันนี้ดูแลแค่ ref: วางแผนค่าที่จะขอ แสดงค่าที่ค้างอยู่ทันที แล้วนำผลลัพธ์ที่โมดูล
+  //      รายงานกลับมาไปใช้
+  const plan = planTargetStep(targetShown.value, delta)
+  if (!plan) return
   const opSeq = ++targetOpSeq
-  targetPending.value = next
-  try {
-    await setTarget(serverUrl.value, deviceCode.value, next)
-  } catch {
-    // a failed change is simply not applied; the next poll re-reads the truth
-    // [TH] ถ้าเปลี่ยนไม่สำเร็จก็ถือว่าไม่เปลี่ยน การอ่านสถานะรอบถัดไปจะดึงค่าจริงกลับมาเอง
-    if (opSeq === targetOpSeq) targetPending.value = null
-    return
-  }
-  try {
-    const cur = await getCurrent(serverUrl.value, deviceCode.value)
-    if (disposed) return
-    // A newer tap has since started its own request — let that one's result
-    // win instead of overwriting it with this now-stale read.
-    // [TH] ถ้ามีการกดครั้งใหม่กว่าเริ่มไปแล้ว ให้ผลของครั้งใหม่ชนะ ไม่เอาค่าเก่าที่เพิ่งอ่านมาทับ
-    if (opSeq !== targetOpSeq) return
-    target.value = cur.targetReps
-    targetPending.value = null
-    targetUnconfirmed.value = false
-  } catch {
-    if (disposed) return
-    if (opSeq !== targetOpSeq) return
-    // The edit reached the server (setTarget above succeeded), but the read
-    // that would confirm the new number failed. Two things are known for
-    // certain here: the server holds a newer target than we do, and we do
-    // not know what it is — the same state as "never learned a value", so
-    // it gets the same treatment: null, not a guess of `next` and not the
-    // stale pre-edit number. That is what keeps start() from sending a body
-    // and overwriting the edit that already took effect server-side.
-    // [TH] การแก้ไขถึงเซิร์ฟเวอร์แล้ว (setTarget ข้างบนสำเร็จ) แต่การอ่านยืนยันค่าใหม่ล้มเหลว
-    //      สิ่งที่รู้แน่ๆ คือเซิร์ฟเวอร์มีค่าใหม่กว่าที่เรามี และเราไม่รู้ว่าเป็นค่าอะไร เหมือนกับ
-    //      "ยังไม่เคยรู้ค่าเลย" จึงจัดการแบบเดียวกัน คือเป็น null ไม่เดาว่าเป็น next และไม่ใช้ค่าเก่า
-    //      ก่อนแก้ไข นี่คือสิ่งที่ทำให้ start() ไม่ส่งค่านี้ไปทับการแก้ไขที่สำเร็จแล้วที่เซิร์ฟเวอร์
-    target.value = null
-    targetPending.value = null
-    targetUnconfirmed.value = true
+  targetPending.value = plan.next
+  const outcome = await performTargetStep(plan.next, {
+    setTarget: (reps) => setTarget(serverUrl.value, deviceCode.value, reps),
+    getCurrent: () => getCurrent(serverUrl.value, deviceCode.value),
+    isCurrent: () => opSeq === targetOpSeq,
+    isDisposed: () => disposed,
+  })
+  switch (outcome.kind) {
+    case 'stale':
+      return
+    case 'failed':
+      targetPending.value = null
+      return
+    case 'confirmed':
+      target.value = outcome.targetReps
+      targetPending.value = null
+      targetUnconfirmed.value = false
+      return
+    case 'unconfirmed':
+      target.value = null
+      targetPending.value = null
+      targetUnconfirmed.value = true
+      return
   }
 }
 
