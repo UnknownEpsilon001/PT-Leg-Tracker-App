@@ -5,7 +5,7 @@
 """
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .service import ConflictError
 
@@ -16,12 +16,53 @@ class ClaimBody(BaseModel):
     patientCode: str
 
 
+class StartBody(BaseModel):
+    targetReps: int | None = Field(default=None, ge=0, le=99)
+
+
+class TargetBody(BaseModel):
+    targetReps: int = Field(ge=0, le=99)
+
+
 @router.post("/start", status_code=202)
-def start(request: Request, deviceId: str = "default"):
+def start(request: Request, deviceId: str = "default", body: StartBody | None = None):
     try:
-        request.app.state.service.queue_start(deviceId)
+        request.app.state.service.queue_start(
+            deviceId, target_reps=None if body is None else body.targetReps
+        )
     except ConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
+    return {"queued": True}
+
+
+@router.post("/target", status_code=202)
+def set_target(body: TargetBody, request: Request, deviceId: str = "default"):
+    request.app.state.service.set_target(body.targetReps, deviceId)
+    return {"queued": True}
+
+
+class TimingsBody(BaseModel):
+    liftSec: int | None = Field(default=None, ge=1, le=20)
+    lowerSec: int | None = Field(default=None, ge=1, le=20)
+    holdSec: int | None = Field(default=None, ge=1, le=60)
+    restSec: int | None = Field(default=None, ge=1, le=60)
+    maxTravelSec: int | None = Field(default=None, ge=1, le=20)
+
+
+@router.post("/timings", status_code=202)
+def set_timings(body: TimingsBody, request: Request, deviceId: str = "default"):
+    # Only the fields that were sent. lift/lower are bounded to 20 here because
+    # that is maxTravelSec's own ceiling; the controller clamps them again to the
+    # maxTravelSec it actually holds, which is the only place that knows it.
+    # [TH] ส่งเฉพาะฟิลด์ที่ถูกระบุมา ค่ายก/ลงจำกัดที่ 20 ตรงนี้เพราะเป็นเพดานของ maxTravelSec เอง
+    #      คอนโทรลเลอร์จะจำกัดซ้ำด้วยค่า maxTravelSec ที่ถืออยู่จริง ซึ่งเป็นที่เดียวที่รู้ค่านั้น
+    # An empty body (all fields omitted) would otherwise still queue a 30 s
+    # TTL window on the device for a change that touches nothing.
+    # [TH] เนื้อหาว่างเปล่า (ไม่ส่งฟิลด์ไหนมาเลย) ถ้าไม่กันไว้จะยังไปเปิดหน้าต่าง TTL 30 วินาที
+    #      บนอุปกรณ์สำหรับการเปลี่ยนแปลงที่ไม่แตะอะไรเลย
+    timings = body.model_dump(exclude_none=True)
+    if timings:
+        request.app.state.service.set_timings(timings, deviceId)
     return {"queued": True}
 
 

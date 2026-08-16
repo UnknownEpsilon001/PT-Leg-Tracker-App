@@ -21,7 +21,7 @@ def test_start_queues_command(clock):
     res = client.post("/api/sessions/start")
     assert res.status_code == 202
     assert res.json() == {"queued": True}
-    assert client.get("/api/device/command").json() == {"command": "start"}
+    assert client.get("/api/device/command").json()["command"] == "start"
 
 
 def test_start_conflict_while_running(clock):
@@ -41,7 +41,7 @@ def test_full_app_controlled_flow(clock):
     assert client.get("/api/sessions/current").json()["state"] == "starting"
 
     # mock firmware side: fetch command, report started, heartbeat
-    assert client.get("/api/device/command").json() == {"command": "start"}
+    assert client.get("/api/device/command").json()["command"] == "start"
     client.post("/api/device/event", json={"type": "started"})
     client.post(
         "/api/device/heartbeat", json={"state": "running", "elapsedSec": 10, "reps": 2}
@@ -55,7 +55,7 @@ def test_full_app_controlled_flow(clock):
     session_id = view["sessionId"]
 
     assert client.post("/api/sessions/stop").status_code == 202
-    assert client.get("/api/device/command").json() == {"command": "stop"}
+    assert client.get("/api/device/command").json()["command"] == "stop"
     client.post(
         "/api/device/event", json={"type": "stopped", "elapsedSec": 120, "reps": 11}
     )
@@ -84,6 +84,62 @@ def test_claim_unknown_session_404(clock):
 def test_list_requires_patient_code(clock):
     client = make_client(clock)
     assert client.get("/api/sessions").status_code == 422
+
+
+def test_post_target_returns_202_and_queues_it(clock):
+    client = make_client(clock)
+    assert client.post("/api/sessions/target", json={"targetReps": 6}).status_code == 202
+    assert client.get("/api/device/command").json()["targetReps"] == 6
+
+
+def test_post_target_is_visible_in_current_without_a_heartbeat(clock):
+    # This is the seam test_heartbeat_accepts_and_clears_a_target (in
+    # test_device_routes.py) steps around by heartbeating the echo before
+    # checking /current -- the app's re-read after POST /target runs long
+    # before any heartbeat can land, so /current has to reflect the edit on
+    # its own.
+    client = make_client(clock)
+    client.post("/api/sessions/target", json={"targetReps": 11})
+    assert client.get("/api/sessions/current").json()["targetReps"] == 11
+
+
+def test_post_target_rejects_out_of_range(clock):
+    client = make_client(clock)
+    assert client.post("/api/sessions/target", json={"targetReps": 100}).status_code == 422
+    assert client.post("/api/sessions/target", json={"targetReps": -1}).status_code == 422
+
+
+def test_start_accepts_a_target_in_the_body(clock):
+    client = make_client(clock)
+    assert client.post("/api/sessions/start", json={"targetReps": 4}).status_code == 202
+    assert client.get("/api/device/command").json()["targetReps"] == 4
+
+
+def test_start_without_a_body_still_works(clock):
+    client = make_client(clock)
+    assert client.post("/api/sessions/start").status_code == 202
+
+
+def test_post_timings_returns_202_and_reaches_the_device(clock):
+    client = make_client(clock)
+    body = {"liftSec": 3, "lowerSec": 3, "holdSec": 8, "restSec": 8, "maxTravelSec": 9}
+    assert client.post("/api/sessions/timings", json=body).status_code == 202
+    assert client.get("/api/device/command").json()["timings"] == body
+
+
+def test_post_timings_rejects_out_of_range(clock):
+    client = make_client(clock)
+    assert client.post(
+        "/api/sessions/timings", json={"liftSec": 0}
+    ).status_code == 422
+    assert client.post(
+        "/api/sessions/timings", json={"holdSec": 61}
+    ).status_code == 422
+
+
+def test_command_reports_no_timings_when_none_are_wanted(clock):
+    client = make_client(clock)
+    assert client.get("/api/device/command").json()["timings"] is None
 
 
 def test_sessions_isolated_by_device_id(clock):

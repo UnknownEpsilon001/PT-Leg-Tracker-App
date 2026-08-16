@@ -33,6 +33,7 @@ static bool uiRunning = false;
 static Phase uiPhase = Phase::Idle;
 static uint32_t uiElapsed = 0;
 static uint16_t uiReps = 0;
+static uint16_t uiTarget = 0;
 static bool uiWifi = false, uiServer = false;
 
 // Last settings the controller told us about; the settings screen pre-fills from
@@ -44,7 +45,7 @@ static bool uiWifi = false, uiServer = false;
 // [TH] ค่าตั้งค่าล่าสุดที่คอนโทรลเลอร์บอกมา ใช้เติมหน้าตั้งค่า ตั้งต้นด้วยค่าเริ่มต้นไม่ใช่ศูนย์
 //      เพราะถ้าเป็นศูนย์ LVGL จะบีบเป็น 1 และหาก SAVE ก่อนคอนโทรลเลอร์ตอบ อาจเขียนเพดานเวลา 1 วินาที
 //      ทับค่าที่ดีอยู่ ปุ่ม SAVE ถูกกั้นด้วย uiSetSettingsKnown() จนกว่าจะได้ค่าจริง
-static DeviceSettings gLast = {"", "", "", "default", 8, 10, 10};
+static DeviceSettings gLast = {"", "", "", "default", 8, 4, 4, 10, 10, 10};
 static bool gSettingsKnown = false;
 static bool gLinkUp = false;
 
@@ -91,7 +92,8 @@ static String gActiveName;
 static void pushSettingsToController(const DeviceSettings& s) {
   LinkSettings ls;
   ls.ssid = s.wifiSsid; ls.pass = s.wifiPass; ls.server = s.serverUrl; ls.code = s.deviceCode;
-  ls.maxTravel = s.maxTravelSec; ls.hold = s.holdSec; ls.rest = s.restSec;
+  ls.maxTravel = s.maxTravelSec; ls.lift = s.liftSec; ls.lower = s.lowerSec;
+  ls.hold = s.holdSec; ls.rest = s.restSec; ls.target = s.targetReps;
   gLink.sendSettings(ls);
 }
 
@@ -150,7 +152,8 @@ static void onSaveFromUi(const DeviceSettings& s) {
   gLast = s;
   LinkSettings ls;
   ls.ssid = s.wifiSsid; ls.pass = s.wifiPass; ls.server = s.serverUrl; ls.code = s.deviceCode;
-  ls.maxTravel = s.maxTravelSec; ls.hold = s.holdSec; ls.rest = s.restSec;
+  ls.maxTravel = s.maxTravelSec; ls.lift = s.liftSec; ls.lower = s.lowerSec;
+  ls.hold = s.holdSec; ls.rest = s.restSec; ls.target = s.targetReps;
   gLink.sendSettings(ls);
   uiSetDeviceCode(s.deviceCode.c_str());
 
@@ -181,7 +184,29 @@ static void onLinkSettingsReply(const LinkSettings& s) {
 
   gLast.wifiSsid = s.ssid; gLast.wifiPass = s.pass; gLast.serverUrl = s.server;
   gLast.deviceCode = s.code;
-  gLast.maxTravelSec = s.maxTravel; gLast.holdSec = s.hold; gLast.restSec = s.rest;
+  // The absent-field conventions are consumed here too, not just on the
+  // controller. link.cpp is shared, so a reply decodes exactly the same way on
+  // this board: 0 for a timing field it did not carry, LINK_TARGET_ABSENT for a
+  // target it did not carry. Assigning those raw put 0 s timings and 65535 reps
+  // into gLast, which is what the settings screen shows, what settingsFileSave
+  // writes to the card, and what pushSettingsToController sends back — and 65535
+  // reads as "absent" at the controller, so the card's real target would be
+  // silently ignored on the very push that is supposed to carry it. That is the
+  // mixed-version case the sentinel exists for, defeated on the return leg.
+  // [TH] ข้อตกลงเรื่องฟิลด์ที่ไม่ได้ส่งมาต้องถูกจัดการที่นี่ด้วย ไม่ใช่แค่ฝั่งคอนโทรลเลอร์
+  //      เพราะ link.cpp ใช้ร่วมกัน ข้อความตอบกลับจึงถอดรหัสแบบเดียวกันเป๊ะบนบอร์ดนี้
+  //      คือ 0 สำหรับฟิลด์เวลาที่ไม่ได้ส่งมา และ LINK_TARGET_ABSENT สำหรับเป้าหมายที่ไม่ได้ส่งมา
+  //      ถ้ากำหนดค่าดิบเข้าไปเลย จะได้ค่าเวลาเป็น 0 วินาทีและเป้าหมาย 65535 ครั้งลงใน gLast
+  //      ซึ่งเป็นค่าที่หน้าตั้งค่าแสดง เป็นค่าที่ settingsFileSave เขียนลงการ์ด
+  //      และเป็นค่าที่ pushSettingsToController ส่งกลับไป
+  //      แล้วค่า 65535 จะถูกคอนโทรลเลอร์อ่านว่า "ไม่มีอยู่" เป้าหมายจริงบนการ์ดจึงถูกละเลยเงียบๆ
+  //      ในการส่งครั้งที่ควรจะพามันไปพอดี ซึ่งเป็นกรณีเฟิร์มแวร์คนละรุ่นที่ค่าบอกสถานะนี้มีไว้เพื่อมันโดยตรง
+  gLast.maxTravelSec = s.maxTravel ? s.maxTravel : gLast.maxTravelSec;
+  gLast.liftSec = s.lift ? s.lift : gLast.liftSec;
+  gLast.lowerSec = s.lower ? s.lower : gLast.lowerSec;
+  gLast.holdSec = s.hold ? s.hold : gLast.holdSec;
+  gLast.restSec = s.rest ? s.rest : gLast.restSec;
+  gLast.targetReps = s.target == LINK_TARGET_ABSENT ? gLast.targetReps : s.target;
   uiSetDeviceCode(s.code.c_str());
   gSettingsKnown = true;
   uiSetSettingsKnown(true);  // the controller's real values are on screen now
@@ -225,9 +250,15 @@ static void onLinkState(const LinkState& s) {
   uiPhase = (Phase)s.phase;
   uiElapsed = s.elapsed;
   uiReps = s.reps;
+  uiTarget = s.target;
   uiWifi = s.wifi;
   uiServer = s.server;
 }
+
+// The operator's -/+ taps on the main screen go straight to the controller, live
+// — not through settings, which is deferred to the end of the session.
+// [TH] การกดปุ่ม -/+ ที่หน้าหลักส่งตรงไปคอนโทรลเลอร์ทันที ไม่ผ่านเส้นทางค่าตั้งค่าที่รอจนจบรอบ
+static void onTargetChanged(uint16_t reps) { gLink.sendTarget(reps); }
 
 void setup() {
   // [TH] เริ่มพอร์ตดีบัก, ตั้งลิงก์ UART ไปคอนโทรลเลอร์, เริ่ม UI แล้วทักทายขอค่าตั้งค่า/สถานะ
@@ -270,6 +301,7 @@ void setup() {
   uiSetCallbacks(onOpenSettings, onOpenData);
   uiSetDataCallbacks(dataCount, dataGet, dataAdd, dataSetActive);
   uiSetSettingsSaved(onSaveFromUi);
+  uiSetTargetChanged(onTargetChanged);
   Serial.printf("controller link on %s\n", LINK_OVER_USB ? "USB (bench)" : "Serial2");
 #if LINK_OVER_USB
   gLink.begin(&Serial);
@@ -307,7 +339,7 @@ void loop() {
   static uint32_t lastUi = 0, lastPing = 0, lastHello = 0;
   if (now - lastUi >= 250) {  // [TH] รีเฟรชหน้าจอ ~4 ครั้ง/วินาที
     lastUi = now;
-    uiUpdateMain(uiRunning, uiPhase, uiElapsed, uiReps, uiWifi, uiServer, gLinkUp);
+    uiUpdateMain(uiRunning, uiPhase, uiElapsed, uiReps, uiTarget, uiWifi, uiServer, gLinkUp);
   }
   if (now - lastPing >= 1000) {  // keep the controller's UART watchdog fed — ส่ง ping เลี้ยงตัวเฝ้าระวังของคอนโทรลเลอร์
     lastPing = now;

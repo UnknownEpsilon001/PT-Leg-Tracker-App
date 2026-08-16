@@ -1,6 +1,6 @@
 // สเก็ตช์หลักของบอร์ดคอนโทรลเลอร์ (ESP32) — สมองของเครื่องกายภาพบำบัดขา
-// รวมทุกโมดูล: อ่านสวิตช์ -> เดินเครื่องสถานะ -> สั่งรีเลย์ -> คุยกับเซิร์ฟเวอร์และจอ
-// Controller main sketch: switches -> state machine -> relays -> server + display.
+// รวมทุกโมดูล: อ่านปุ่ม -> เดินเครื่องสถานะ -> สั่งรีเลย์ -> คุยกับเซิร์ฟเวอร์และจอ
+// Controller main sketch: buttons -> state machine -> relays -> server + display.
 //
 // Bench aid: with no display wired the board says nothing, so panel-button
 // polarity cannot be checked. Enable per-build to print button edges, raw pin
@@ -17,9 +17,8 @@
 #include "config.h"
 #include "settings.h"
 #include "actuator.h"
-#include "switches.h"
 #include "buttons.h"
-#include "status_led.h"
+#include "panel_lamps.h"
 #include "session.h"
 #include "net.h"
 #include "link.h"
@@ -64,8 +63,9 @@ static void applySettings(const DeviceSettings& s) {
   //      ให้สูงกว่าเพดานของเครื่องสถานะเล็กน้อย เพื่อเป็นแนวป้องกันสำรอง), แล้วเริ่มเครือข่ายใหม่
   gSettings = s;
   settingsSave(gSettings);
-  gSession.cfg = {gSettings.maxTravelSec * 1000u, gSettings.holdSec * 1000u,
-                  gSettings.restSec * 1000u};
+  gSession.cfg = {gSettings.liftSec * 1000u,  gSettings.lowerSec * 1000u,
+                  gSettings.holdSec * 1000u,  gSettings.restSec * 1000u,
+                  gSettings.maxTravelSec * 1000u, gSettings.targetReps};
   actuatorSetCap(gSettings.maxTravelSec * 1000u + 500u);
   netBegin(gSettings);
 }
@@ -104,14 +104,48 @@ static uint16_t clampSec(uint16_t v, uint16_t lo, uint16_t hi, const char* name)
 //      การรอไม่ทำให้เสียอะไร ค่าที่ผู้ใช้กดบันทึกจะมีผลทันทีที่ขาลงถึงพื้น
 static bool gPendingSettings = false;
 static DeviceSettings gPending;
+static bool gTargetDirty = false;
 
 static void onLinkSettings(const LinkSettings& s) {
   DeviceSettings d;
   d.wifiSsid = s.ssid; d.wifiPass = s.pass; d.serverUrl = s.server;
   d.deviceCode = s.code;
-  d.maxTravelSec = clampSec(s.maxTravel, 1, 20, "maxTravelSec");
-  d.holdSec = clampSec(s.hold, 1, 60, "holdSec");
-  d.restSec = clampSec(s.rest, 1, 60, "restSec");
+  // A zero means "this field was not sent", not "zero seconds" — the same
+  // convention netPollCommand already uses for the server's timings, and none of
+  // these has a legal value of 0. It matters because the boards are flashed
+  // separately: a display still running an image from before lift/lower existed
+  // sends a settings message without those keys, link.cpp decodes the absent
+  // fields as 0, and clamping 0 up to the low bound would silently reconfigure
+  // both strokes to one second and persist that to NVS with nothing reported.
+  // target below reuses the same INTENT but not the same trick — see there.
+  // [TH] ค่าศูนย์แปลว่า "ไม่ได้ส่งฟิลด์นี้มา" ไม่ใช่ "ศูนย์วินาที"
+  //      เป็นข้อตกลงเดียวกับที่ netPollCommand ใช้กับค่าเวลาจากเซิร์ฟเวอร์อยู่แล้ว
+  //      และไม่มีค่าใดในกลุ่มนี้ที่ใช้ 0 ได้จริง
+  //      เรื่องนี้สำคัญเพราะบอร์ดสองใบแฟลชแยกกัน จอที่ยังใช้เฟิร์มแวร์รุ่นก่อนจะมี lift/lower
+  //      จะส่งข้อความตั้งค่าที่ไม่มีคีย์เหล่านั้น link.cpp จะถอดรหัสฟิลด์ที่หายไปเป็น 0
+  //      การบีบ 0 ขึ้นไปหาขอบล่างจะเปลี่ยนการเคลื่อนที่ทั้งสองทางเป็นหนึ่งวินาทีแบบเงียบๆ
+  //      แล้วบันทึกลง NVS โดยไม่มีการรายงานใดๆ
+  //      target ด้านล่างใช้เจตนาเดียวกันนี้แต่ไม่ใช้กลวิธีเดียวกัน ดูที่นั่น
+  d.maxTravelSec = clampSec(s.maxTravel ? s.maxTravel : gSettings.maxTravelSec, 1, 20,
+                            "maxTravelSec");
+  d.liftSec = clampSec(s.lift ? s.lift : gSettings.liftSec, 1, d.maxTravelSec, "liftSec");
+  d.lowerSec = clampSec(s.lower ? s.lower : gSettings.lowerSec, 1, d.maxTravelSec, "lowerSec");
+  d.holdSec = clampSec(s.hold ? s.hold : gSettings.holdSec, 1, 60, "holdSec");
+  d.restSec = clampSec(s.rest ? s.rest : gSettings.restSec, 1, 60, "restSec");
+  // Unlike the fields above, 0 is a legal target ("run until STOP"), so an
+  // absent field cannot decode to 0 and fall through a falsy check the way
+  // theirs do — that reading is indistinguishable from an operator who typed
+  // 0 on purpose. link.cpp decodes an absent field to the out-of-range
+  // LINK_TARGET_ABSENT sentinel instead; treat it the same as the others'
+  // absent case, keep the current value, before it ever reaches the clamp.
+  // [TH] ต่างจากฟิลด์ข้างบน ค่า 0 เป็นเป้าหมายที่ถูกต้อง (หมายถึง "ทำไปเรื่อยๆ จนกว่าจะกด STOP")
+  //      ฟิลด์ที่หายไปจึงถอดรหัสเป็น 0 แล้วใช้เงื่อนไขแบบ falsy check เหมือนฟิลด์อื่นไม่ได้
+  //      เพราะจะแยกไม่ออกจากผู้ใช้ที่ตั้งใจพิมพ์ 0 เอง link.cpp จึงถอดรหัสฟิลด์ที่หายไปเป็นค่า
+  //      บอกสถานะนอกช่วง LINK_TARGET_ABSENT แทน ให้จัดการเหมือนกรณี "ไม่มีอยู่" ของฟิลด์อื่น
+  //      คือคงค่าปัจจุบันไว้ ก่อนจะส่งเข้า clamp
+  d.targetReps =
+      clampSec(s.target == LINK_TARGET_ABSENT ? gSettings.targetReps : s.target, 0, 99,
+               "targetReps");
   if (gSession.running()) {
     gPending = d;
     gPendingSettings = true;
@@ -130,7 +164,8 @@ static void onLinkSettings(const LinkSettings& s) {
     LinkSettings held;
     held.ssid = d.wifiSsid; held.pass = d.wifiPass; held.server = d.serverUrl;
     held.code = d.deviceCode;
-    held.maxTravel = d.maxTravelSec; held.hold = d.holdSec; held.rest = d.restSec;
+    held.maxTravel = d.maxTravelSec; held.lift = d.liftSec; held.lower = d.lowerSec;
+    held.hold = d.holdSec; held.rest = d.restSec; held.target = d.targetReps;
     gLink.sendSettings(held);
     return;
   }
@@ -141,21 +176,71 @@ static void onLinkSettings(const LinkSettings& s) {
   //      ทั้งสองมาถึงในลูปรอบเดียวกันได้ตอนที่รอบทำงานจบพอดี
   //      poll() จะนำค่านี้ไปใช้ แล้วบล็อกที่รออยู่ด้านล่างจะเขียนทับด้วยค่าเก่ากว่าและบันทึกค่านั้นแทน
   gPendingSettings = false;
+  // Same collision as the held branch above, but on the idle path applySettings
+  // writes straight into gSettings instead of into gPending, so there is no later
+  // commit point to fold the live value into — it has to happen right here, before
+  // the write. gLink.poll() can dispatch several messages from one UART drain, so
+  // a target-dial message and this settings message can both land in the same
+  // call: if the target one was dispatched first, gTargetDirty is already true and
+  // gSettings.targetReps already holds the newer value by the time this runs.
+  // d.targetReps only knows what THIS settings message's own field said, which can
+  // be an arbitrarily old snapshot — e.g. a settings screen opened before the
+  // operator ever touched the target dial — regardless of which message the UART
+  // happened to deliver last. A live target is the one unambiguous signal of
+  // current intent, so it wins over a bundled settings field whenever one is
+  // outstanding; when none is outstanding (gTargetDirty false) this changes
+  // nothing and the settings message's own target applies exactly as before.
+  // [TH] ชนกันแบบเดียวกับบล็อกที่พักไว้ด้านบน แต่บนเส้นทางที่เครื่องว่าง applySettings
+  //      เขียนลง gSettings ตรงๆ ไม่ผ่าน gPending จึงไม่มีจุดค่อยรวมค่าทีหลัง ต้องทำตรงนี้ก่อนเขียน
+  //      gLink.poll() ดึงข้อความได้หลายฉบับต่อการเรียกหนึ่งครั้ง ข้อความปรับเป้าหมายแบบสด
+  //      กับข้อความตั้งค่านี้จึงมาถึงในการเรียกเดียวกันได้ ถ้าข้อความเป้าหมายมาก่อน
+  //      gTargetDirty จะเป็นจริงแล้วและ gSettings.targetReps ก็มีค่าใหม่อยู่แล้วตอนโค้ดนี้ทำงาน
+  //      ส่วน d.targetReps รู้แค่ค่าที่ข้อความตั้งค่าฉบับนี้บอกมา ซึ่งอาจเป็นภาพเก่าแค่ไหนก็ได้
+  //      เช่นหน้าตั้งค่าที่เปิดค้างไว้ก่อนผู้ใช้จะไปหมุนปุ่มเป้าหมาย ไม่ว่า UART จะส่งฉบับไหนถึงทีหลัง
+  //      ค่าเป้าหมายแบบสดคือสัญญาณเดียวที่ชัดเจนว่าเป็นความตั้งใจล่าสุด จึงชนะฟิลด์ที่แนบมากับ
+  //      ข้อความตั้งค่าทุกครั้งที่มีค่าค้างอยู่ ถ้าไม่มีค้าง (gTargetDirty เป็นเท็จ) ก็ไม่เปลี่ยนอะไร
+  //      ค่าเป้าหมายของข้อความตั้งค่าเองก็มีผลตามปกติ
+  if (gTargetDirty) {
+    d.targetReps = gSettings.targetReps;
+    gTargetDirty = false;
+  }
   applySettings(d);
   gLink.sendSettings(currentAsLink());
 }
 
-static LinkSettings currentAsLink() {
+// Shared by currentAsLink() (the settings device is actually running on) and
+// the timings change-guard below (which also needs to render gPending, the
+// edit held during a session, in the same shape to compare against it).
+// [TH] ใช้ร่วมกันระหว่าง currentAsLink() (ค่าตั้งค่าที่เครื่องใช้งานอยู่จริง)
+//      กับตัวป้องกันการใช้ค่าเวลาซ้ำด้านล่าง ซึ่งต้องแปลง gPending
+//      (ค่าที่แก้ไขค้างไว้ระหว่างรอบทำงาน) ให้อยู่ในรูปแบบเดียวกันเพื่อเทียบกัน
+static LinkSettings toLink(const DeviceSettings& d) {
   LinkSettings s;
-  s.ssid = gSettings.wifiSsid; s.pass = gSettings.wifiPass;
-  s.server = gSettings.serverUrl; s.code = gSettings.deviceCode;
-  s.maxTravel = gSettings.maxTravelSec; s.hold = gSettings.holdSec;
-  s.rest = gSettings.restSec;
+  s.ssid = d.wifiSsid; s.pass = d.wifiPass;
+  s.server = d.serverUrl; s.code = d.deviceCode;
+  s.maxTravel = d.maxTravelSec; s.hold = d.holdSec;
+  s.rest = d.restSec;
+  s.lift = d.liftSec; s.lower = d.lowerSec; s.target = d.targetReps;
   return s;
 }
 
+static LinkSettings currentAsLink() { return toLink(gSettings); }
+
 // [TH] เมื่อจอทักทาย (hello) ให้ส่งค่าตั้งค่าปัจจุบันกลับไป
 static void onLinkHello() { gLink.sendSettings(currentAsLink()); }
+
+// A live target change from the CYD. Applied at once, including mid-session, and
+// remembered so the next NVS write carries it — the settings path is deferred
+// until the session ends and this cannot wait for that.
+// [TH] การเปลี่ยนเป้าหมายจากจอแบบสด นำไปใช้ทันทีรวมถึงตอนกลางรอบ
+//      และจำไว้เพื่อให้การบันทึก NVS ครั้งถัดไปเก็บค่านี้ไปด้วย
+//      เพราะเส้นทาง settings ถูกเลื่อนไปจนกว่ารอบจะจบ ซึ่งค่านี้รอไม่ได้
+static void onLinkTarget(uint16_t reps) {
+  if (reps > 99) reps = 99;
+  gSettings.targetReps = reps;
+  gSession.setTarget(reps);
+  gTargetDirty = true;
+}
 
 #if BENCH_DEBUG
 static const char* phaseName(Phase p) {
@@ -189,39 +274,20 @@ static const char* levelName(int level, bool nc) {
 // [TH] พิมพ์เฉพาะตอนค่าเปลี่ยน เพราะลูปเดินเร็วมาก ถ้าพิมพ์ทุกลูปจะท่วมจนหาบรรทัดที่ต้องการไม่เจอ
 //      พิมพ์ค่าดิบของขาคู่กับขอบที่ผ่านกันเด้งแล้ว เพราะกำลังตรวจขั้ว: ขา NC ที่ไม่ได้ต่อจะลอยเป็น HIGH
 //      ซึ่งอ่านได้เหมือนกดค้าง จะเห็นชัดก็ต่อเมื่อดูค่าดิบ
-// `runWouldStart` is what the RUN edge was about to mean, sampled by the caller
-// before the state machine acted on it. Printing the meaning and not just the pin
-// is the whole point on a toggle: "EDGE RUN" alone cannot be checked against the
-// machine's response.
-// [TH] ค่า runWouldStart คือความหมายของการกด RUN ครั้งนั้น ผู้เรียกอ่านไว้ก่อนที่เครื่องสถานะจะทำงาน
-//      บนปุ่มสลับ การพิมพ์ความหมายไม่ใช่แค่ชื่อขาคือประเด็นทั้งหมด
-//      เพราะคำว่า "EDGE RUN" เฉยๆ เอาไปเทียบกับสิ่งที่เครื่องตอบสนองไม่ได้
-static void debugTick(uint32_t nowMs, bool runEdge, bool runWouldStart, bool runFromIsr,
-                      bool resetEdge) {
+static void debugTick(uint32_t nowMs, bool startEdge, bool stopEdge) {
   static bool firstRun = true;
-  static int lvRun = -1, lvReset = -1;
-  static bool lastTop = false, lastBot = false;
+  static int lvStart = -1, lvStop = -1;
   static Phase lastPhase = Phase::Idle;
   static uint16_t lastReps = 0;
 
-  if (runEdge)
-    Serial.printf("[dbg %lu] EDGE RUN (%s, %s)\n", (unsigned long)nowMs,
-                  runWouldStart ? "would START" : "would STOP/LOWER",
-                  runFromIsr ? "latched" : "polled");
-  if (resetEdge) Serial.printf("[dbg %lu] EDGE RESET\n", (unsigned long)nowMs);
+  if (startEdge) Serial.printf("[dbg %lu] EDGE START\n", (unsigned long)nowMs);
+  if (stopEdge) Serial.printf("[dbg %lu] EDGE STOP\n", (unsigned long)nowMs);
 
-  int s = digitalRead(PIN_BTN_RUN), r = digitalRead(PIN_BTN_RESET);
-  if (firstRun || s != lvRun || r != lvReset) {
-    lvRun = s; lvReset = r;
-    Serial.printf("[dbg %lu] btn levels run=%s reset=%s\n", (unsigned long)nowMs,
-                  levelName(s, BTN_RUN_NC), levelName(r, BTN_RESET_NC));
-  }
-
-  bool top = switchTop(), bot = switchBottom();
-  if (firstRun || top != lastTop || bot != lastBot) {
-    lastTop = top; lastBot = bot;
-    Serial.printf("[dbg %lu] limits top=%s bottom=%s\n", (unsigned long)nowMs,
-                  top ? "AT-LIMIT" : "clear", bot ? "AT-LIMIT" : "clear");
+  int s = digitalRead(PIN_BTN_START), t = digitalRead(PIN_BTN_STOP);
+  if (firstRun || s != lvStart || t != lvStop) {
+    lvStart = s; lvStop = t;
+    Serial.printf("[dbg %lu] btn levels start=%s stop=%s\n", (unsigned long)nowMs,
+                  levelName(s, BTN_START_NC), levelName(t, BTN_STOP_NC));
   }
 
   // The clock is printed only when it crosses into "known", which is the moment
@@ -237,12 +303,12 @@ static void debugTick(uint32_t nowMs, bool runEdge, bool runWouldStart, bool run
                   rtcPresent() ? "found" : "ABSENT", (unsigned long)epoch);
   }
 
-  // A press always reprints the state, even when nothing moved. RESET pressed on
+  // A press always reprints the state, even when nothing moved. STOP pressed on
   // an already-clear session changes neither phase nor reps, and a change-only
   // print would leave the press looking like it did nothing at all.
-  // [TH] ทุกครั้งที่กดปุ่มจะพิมพ์สถานะซ้ำเสมอ แม้ค่าไม่เปลี่ยน เพราะกด RESET ตอนที่ค่าเป็นศูนย์อยู่แล้ว
+  // [TH] ทุกครั้งที่กดปุ่มจะพิมพ์สถานะซ้ำเสมอ แม้ค่าไม่เปลี่ยน เพราะกด STOP ตอนที่ค่าเป็นศูนย์อยู่แล้ว
   //      จะไม่มีอะไรเปลี่ยน ถ้าพิมพ์เฉพาะตอนเปลี่ยนจะดูเหมือนการกดไม่มีผล
-  bool pressed = runEdge || resetEdge;
+  bool pressed = startEdge || stopEdge;
   if (firstRun || pressed || gSession.phase() != lastPhase || gSession.reps() != lastReps) {
     lastPhase = gSession.phase();
     lastReps = gSession.reps();
@@ -256,29 +322,17 @@ static void debugTick(uint32_t nowMs, bool runEdge, bool runWouldStart, bool run
 
 void setup() {
   actuatorBegin();  // safety first — ดับรีเลย์ก่อนเป็นอันดับแรกเพื่อความปลอดภัย
-  switchesBegin();
   buttonsBegin();
-  statusLedBegin();  // lamp dark before anything can drive it — ให้หลอดดับไว้ก่อนที่อะไรจะมาสั่งได้
+  panelLampsBegin();  // lamps dark before anything can drive them — ให้หลอดดับไว้ก่อนที่อะไรจะมาสั่งได้
   rtcBegin();  // absent chip is fine: epochs just read 0 — ไม่มีชิปก็ไม่เป็นไร เวลาจะเป็น 0
   Serial.begin(115200);
   delay(200);  // let UART0 settle so the boot banner is not clipped — รอ UART0 นิ่งกันข้อความต้นเปิดเครื่องขาด
   Serial2.begin(115200, SERIAL_8N1, 16, 17);  // UART to CYD — สาย UART ไปบอร์ดจอ (RX=16, TX=17)
-  // Where the leg actually is, before anything can be commanded. The debounce
-  // needs two samples 25 ms apart, so it is polled until it settles. A board that
-  // boots after a power cut mid-lift has the leg in the air, and without this it
-  // would believe otherwise and refuse to lower it — the one state with no way
-  // down.
-  // [TH] ตำแหน่งจริงของขา ก่อนที่จะสั่งอะไรได้
-  //      กลไกกันเด้งต้องอ่านสองครั้งห่างกัน 25 มิลลิวินาที จึงอ่านวนจนค่านิ่ง
-  //      บอร์ดที่เปิดขึ้นมาหลังไฟดับกลางจังหวะยกขาจะมีขาค้างอยู่กลางอากาศ
-  //      ถ้าไม่ทำแบบนี้ เครื่องจะเชื่อเป็นอย่างอื่นและไม่ยอมลดขาลง ซึ่งเป็นสถานะเดียวที่ไม่มีทางเอาขาลง
-  for (uint32_t t0 = millis(); millis() - t0 < 60;) switchesPoll(millis());
-  gSession.seedLegPosition(switchBottom(), switchTop());
-  Serial.printf("leg at boot: top=%d bottom=%d\n", switchTop() ? 1 : 0, switchBottom() ? 1 : 0);
 
   settingsLoad(gSettings);
-  gSession.cfg = {gSettings.maxTravelSec * 1000u, gSettings.holdSec * 1000u,
-                  gSettings.restSec * 1000u};
+  gSession.cfg = {gSettings.liftSec * 1000u,  gSettings.lowerSec * 1000u,
+                  gSettings.holdSec * 1000u,  gSettings.restSec * 1000u,
+                  gSettings.maxTravelSec * 1000u, gSettings.targetReps};
   actuatorSetCap(gSettings.maxTravelSec * 1000u + 500u);
   netBegin(gSettings);
   // UTC, no DST rule: every epoch on the wire is UTC and the CYD adds the Thai
@@ -291,30 +345,25 @@ void setup() {
   gLink.begin(&Serial2);
   gLink.onSettings = onLinkSettings;
   gLink.onHello = onLinkHello;
-  Serial.printf("pt-leg-controller %s ssid=%s server=%s code=%s cycle max/hold/rest=%u/%u/%u\n",
+  gLink.onTarget = onLinkTarget;
+  Serial.printf("pt-leg-controller %s ssid=%s server=%s code=%s cycle lift/hold/lower/rest=%u/%u/%u/%u target=%u\n",
                 FW_VERSION, gSettings.wifiSsid.c_str(), gSettings.serverUrl.c_str(),
-                gSettings.deviceCode.c_str(), gSettings.maxTravelSec, gSettings.holdSec,
-                gSettings.restSec);
+                gSettings.deviceCode.c_str(), gSettings.liftSec, gSettings.holdSec,
+                gSettings.lowerSec, gSettings.restSec, gSettings.targetReps);
 #if BENCH_DEBUG
   // ASCII only: an em dash here reaches a serial monitor as mojibake.
-  Serial.printf("debug prints ON - btn run=%d(%s) reset=%d(%s), led=%d, limits=%s\n",
-                PIN_BTN_RUN, BTN_RUN_NC ? "NC" : "NO",
-                PIN_BTN_RESET, BTN_RESET_NC ? "NC" : "NO",
-                PIN_STATUS_LED,
-#ifdef SWITCH_NC
-                "NC");
-#else
-                "NO");
-#endif
+  Serial.printf("debug prints ON - btn start=%d(%s) stop=%d(%s), lamps green=%d yellow=%d\n",
+                PIN_BTN_START, BTN_START_NC ? "NC" : "NO",
+                PIN_BTN_STOP, BTN_STOP_NC ? "NC" : "NO",
+                PIN_LAMP_GREEN, PIN_LAMP_YELLOW);
 #endif
 }
 
 void loop() {
-  // [TH] ลำดับสำคัญ: อ่านสวิตช์ -> เดินเครื่องสถานะ -> สั่งรีเลย์ -> ตรวจเพดานเวลา ก่อนงานเครือข่าย
+  // [TH] ลำดับสำคัญ: อ่านปุ่ม -> เดินเครื่องสถานะ -> สั่งรีเลย์ -> ตรวจเพดานเวลา ก่อนงานเครือข่าย
   uint32_t now = millis();
-  switchesPoll(now);
   buttonsPoll(now);
-  gSession.tick(now, switchTop(), switchBottom());
+  gSession.tick(now);
 
   // The energize cap is charged to the stroke that was actually driving, which
   // means consuming it BEFORE the buttons can start a new session. A long loop
@@ -339,80 +388,53 @@ void loop() {
   //      การลดขาครั้งนั้นมีเพดานเวลาของตัวเองคุมอยู่แล้ว
   if (actuatorTakeCapTrip()) {
     Serial.println("actuator: energize cap opened the relays");
+    // Swallowed here does not mean ignored: a trip that lands mid-SafeLower is
+    // real even though forceFault() is skipped for it (see the comment above),
+    // and a start queued behind that descent must not lift the instant the
+    // descent's timer runs out — the cap may have tripped because the descent
+    // itself is in trouble.
+    // [TH] การกลืนตรงนี้ไม่ได้แปลว่าเพิกเฉย การตัดที่เกิดกลางสถานะลดขาเพื่อหยุดเป็นเรื่องจริง
+    //      แม้จะข้าม forceFault() ไปสำหรับกรณีนี้ (ดูคอมเมนต์ด้านบน)
+    //      คำสั่งเริ่มที่เข้าคิวรออยู่หลังการลดขานั้นต้องไม่ยกขึ้นทันทีที่ตัวจับเวลาของการลดขาหมดเวลา
+    //      เพราะเพดานอาจถูกชนเนื่องจากการลดขาเองกำลังมีปัญหา
     if (gSession.phase() != Phase::SafeLower) gSession.forceFault(now);
+    else gSession.cancelQueuedStart();
   }
 
-  // panel buttons: RUN (a toggle — starts from Idle with the leg down, and stops
-  // or lowers in every other state, including a latched Fault) and RESET (only
-  // when not running, and from a Fault it lowers on the way to Idle).
-  // Read both first: each accessor clears its edge, so the debug build has to see
-  // the same values this loop acts on.
-  // [TH] ปุ่มหน้าปัด: RUN เป็นปุ่มสลับ เริ่มรอบตอนว่างและขาอยู่ล่างสุด
-  //      นอกนั้นคือหยุดหรือลดขา รวมถึงตอนที่ค้างสถานะผิดพลาด
-  //      ส่วน RESET ใช้ได้เฉพาะตอนไม่ได้ทำงาน และถ้าอยู่ในสถานะผิดพลาดจะลดขาลงระหว่างทางกลับสู่สถานะว่าง
+  // panel buttons: START begins a session, STOP ends one — and when the machine is
+  // already idle, STOP clears the rep count. Read both first: each accessor clears
+  // its edge, so the debug build has to see the same values this loop acts on.
+  // [TH] ปุ่มหน้าปัด: START เริ่มรอบ STOP จบรอบ และถ้าเครื่องว่างอยู่แล้ว STOP จะล้างจำนวนครั้ง
   //      อ่านทั้งสองก่อน เพราะการอ่านจะล้างขอบทิ้ง โหมดดีบักต้องเห็นค่าชุดเดียวกับที่ลูปใช้
-  bool runFromIsr = false;
-  bool pressRun = buttonRunPressed(&runFromIsr);
-  bool pressReset = buttonResetPressed();
-  // Both refusals apply to the STARTING half of the toggle only. A stop must never
-  // be blocked by anything, so every rejected press below still falls through to
-  // nothing rather than to a different action, and a press that means "stop" skips
-  // these tests entirely.
-  //
-  // 1. A press the interrupt latched, rather than one the polling saw, may not
-  //    start a session. The latch can turn an electrical transient into a
-  //    full-width press (buttons.h explains why), and a self-start lifts a
-  //    patient's leg with nobody at the panel. Judged here and not when the latch
-  //    fires, because tick() runs between buttonsPoll() and this line: a
-  //    safe-lower that reaches the bottom in that gap flips the phase to Idle, and
-  //    a press latched while the machine was still moving would arrive as a start.
-  // 2. A start is refused while the RUN line looks broken. On an NC button an open
-  //    circuit reads pressed forever, which means RUN can never raise another edge
-  //    — the session would run with no way to stop it from the panel, on a machine
-  //    where the panel is the primary stop. Better to not start at all.
-  // [TH] การปฏิเสธทั้งสองข้อใช้กับ "ฝั่งที่เป็นการเริ่ม" ของปุ่มสลับเท่านั้น
-  //      การสั่งหยุดต้องไม่ถูกขวางด้วยอะไรทั้งสิ้น การกดที่ถูกปฏิเสธด้านล่างจึงกลายเป็นไม่ทำอะไร
-  //      ไม่ใช่ไปทำอย่างอื่น และการกดที่หมายถึงการหยุดจะข้ามการตรวจเหล่านี้ไปทั้งหมด
-  //      1. การกดที่อินเทอร์รัปต์จับค้างไว้ ไม่ใช่การกดที่การอ่านตามรอบเห็นเอง จะเริ่มรอบไม่ได้
-  //         กลไกจับค้างอาจเปลี่ยนสัญญาณรบกวนทางไฟฟ้าให้เป็นการกดเต็มเกณฑ์ได้ (buttons.h อธิบายเหตุผลไว้)
-  //         และการเริ่มทำงานเองคือการยกขาผู้ป่วยโดยไม่มีใครอยู่ที่หน้าปัด
-  //         ตัดสินตรงนี้ ไม่ใช่ตอนที่กลไกจับค้างทำงาน เพราะ tick() ทำงานคั่นระหว่าง buttonsPoll() กับบรรทัดนี้
-  //         การลดขาเพื่อหยุดที่ถึงพื้นพอดีในช่วงนั้นจะพลิกสถานะเป็นว่าง
-  //         การกดที่ถูกจับค้างไว้ตอนที่เครื่องยังเคลื่อนที่อยู่ก็จะมาถึงในฐานะการเริ่มรอบ
-  //      2. ไม่ให้เริ่มรอบถ้าสาย RUN ดูเหมือนขาด ปุ่มแบบปกติปิดที่วงจรเปิดจะอ่านได้ว่ากดค้างตลอด
-  //         แปลว่าปุ่ม RUN จะไม่มีวันเกิดขอบสัญญาณอีก รอบนั้นจะเดินโดยไม่มีทางหยุดจากหน้าปัดได้เลย
-  //         บนเครื่องที่ใช้หน้าปัดเป็นตัวหยุดหลัก ไม่เริ่มเลยดีกว่า
-  // Sampled once, before anything acts on it: toggle() changes the phase, so a
-  // second call would answer about the state the press produced rather than the
-  // state it was judged against — and the debug print below needs the same value
-  // this block used.
-  // [TH] อ่านครั้งเดียวก่อนที่จะมีอะไรไปทำตาม เพราะ toggle() เปลี่ยนสถานะ
-  //      ถ้าเรียกซ้ำจะได้คำตอบของสถานะที่การกดนั้นสร้างขึ้น ไม่ใช่สถานะที่ใช้ตัดสินการกด
-  //      และการพิมพ์ดีบักด้านล่างต้องใช้ค่าเดียวกับที่บล็อกนี้ใช้
-  bool runWouldStart = gSession.toggleWouldStart();
-  if (pressRun && runWouldStart && runFromIsr) {
-    Serial.println("start ignored: latched RUN press, not a polled one");
-  } else if (pressRun && runWouldStart && buttonRunWireSuspect()) {
-    Serial.println("start refused: RUN has read pressed since power-up, check its wiring");
-  } else if (pressRun) {
-    gSession.toggle(now);
-  }
-  if (pressReset) gSession.reset(now);
+  bool pressStart = buttonStartPressed();
+  bool pressStop = buttonStopPressed();
+  // A start is refused while the START line looks shorted: it would restart the
+  // machine at the end of every session with nobody at the panel. A stop is never
+  // refused by anything.
+  // [TH] ไม่ให้เริ่มรอบถ้าสาย START ดูเหมือนลัดวงจร เพราะจะทำให้เครื่องเริ่มใหม่ทุกครั้งที่รอบจบ
+  //      โดยไม่มีใครอยู่ที่หน้าปัด ส่วนการสั่งหยุดไม่เคยถูกปฏิเสธด้วยอะไรทั้งสิ้น
+  if (pressStart && buttonStartStuck())
+    Serial.println("start refused: START reads pressed, check its wiring");
+  else if (pressStart) gSession.start(now);
+  if (pressStop) gSession.requestStop(now);
   applyActuator();
   actuatorTick(now);
   // Right after the relays, and before the network work: the lamp then agrees
   // with the actuator command issued in the same iteration, and it still updates
   // on the iterations where netLoop() later blocks on an unreachable server.
-  // running() is the whole rule — true for Lift/Hold/Lower/Rest and for the
-  // safe-lower, false for Idle and for a latched Fault, which is exactly "the
-  // actuator may move" and exactly what the lamp is for.
+  // Two arguments now. running() is still "the actuator may move" — true for
+  // Lift/Hold/Lower/Rest and for the safe-lower, false for Idle and for a
+  // latched Fault. faulted() is passed alongside it so a latched Fault lights
+  // both lamps instead of reading identically to ordinary Idle, which matters
+  // on a panel-only machine with no CYD to say which one it is.
   // [TH] วางไว้ต่อจากการสั่งรีเลย์และก่อนงานเครือข่าย
   //      หลอดจะได้ตรงกับคำสั่งชุดขับเคลื่อนที่ออกไปในลูปรอบเดียวกัน
   //      และยังถูกอัปเดตในรอบที่ netLoop() ไปค้างรอเซิร์ฟเวอร์ที่ติดต่อไม่ได้ด้วย
-  //      ใช้ running() เป็นกฎทั้งหมด เป็นจริงตอนยกขึ้น/ค้าง/ลดลง/พัก และตอนลดขาเพื่อหยุด
-  //      เป็นเท็จตอนว่างและตอนค้างสถานะผิดพลาด ซึ่งตรงกับความหมาย "ชุดขับเคลื่อนอาจเคลื่อนที่" พอดี
-  //      และตรงกับหน้าที่ของหลอดพอดี
-  statusLedSet(gSession.running());
+  //      ตอนนี้รับสองอาร์กิวเมนต์ running() ยังคงหมายถึง "ชุดขับเคลื่อนอาจเคลื่อนที่"
+  //      เป็นจริงตอนยกขึ้น/ค้าง/ลดลง/พัก และตอนลดขาเพื่อหยุด เป็นเท็จตอนว่างและตอนค้างสถานะผิดพลาด
+  //      ส่วน faulted() ถูกส่งเข้าไปด้วยเพื่อให้สถานะผิดพลาดที่ค้างอยู่ติดไฟทั้งสองดวง
+  //      แทนที่จะดูเหมือนสถานะว่างตามปกติ ซึ่งสำคัญบนเครื่องที่มีแค่หน้าปัดโดยไม่มีจอ CYD บอกว่าเป็นสถานะไหน
+  panelLampsSet(gSession.running(), gSession.faulted());
   // The trip raised by actuatorTick's own software check is consumed at the top of
   // the NEXT iteration, alongside the hardware timer's. Both go through the one
   // place above, so a trip can never be charged to a session that started after
@@ -477,15 +499,78 @@ void loop() {
   static uint32_t lastPoll = 0, lastHb = 0, lastState = 0;
   if (now - lastPoll >= 1000) {  // [TH] ดึงคำสั่งจากเซิร์ฟเวอร์ทุก 1 วินาที
     lastPoll = now;
-    String cmd = netPollCommand();
-    // The server's start is held to the same condition as the panel's: a machine
-    // whose RUN button cannot raise an edge has no panel stop and must not begin a
-    // session, and it makes no difference who asked. Stop is never refused.
-    // [TH] คำสั่งเริ่มจากเซิร์ฟเวอร์ใช้เงื่อนไขเดียวกับปุ่มบนหน้าปัด
-    //      เครื่องที่ปุ่ม RUN สร้างขอบสัญญาณไม่ได้ก็ไม่มีปุ่มหยุดที่หน้าปัด ต้องไม่เริ่มรอบใหม่
-    //      ไม่ว่าใครจะเป็นคนสั่ง ส่วนคำสั่งหยุดไม่เคยถูกปฏิเสธ
-    if (cmd == "start" && buttonRunWireSuspect())
-      Serial.println("server start refused: RUN reads pressed, check its wiring");
+    int16_t wantTarget = -1;
+    NetTimings wantTimings{0, 0, 0, 0, 0};
+    String cmd = netPollCommand(&wantTarget, &wantTimings);
+    // Timings go through applySettings, which clamps them, persists them and — if
+    // a session is running — holds the whole change until it ends. That deferral
+    // is the point: the NVS commit and the Wi-Fi restart it performs must not
+    // happen with a relay energized, and a stroke length that changed halfway
+    // through a stroke would be worse than waiting.
+    // [TH] ค่าเวลาของรอบส่งผ่าน applySettings ซึ่งจำกัดช่วง บันทึกค่า
+    //      และถ้ากำลังมีรอบทำงานอยู่จะพักการเปลี่ยนแปลงทั้งชุดไว้จนกว่ารอบจะจบ
+    //      การเลื่อนนั้นคือประเด็น เพราะการบันทึก NVS และการรีสตาร์ต WiFi ที่ตามมา
+    //      ต้องไม่เกิดขึ้นตอนที่รีเลย์กำลังจ่ายไฟ
+    //      และความยาวจังหวะที่เปลี่ยนกลางจังหวะก็แย่กว่าการรอ
+    if (wantTimings.liftSec || wantTimings.lowerSec || wantTimings.holdSec ||
+        wantTimings.restSec || wantTimings.maxTravelSec) {
+      // The server hands out the same held timings on every poll until the
+      // device echoes them back or the TTL expires (see fetch_desired_timings
+      // in server/app/state.py) — and nothing echoes timings, so without a
+      // guard this ran on every one of the ~30 polls in that window: 30x
+      // applySettings() (NVS write + WiFi restart) while idle, or 30x
+      // re-arming gPendingSettings and re-echoing the held values to the CYD
+      // mid-session. Mirrors the target guard just below.
+      //
+      // Compared against gPending rather than gSettings whenever an edit is
+      // already held (mid-session): gSettings does not move until the
+      // session ends, so comparing against it would keep reporting a
+      // difference — and re-applying — for as long as the session runs, the
+      // exact mid-session repeat this guard exists to stop.
+      // [TH] เซิร์ฟเวอร์ส่งค่าเวลาที่พักไว้ชุดเดิมทุกครั้งที่โพล จนกว่าอุปกรณ์จะยืนยันกลับ
+      //      หรือหมดอายุตาม TTL (ดู fetch_desired_timings ใน server/app/state.py)
+      //      และไม่มีอะไรยืนยันค่าเวลากลับเลย ถ้าไม่มีตัวป้องกันนี้ ทุกรอบใน ~30 รอบโพลของหน้าต่างนั้น
+      //      จะทำงานซ้ำ: เขียน NVS และรีสตาร์ต WiFi 30 ครั้งตอนว่าง
+      //      หรือตั้งค่าค้างใหม่และส่งค่ากลับไปจอซ้ำ 30 ครั้งระหว่างรอบทำงาน
+      //      เทียบกับตัวป้องกันเป้าหมายด้านล่าง
+      //
+      //      เทียบกับ gPending แทน gSettings ทุกครั้งที่มีค่าค้างไว้อยู่แล้ว (ระหว่างรอบทำงาน)
+      //      เพราะ gSettings จะไม่ขยับจนกว่ารอบจะจบ การเทียบกับมันจะเห็นว่าต่างกันเรื่อยๆ
+      //      และใช้ค่าซ้ำเรื่อยๆ ตลอดเวลาที่รอบยังทำงานอยู่ ซึ่งเป็นการซ้ำระหว่างรอบทำงานที่ตัวป้องกันนี้ตั้งใจกัน
+      LinkSettings baseline = gPendingSettings ? toLink(gPending) : currentAsLink();
+      LinkSettings s = baseline;
+      if (wantTimings.maxTravelSec) s.maxTravel = wantTimings.maxTravelSec;
+      if (wantTimings.liftSec) s.lift = wantTimings.liftSec;
+      if (wantTimings.lowerSec) s.lower = wantTimings.lowerSec;
+      if (wantTimings.holdSec) s.hold = wantTimings.holdSec;
+      if (wantTimings.restSec) s.rest = wantTimings.restSec;
+      bool changed = s.maxTravel != baseline.maxTravel || s.lift != baseline.lift ||
+                     s.lower != baseline.lower || s.hold != baseline.hold ||
+                     s.rest != baseline.rest;
+      if (changed) onLinkSettings(s);
+    }
+    // Applied before the command, so a start that carries a target runs with it
+    // rather than with the previous one.
+    // [TH] นำไปใช้ก่อนคำสั่ง คำสั่งเริ่มที่แนบเป้าหมายมาจะได้ใช้ค่าใหม่ ไม่ใช่ค่าเดิม
+    // Clamped here like every other entry point. The route validates 0..99, but
+    // this board owns the relay and the value reaches it from whatever is at the
+    // other end of serverUrl — which the operator types in by hand — so the range
+    // is enforced where it is used rather than trusted from the wire, exactly as
+    // onLinkTarget does for the UART path.
+    // [TH] จำกัดช่วงตรงนี้เหมือนทางเข้าอื่นทุกทาง เส้นทาง HTTP ตรวจ 0..99 อยู่แล้ว
+    //      แต่บอร์ดนี้เป็นเจ้าของรีเลย์ และค่านี้มาจากอะไรก็ตามที่อยู่ปลายทาง serverUrl
+    //      ซึ่งผู้ใช้พิมพ์เอง จึงบังคับช่วงค่าที่จุดที่ใช้งานจริง ไม่ใช่เชื่อค่าที่ส่งมา
+    //      แบบเดียวกับที่ onLinkTarget ทำกับเส้นทาง UART
+    if (wantTarget > 99) wantTarget = 99;
+    if (wantTarget >= 0 && (uint16_t)wantTarget != gSettings.targetReps) {
+      gSettings.targetReps = (uint16_t)wantTarget;
+      gSession.setTarget((uint16_t)wantTarget);
+      gTargetDirty = true;
+      gLink.sendSettings(currentAsLink());  // keep the CYD's spinbox honest
+                                            // [TH] ให้ช่องปรับค่าบนจอตรงกับของจริง
+    }
+    if (cmd == "start" && buttonStartStuck())
+      Serial.println("server start refused: START reads pressed, check its wiring");
     else if (cmd == "start") gSession.start(now);
     else if (cmd == "stop") gSession.requestStop(now);
   }
@@ -494,7 +579,7 @@ void loop() {
   if (now - lastHb >= hbInterval) {
     lastHb = now;
     netHeartbeat(gSession.running() ? "running" : "idle", gSession.elapsedSec(now),
-                 gSession.reps());
+                 gSession.reps(), gSession.target());
   }
   // Stopped is handled BEFORE started, and the order is load-bearing. Both edges
   // can be pending in one iteration: tick() can end a session on a fault, and the
@@ -546,20 +631,57 @@ void loop() {
   //      ควรให้ข้อมูลของรอบนั้นถูกส่งออกไปก่อน
   if (gPendingSettings && !gSession.running()) {
     gPendingSettings = false;
+    // A live target change and a held settings-save are two independent UART
+    // messages, and either can land first within one running session. onLinkTarget
+    // writes the new value straight into gSettings.targetReps (it has to — it is
+    // applied live) but never touches gPending; onLinkSettings snapshots whatever
+    // target ITS OWN message carried into gPending.targetReps, which is stale the
+    // moment a live change lands before or after it. Applying gPending unexamined
+    // would silently revert the operator's live change and then confirm the
+    // reverted number back to the CYD as "what actually took effect" — the same
+    // class of hazard the comment above (line ~142) already covers for two
+    // settings messages, just between a settings message and a live-target one.
+    // gSettings.targetReps is always the most recent value regardless of which
+    // message arrived last, because onLinkTarget is the only thing that writes it
+    // while a session runs, so folding it into gPending here — and clearing the
+    // flag unconditionally so it can never dangle into a stray extra save — makes
+    // the live target the one that survives to NVS and to the CYD's confirmation.
+    // [TH] การเปลี่ยนเป้าหมายแบบสดกับข้อความตั้งค่าที่พักไว้เป็นคนละข้อความ UART
+    //      มาถึงก่อนหลังกันได้ในรอบทำงานเดียวกัน onLinkTarget เขียนค่าใหม่ลง
+    //      gSettings.targetReps ตรงๆ (ต้องทำแบบนั้นเพราะใช้ทันที) แต่ไม่แตะ gPending เลย
+    //      ส่วน onLinkSettings สแนปช็อตเป้าหมายจากข้อความของตัวเองลง gPending.targetReps
+    //      ซึ่งจะเก่าทันทีถ้ามีการเปลี่ยนสดมาก่อนหรือหลังก็ตาม
+    //      ถ้านำ gPending ไปใช้ตรงๆ จะย้อนค่าที่ผู้ใช้เพิ่งเปลี่ยนสดโดยไม่รู้ตัว
+    //      แล้วยืนยันค่าที่ย้อนกลับไปนั้นกลับไปให้จอว่า "มีผลใช้งานจริง"
+    //      เป็นปัญหาแบบเดียวกับที่คอมเมนต์ด้านบน (บรรทัด ~142) พูดถึงไว้แล้วสำหรับข้อความตั้งค่าสองอัน
+    //      ต่างกันแค่เป็นระหว่างข้อความตั้งค่ากับข้อความเป้าหมายแบบสด
+    //      gSettings.targetReps เป็นค่าล่าสุดเสมอไม่ว่าข้อความไหนจะมาถึงทีหลัง
+    //      เพราะระหว่างที่รอบทำงานอยู่มีแต่ onLinkTarget เท่านั้นที่เขียนค่านี้
+    //      จึงรวมเข้า gPending ตรงนี้ และล้างธงทิ้งเสมอไม่ให้ค้างไปกระตุ้นการบันทึกซ้ำที่ผิด
+    //      ค่าเป้าหมายแบบสดจึงเป็นค่าที่รอดไปถึง NVS และไปถึงการยืนยันของจอ
+    if (gTargetDirty) gPending.targetReps = gSettings.targetReps;
+    gTargetDirty = false;
     Serial.println("settings: applying the ones held during the session");
     applySettings(gPending);
     gLink.sendSettings(currentAsLink());  // confirm what actually took effect
                                           // [TH] ยืนยันค่าที่มีผลใช้งานจริง
+  } else if (gTargetDirty && !gSession.running()) {
+    // A live target change has nowhere else to persist: it bypassed the settings
+    // path entirely, so this is the only place left that writes it to NVS.
+    // [TH] การเปลี่ยนเป้าหมายแบบสดไม่มีที่อื่นให้บันทึกลง NVS
+    //      เพราะมันข้ามเส้นทาง settings ไปตั้งแต่ต้น จุดนี้จึงเป็นจุดเดียวที่จะบันทึกค่านั้นได้
+    gTargetDirty = false;
+    settingsSave(gSettings);
   }
 
   if (now - lastState >= 250) {  // [TH] ส่งสถานะให้จอ ~4 ครั้งต่อวินาที
     lastState = now;
     LinkState st{gSession.running(), (int)gSession.phase(), gSession.elapsedSec(now),
-                 gSession.reps(), netWifiUp(), netServerUp()};
+                 gSession.reps(), gSession.target(), netWifiUp(), netServerUp()};
     gLink.sendState(st);
   }
 #if BENCH_DEBUG
-  debugTick(now, pressRun, runWouldStart, runFromIsr, pressReset);
+  debugTick(now, pressStart, pressStop);
 #endif
   delay(2);
 }

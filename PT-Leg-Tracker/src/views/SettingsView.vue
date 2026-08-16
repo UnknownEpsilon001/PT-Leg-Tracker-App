@@ -7,6 +7,7 @@ import AppIcon from '@/components/AppIcon.vue'
 import { enableDailyAlarm, cancelDailyAlarm } from '@/lib/alarm'
 import { buildExport, shareExport } from '@/lib/exporter'
 import { syncNow } from '@/lib/api'
+import { setTimings, type DeviceTimings } from '@/lib/device'
 import { usePainLogStore } from '@/stores/painlog'
 import { useProfileStore } from '@/stores/profile'
 import { useQuizStore } from '@/stores/quiz'
@@ -27,6 +28,18 @@ const syncing = ref(false)
 const syncMessage = ref('')
 const exportMessage = ref('')
 const alarmMessage = ref('')
+
+// Cycle timing fields: kept as the text the user typed, not what the machine
+// currently holds. A field left blank is never sent (it means "don't change it").
+// [TH] ค่าเวลาของรอบ: เก็บเป็นข้อความตามที่ผู้ใช้พิมพ์ ไม่ใช่ค่าที่เครื่องถืออยู่ตอนนี้
+//      ช่องไหนเว้นว่างไว้จะไม่ถูกส่งไป (แปลว่า "ไม่เปลี่ยนค่านั้น")
+const timingLift = ref('')
+const timingLower = ref('')
+const timingHold = ref('')
+const timingRest = ref('')
+const timingMaxTravel = ref('')
+const savingTimings = ref(false)
+const timingsMessage = ref('')
 
 async function toggleFont() {
   await settings.update({ fontLarge: !settings.settings.fontLarge })
@@ -88,6 +101,45 @@ async function changeAlarmTime() {
 function fmtSync(iso: string | null) {
   return iso ? new Date(iso).toLocaleString('th-TH') : 'ยังไม่เคย'
 }
+
+// A blank field means "leave it alone" — parse only what the user actually
+// typed, and clamp it to the documented bounds the same way stepTarget does,
+// so an out-of-range value is corrected here rather than bounced by the
+// server's 422 with a message that would wrongly suggest a network problem.
+// [TH] ช่องว่างแปลว่า "ไม่ต้องเปลี่ยน" — แปลงเฉพาะค่าที่ผู้ใช้พิมพ์จริง ๆ แล้วบีบให้อยู่ในช่วงที่กำหนด
+//      เหมือนกับ stepTarget เพื่อไม่ให้ค่าที่เกินช่วงถูกเซิร์ฟเวอร์ปฏิเสธด้วยข้อความที่บอกผิดว่าเป็นปัญหาการเชื่อมต่อ
+function parsedSeconds(s: string, min: number, max: number): number | undefined {
+  const trimmed = s.trim()
+  if (trimmed === '') return undefined
+  const n = Number(trimmed)
+  if (!Number.isFinite(n)) return undefined
+  return Math.min(max, Math.max(min, n))
+}
+
+async function saveTimings() {
+  timingsMessage.value = ''
+  const timings: DeviceTimings = {}
+  const lift = parsedSeconds(timingLift.value, 1, 20)
+  const lower = parsedSeconds(timingLower.value, 1, 20)
+  const hold = parsedSeconds(timingHold.value, 1, 60)
+  const rest = parsedSeconds(timingRest.value, 1, 60)
+  const maxTravel = parsedSeconds(timingMaxTravel.value, 1, 20)
+  if (lift !== undefined) timings.liftSec = lift
+  if (lower !== undefined) timings.lowerSec = lower
+  if (hold !== undefined) timings.holdSec = hold
+  if (rest !== undefined) timings.restSec = rest
+  if (maxTravel !== undefined) timings.maxTravelSec = maxTravel
+  if (Object.keys(timings).length === 0) return
+  savingTimings.value = true
+  try {
+    await setTimings(settings.settings.serverUrl, settings.settings.deviceCode, timings)
+    timingsMessage.value = 'บันทึกแล้ว'
+  } catch {
+    timingsMessage.value = 'บันทึกไม่สำเร็จ ลองใหม่ภายหลัง'
+  } finally {
+    savingTimings.value = false
+  }
+}
 </script>
 
 <template>
@@ -140,6 +192,34 @@ function fmtSync(iso: string | null) {
     </div>
 
     <div class="card">
+      <h2>ตั้งค่าเครื่อง (สำหรับทดสอบ)</h2>
+      <!--
+        A change takes effect once the current session ends, and only if the
+        machine comes online within 30 seconds. Sent to an offline machine, it
+        expires and has to be saved again.
+        [TH] การเปลี่ยนค่าจะมีผลเมื่อรอบปัจจุบันจบแล้ว และต้องให้เครื่องออนไลน์ภายใน 30 วินาที
+             ถ้าเครื่องออฟไลน์อยู่ ค่าที่ส่งจะหมดอายุและต้องกดบันทึกใหม่
+      -->
+      <p class="hint-text">
+        การเปลี่ยนค่าจะมีผลเมื่อรอบปัจจุบันจบแล้ว และต้องให้เครื่องออนไลน์ภายใน 30 วินาที
+        ถ้าเครื่องออฟไลน์อยู่ ค่าที่ส่งจะหมดอายุและต้องกดบันทึกใหม่
+      </p>
+      <label>ยกขึ้น (วินาที)<input v-model="timingLift" type="number" min="1" max="20" placeholder="ไม่เปลี่ยน" /></label>
+      <label>ลดลง (วินาที)<input v-model="timingLower" type="number" min="1" max="20" placeholder="ไม่เปลี่ยน" /></label>
+      <label>ค้าง (วินาที)<input v-model="timingHold" type="number" min="1" max="60" placeholder="ไม่เปลี่ยน" /></label>
+      <label>พัก (วินาที)<input v-model="timingRest" type="number" min="1" max="60" placeholder="ไม่เปลี่ยน" /></label>
+      <label>
+        เวลาเดินทางสูงสุด (วินาที)
+        <input v-model="timingMaxTravel" type="number" min="1" max="20" placeholder="ไม่เปลี่ยน" />
+      </label>
+      <button class="wide" :disabled="savingTimings" @click="saveTimings">
+        <AppIcon name="save" />
+        {{ savingTimings ? 'กำลังบันทึก...' : 'บันทึกค่าเครื่อง' }}
+      </button>
+      <p v-if="timingsMessage">{{ timingsMessage }}</p>
+    </div>
+
+    <div class="card">
       <h2>ข้อมูลผู้ใช้</h2>
       <p>{{ profile.profile?.name }} (รหัส {{ profile.profile?.patientCode }})</p>
       <button class="wide" @click="router.push({ name: 'setup' })">
@@ -161,6 +241,12 @@ label {
   display: block;
   margin-bottom: 0.5rem;
   font-weight: 600;
+}
+
+.hint-text {
+  font-weight: 400;
+  color: var(--c-muted);
+  margin-bottom: 0.75rem;
 }
 
 .credit {

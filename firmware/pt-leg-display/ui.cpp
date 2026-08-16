@@ -32,6 +32,7 @@ static void buildMain();
 static void initThaiFonts();         // defined with the main screen below
 static void leaveSubScreenForRun();  // defined with the settings screen below
 static void hideAddKeyboard();       // defined with the add-patient form below
+static bool settingsScreenOpen();    // defined with the settings screen below
 
 static void flushCb(lv_disp_drv_t* disp, const lv_area_t* area, lv_color_t* pixels) {
   // [TH] LVGL เรียกฟังก์ชันนี้เพื่อผลักพิกเซลลงหน้าจอจริงตามพื้นที่ที่เปลี่ยน
@@ -168,6 +169,15 @@ void uiBegin() {
 
 static lv_obj_t *scrMain, *lblClock, *lblReps, *lblPhase, *lblPhaseTimer, *lblStatus;
 static lv_obj_t *lblCode, *btnGear, *btnData, *imgLogo;
+static lv_obj_t *rowTarget;
+// Declared here, ahead of the settings screen's other spinboxes further down, so
+// that uiUpdateMain (below) can keep it synced to the live target — see the
+// comment at that call site for why. Not grouped with spinMax/spinLift/etc. only
+// because of that ordering requirement.
+// [TH] ประกาศไว้ตรงนี้ ก่อนช่องปรับค่าอื่นๆ ของหน้าตั้งค่าที่อยู่ถัดลงไป เพื่อให้ uiUpdateMain
+//      ด้านล่างผูกค่าให้ตรงกับเป้าหมายที่ใช้งานจริงได้ ดูคำอธิบายที่จุดเรียกนั้น
+//      ไม่ได้จัดกลุ่มรวมกับ spinMax/spinLift/ฯลฯ เพราะข้อจำกัดเรื่องลำดับการประกาศนี้เท่านั้น
+static lv_obj_t* spinTarget = nullptr;
 
 LV_IMG_DECLARE(logo_img)  // firmware/pt-leg-display/logo_img.c
 
@@ -196,11 +206,22 @@ static void initThaiFonts() {
 static void (*cbSettings)() = nullptr;
 static void (*cbData)() = nullptr;
 static bool uiRunning = false;
+// last target reported by the controller — updated from uiUpdateMain.
+// Defaulted to 10, matching gLast.targetReps's own default (pt-leg-display.ino),
+// so the spinbox does not flash 0 ("unlimited") before the first state message
+// ever arrives.
+// [TH] ค่าเป้าหมายล่าสุดที่คอนโทรลเลอร์รายงานมา อัปเดตจาก uiUpdateMain
+//      ตั้งต้นเป็น 10 ให้ตรงกับค่าเริ่มต้นของ gLast.targetReps เอง (pt-leg-display.ino)
+//      เพื่อไม่ให้ช่องปรับค่ากะพริบเป็น 0 ("ไม่จำกัด") ก่อนได้รับข้อความสถานะข้อความแรก
+static uint16_t uiTargetShown = 10;
+static void (*cbTarget)(uint16_t) = nullptr;
 
 void uiSetCallbacks(void (*onOpenSettings)(), void (*onOpenData)()) {
   cbSettings = onOpenSettings;
   cbData = onOpenData;
 }
+
+void uiSetTargetChanged(void (*cb)(uint16_t)) { cbTarget = cb; }
 
 static void gearClicked(lv_event_t*) {
   if (uiRunning) return;  // STOP must stay reachable during a session
@@ -215,6 +236,37 @@ static void dataClicked(lv_event_t*) {
   if (uiRunning) return;
   if (cbData) cbData();
 }
+
+// The controller owns the target: this sends the change and does NOT update the
+// label. The label follows the next state message, so what the screen shows is
+// always what the machine will actually do — including a change somebody made in
+// the phone app a moment ago.
+// [TH] คอนโทรลเลอร์เป็นเจ้าของค่าเป้าหมาย ตรงนี้ส่งการเปลี่ยนแปลงออกไปและไม่แก้ป้ายเอง
+//      ป้ายจะเปลี่ยนตามข้อความสถานะครั้งถัดไป สิ่งที่จอแสดงจึงเป็นสิ่งที่เครื่องจะทำจริงเสมอ
+//      รวมถึงค่าที่มีคนเพิ่งเปลี่ยนจากแอปบนมือถือด้วย
+static void targetStep(int delta) {
+  int next = (int)uiTargetShown + delta;
+  if (next < 0) next = 0;
+  if (next > 99) next = 99;
+  // The tap is accumulated locally as well as sent. uiTargetShown is otherwise
+  // only written by the next state message, which is up to 250 ms away plus the
+  // UART round trip — so without this, every tap inside that window computed its
+  // next value from the same stale number and three quick presses moved the
+  // target by one. The controller still owns the value: the next state message
+  // overwrites this with whatever the machine actually took, so a rejected or
+  // clamped change corrects itself within a refresh.
+  // [TH] เก็บผลการกดไว้ที่นี่ด้วย ไม่ใช่แค่ส่งออกไป
+  //      ปกติค่า uiTargetShown จะถูกเขียนโดยข้อความสถานะครั้งถัดไปเท่านั้น
+  //      ซึ่งห่างได้ถึง 250 มิลลิวินาทีบวกเวลาไปกลับของ UART
+  //      ถ้าไม่ทำแบบนี้ การกดทุกครั้งในช่วงนั้นจะคำนวณค่าถัดไปจากตัวเลขเก่าตัวเดียวกัน
+  //      กดเร็วๆ สามครั้งจึงขยับเป้าหมายไปแค่หนึ่ง
+  //      ค่าจริงยังเป็นของคอนโทรลเลอร์ ข้อความสถานะครั้งถัดไปจะเขียนทับค่านี้ด้วยค่าที่เครื่องรับไปจริง
+  //      การเปลี่ยนที่ถูกปฏิเสธหรือถูกจำกัดช่วงจึงแก้ตัวเองได้ภายในหนึ่งรอบรีเฟรช
+  uiTargetShown = (uint16_t)next;
+  if (cbTarget) cbTarget((uint16_t)next);
+}
+static void targetMinusClicked(lv_event_t*) { targetStep(-1); }
+static void targetPlusClicked(lv_event_t*) { targetStep(1); }
 
 static void buildMain() {
   // [TH] สร้างหน้าจอหลัก: โลโก้ตอนว่าง, นาฬิกา, จำนวนครั้ง, ชื่อสถานะ (แสดงผลอย่างเดียว) และปุ่มตั้งค่า
@@ -264,6 +316,36 @@ static void buildMain() {
   lv_obj_align(lblReps, LV_ALIGN_TOP_MID, 0, 100);
   lv_obj_add_flag(lblReps, LV_OBJ_FLAG_HIDDEN);
 
+  // Target stepper, next to the reps label. Reachable at all times, including
+  // mid-session — the controller applies a change to the live target
+  // immediately, unlike every other setting on this machine.
+  // [TH] ปุ่มปรับเป้าหมาย อยู่ข้างป้ายจำนวนครั้ง กดได้ตลอดแม้ระหว่างทำงาน
+  //      คอนโทรลเลอร์นำค่าเป้าหมายไปใช้ทันที ต่างจากค่าตั้งค่าอื่นๆ ของเครื่องนี้
+  rowTarget = lv_obj_create(scrMain);
+  lv_obj_set_size(rowTarget, 170, 36);
+  lv_obj_set_style_bg_opa(rowTarget, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(rowTarget, 0, 0);
+  lv_obj_set_style_pad_all(rowTarget, 0, 0);
+  lv_obj_clear_flag(rowTarget, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_align(rowTarget, LV_ALIGN_TOP_MID, 0, 190);
+  lv_obj_add_flag(rowTarget, LV_OBJ_FLAG_HIDDEN);
+
+  lv_obj_t* btnTargetMinus =
+      makeBtn(rowTarget, "-", COL_SURFACE, &lv_font_montserrat_20, targetMinusClicked);
+  lv_obj_set_size(btnTargetMinus, 38, 36);
+  lv_obj_align(btnTargetMinus, LV_ALIGN_LEFT_MID, 0, 0);
+
+  lv_obj_t* lblTargetCap = lv_label_create(rowTarget);
+  lv_obj_set_style_text_font(lblTargetCap, &thai14, 0);
+  lv_obj_set_style_text_color(lblTargetCap, lv_color_hex(COL_MUTED), 0);
+  lv_label_set_text(lblTargetCap, "เป้าหมาย");
+  lv_obj_align(lblTargetCap, LV_ALIGN_CENTER, 0, 0);
+
+  lv_obj_t* btnTargetPlus =
+      makeBtn(rowTarget, "+", COL_SURFACE, &lv_font_montserrat_20, targetPlusClicked);
+  lv_obj_set_size(btnTargetPlus, 38, 36);
+  lv_obj_align(btnTargetPlus, LV_ALIGN_RIGHT_MID, 0, 0);
+
   lblPhase = lv_label_create(scrMain);
   lv_obj_set_style_text_font(lblPhase, &thai20, 0);
   lv_obj_set_style_text_color(lblPhase, lv_color_hex(COL_MUTED), 0);
@@ -305,13 +387,17 @@ static const char* phaseName(Phase p) {
     case Phase::Lower: return "กำลังลง";
     case Phase::Rest: return "พัก";
     case Phase::SafeLower: return "กำลังหยุด";
-    case Phase::Fault: return "สวิตช์ผิดพลาด";
+    // Not a switch fault: the branch has none to name any more. FAULT now
+    // comes only from the actuator's own energize cap or the UART watchdog.
+    // [TH] ไม่ใช่สวิตช์ผิดพลาดอีกต่อไป สาขานี้ไม่มีสวิตช์ให้เอ่ยชื่อแล้ว
+    //      สถานะผิดพลาดตอนนี้มาจากเพดานเวลาจ่ายไฟของชุดขับเคลื่อนเองหรือตัวเฝ้าระวัง UART เท่านั้น
+    case Phase::Fault: return "ระบบขัดข้อง";
     default: return "พร้อม";
   }
 }
 
 void uiUpdateMain(bool running, Phase phase, uint32_t elapsedSec, uint16_t reps,
-                  bool wifiUp, bool serverUp, bool linkUp) {
+                  uint16_t target, bool wifiUp, bool serverUp, bool linkUp) {
   // Repainting identical text still copies the string and invalidates the area,
   // so an idle screen would redraw four times a second for nothing.
   // [TH] วาดข้อความเดิมซ้ำก็ยังกินงาน จึงข้ามการอัปเดตถ้าค่าไม่เปลี่ยน กันจอวาดซ้ำ 4 ครั้ง/วินาทีเปล่าๆ
@@ -319,10 +405,11 @@ void uiUpdateMain(bool running, Phase phase, uint32_t elapsedSec, uint16_t reps,
   static bool pRunning, pWifi, pServer, pLink;
   static Phase pPhase;
   static uint32_t pElapsed;
-  static uint16_t pReps;
+  static uint16_t pReps, pTarget;
   static uint32_t phaseTimerStartMs = 0;  // display's own millis() at the last phase edge
   if (!first && running == pRunning && phase == pPhase && elapsedSec == pElapsed &&
-      reps == pReps && wifiUp == pWifi && serverUp == pServer && linkUp == pLink)
+      reps == pReps && target == pTarget && wifiUp == pWifi && serverUp == pServer &&
+      linkUp == pLink)
     return;
   // The wire only carries total session elapsed, not per-phase, so the in-phase
   // timer below is clocked locally from the phase edge. The mirrored 250 ms
@@ -331,8 +418,33 @@ void uiUpdateMain(bool running, Phase phase, uint32_t elapsedSec, uint16_t reps,
   //      คลาดเคลื่อนไม่เกินหนึ่งรอบรีเฟรช (250 ms) เพราะรีเฟรชจอกับสถานะมาที่ความถี่ใกล้กัน
   if (first || phase != pPhase) phaseTimerStartMs = millis();
   first = false;
-  pRunning = running; pPhase = phase; pElapsed = elapsedSec; pReps = reps;
+  pRunning = running; pPhase = phase; pElapsed = elapsedSec; pReps = reps; pTarget = target;
   pWifi = wifiUp; pServer = serverUp; pLink = linkUp;
+
+  uiTargetShown = target;
+  // The settings screen's target spinbox is bound to the live target, not only to
+  // a settings reply. The controller lets an outstanding live {"t":"target"} win
+  // over the target field carried in a settings save; that rule only holds if this
+  // spinbox can never be stale. Without this, an operator who dials the target on
+  // the main screen and then saves the settings screen would send the spinbox's
+  // old value, which the controller silently discards, looking like a broken save.
+  // Guarded on spinTarget existing: the settings screen is built lazily on first
+  // open, and this runs from boot, long before that. Also skipped while the
+  // settings screen itself is on screen — that spinbox is the only place an
+  // operator edits the target there, so "open" and "focused on it" are the same
+  // thing on this UI. Stomping it mid-edit would undo a tap the operator just
+  // made in favour of a value that arrived on the wire a moment later; the sync
+  // resumes the instant the screen is left, so the field can never come back
+  // stale either.
+  // [TH] ผูกช่องปรับจำนวนครั้งเป้าหมายของหน้าตั้งค่าเข้ากับค่าเป้าหมายที่ใช้งานจริง ไม่ใช่แค่ตอนตอบกลับค่าตั้งค่า
+  //      คอนโทรลเลอร์ให้ค่า {"t":"target"} ที่เพิ่งส่งชนะค่า target ในการบันทึกตั้งค่า
+  //      กฎนี้จะปลอดภัยก็ต่อเมื่อช่องนี้ไม่มีทางเก่าค้าง ถ้าไม่ผูกไว้ ผู้ใช้ที่หมุนเป้าหมายจากหน้าหลัก
+  //      แล้วไปกดบันทึกหน้าตั้งค่า จะส่งค่าเก่าของช่องนี้ไป ซึ่งคอนโทรลเลอร์จะทิ้งเงียบๆ ดูเหมือนบันทึกไม่สำเร็จ
+  //      กันด้วยเงื่อนไข spinTarget มีอยู่จริง เพราะหน้าตั้งค่าถูกสร้างตอนเปิดครั้งแรกเท่านั้น ทำงานตรงนี้ตั้งแต่ตอนบูตแล้ว
+  //      และข้ามการผูกค่าขณะที่หน้าตั้งค่ากำลังเปิดอยู่ด้วย เพราะช่องนี้เป็นจุดเดียวที่ผู้ใช้แก้ค่าเป้าหมายบนหน้านั้น
+  //      "เปิดอยู่" กับ "กำลังโฟกัสอยู่ที่ช่องนี้" จึงเป็นเรื่องเดียวกันในหน้าจอนี้ ถ้าไม่กันไว้จะทับค่าที่เพิ่งแตะไป
+  //      ด้วยค่าที่เพิ่งมาทางสาย และจะกลับมาผูกค่าให้ทันทีที่ออกจากหน้านี้ ช่องจึงไม่มีทางค้างเก่าเช่นกัน
+  if (spinTarget && !settingsScreenOpen()) lv_spinbox_set_value(spinTarget, target);
 
   uiRunning = running && linkUp;
 
@@ -344,7 +456,8 @@ void uiUpdateMain(bool running, Phase phase, uint32_t elapsedSec, uint16_t reps,
 
   lv_label_set_text_fmt(lblClock, "%02lu:%02lu", (unsigned long)(elapsedSec / 60),
                         (unsigned long)(elapsedSec % 60));
-  lv_label_set_text_fmt(lblReps, "%u รอบ", reps);
+  if (target == 0) lv_label_set_text_fmt(lblReps, "%u รอบ", reps);
+  else lv_label_set_text_fmt(lblReps, "%u / %u รอบ", reps, target);
 
   bool fault = (phase == Phase::Fault);
 
@@ -359,11 +472,13 @@ void uiUpdateMain(bool running, Phase phase, uint32_t elapsedSec, uint16_t reps,
     lv_obj_add_flag(lblClock, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(lblReps, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(lblPhase, LV_OBJ_FLAG_HIDDEN);  // "พร้อม" adds nothing next to the logo
+    lv_obj_add_flag(rowTarget, LV_OBJ_FLAG_HIDDEN);
   } else {
     lv_obj_add_flag(imgLogo, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(lblClock, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(lblReps, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(lblPhase, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(rowTarget, LV_OBJ_FLAG_HIDDEN);
   }
   // With the link down the cached state is stale and the buttons do nothing,
   // so say so rather than presenting a frozen timer as if it were live.
@@ -406,7 +521,7 @@ void uiUpdateMain(bool running, Phase phase, uint32_t elapsedSec, uint16_t reps,
 #define SCAN_PLACEHOLDER "(เลือกเครือข่าย)"
 
 static lv_obj_t *scrSettings, *taSsid, *taPass, *taServer, *taCode, *kb, *ddScan, *colSettings;
-static lv_obj_t *spinMax, *spinHold, *spinRest, *btnSave, *btnReset;
+static lv_obj_t *spinMax, *spinLift, *spinLower, *spinHold, *spinRest, *btnSave, *btnReset;
 static void (*cbSave)(const DeviceSettings&) = nullptr;
 static bool settingsKnown = false;  // has the controller ever sent its settings?
 
@@ -510,8 +625,11 @@ static void resetConfirmed(lv_event_t*) {
   lv_textarea_set_text(taServer, d.serverUrl.c_str());
   lv_textarea_set_text(taCode, d.deviceCode.c_str());
   lv_spinbox_set_value(spinMax, d.maxTravelSec);
+  lv_spinbox_set_value(spinLift, d.liftSec);
   lv_spinbox_set_value(spinHold, d.holdSec);
+  lv_spinbox_set_value(spinLower, d.lowerSec);
   lv_spinbox_set_value(spinRest, d.restSec);
+  lv_spinbox_set_value(spinTarget, d.targetReps);
   if (cbSave) cbSave(d);
   lv_scr_load(scrSettings);
 }
@@ -594,6 +712,12 @@ static void leaveSubScreenForRun() {
   lv_scr_load(scrMain);
 }
 
+// Used by uiUpdateMain to keep the live target sync from stomping an in-progress
+// edit on the settings screen — see the comment at that call site.
+// [TH] ใช้โดย uiUpdateMain เพื่อไม่ให้การผูกค่าเป้าหมายสดทับการแก้ไขที่ค้างอยู่บนหน้าตั้งค่า
+//      ดูคำอธิบายที่จุดเรียกนั้น
+static bool settingsScreenOpen() { return lv_scr_act() == scrSettings; }
+
 static void taFocused(lv_event_t* e) {
   lv_obj_t* ta = (lv_obj_t*)lv_event_get_target(e);
   lv_keyboard_set_textarea(kb, ta);
@@ -653,8 +777,11 @@ static void saveClicked(lv_event_t*) {
   s.serverUrl = lv_textarea_get_text(taServer);
   s.deviceCode = lv_textarea_get_text(taCode);
   s.maxTravelSec = (uint16_t)lv_spinbox_get_value(spinMax);
+  s.liftSec = (uint16_t)lv_spinbox_get_value(spinLift);
   s.holdSec = (uint16_t)lv_spinbox_get_value(spinHold);
+  s.lowerSec = (uint16_t)lv_spinbox_get_value(spinLower);
   s.restSec = (uint16_t)lv_spinbox_get_value(spinRest);
+  s.targetReps = (uint16_t)lv_spinbox_get_value(spinTarget);
   if (cbSave) cbSave(s);
   hideKeyboard();
   // Stay only when a card was in the slot and refused the write — that is a
@@ -869,8 +996,11 @@ static void buildSettings() {
   // [TH] MAX TRAVEL คือเพดานความปลอดภัยหลัก: เวลาที่รีเลย์จ่ายไฟได้โดยไม่มีสวิตช์ปลายทางปิด
   //      เพดานของมันตั้งไว้ต่ำกว่า HOLD/REST มากโดยตั้งใจ
   spinMax = makeSpinRow(col, "เวลาเดินทางสูงสุด (วิ)", 8, 1, 20);
+  spinLift = makeSpinRow(col, "ยกขึ้น (วิ)", 4, 1, 20);
   spinHold = makeSpinRow(col, "ค้าง (วิ)", 10, 1, 60);
+  spinLower = makeSpinRow(col, "ลดลง (วิ)", 4, 1, 20);
   spinRest = makeSpinRow(col, "พัก (วิ)", 10, 1, 60);
+  spinTarget = makeSpinRow(col, "จำนวนครั้ง (0=ไม่จำกัด)", 10, 0, 99);
 
   // The keyboard comes down before the dialog goes up. Both ways out of the
   // dialog return with lv_scr_load(scrSettings) rather than uiOpenSettings, so
@@ -919,8 +1049,24 @@ void uiOpenSettings(const DeviceSettings& cur) {
   lv_textarea_set_text(taServer, cur.serverUrl.c_str());
   lv_textarea_set_text(taCode, cur.deviceCode.c_str());
   lv_spinbox_set_value(spinMax, cur.maxTravelSec);
+  lv_spinbox_set_value(spinLift, cur.liftSec);
   lv_spinbox_set_value(spinHold, cur.holdSec);
+  lv_spinbox_set_value(spinLower, cur.lowerSec);
   lv_spinbox_set_value(spinRest, cur.restSec);
+  // Seeded from uiTargetShown, NOT cur.targetReps. cur is gLast, which only
+  // moves on a "settings" reply (boot/hello) — it does not see a live
+  // {"t":"target"} round trip, so it can be behind by however long ago the
+  // operator last dialed the target on the main screen. uiTargetShown is
+  // updated unconditionally from every state message (see uiUpdateMain), so
+  // it is never behind the controller's live value. Using gLast here would
+  // silently reopen the exact bug the live-sync binding above exists to
+  // close: SAVE would carry the stale number.
+  // [TH] ตั้งต้นจาก uiTargetShown ไม่ใช่ cur.targetReps เพราะ cur คือ gLast ซึ่งขยับเฉพาะตอนได้รับ
+  //      คำตอบ "settings" (ตอนบูต/hello) เท่านั้น ไม่เห็นการเปลี่ยนค่าเป้าหมายสดแบบ {"t":"target"}
+  //      จึงอาจค้างอยู่นานเท่าที่ผู้ใช้เพิ่งหมุนค่าจากหน้าหลักมา ส่วน uiTargetShown อัปเดตจากทุกข้อความสถานะ
+  //      โดยไม่มีเงื่อนไข (ดู uiUpdateMain) จึงไม่มีทางตามหลังค่าจริงของคอนโทรลเลอร์
+  //      ถ้าใช้ gLast ตรงนี้จะเปิดช่องให้บั๊กเดิมที่การผูกค่าสดด้านบนตั้งใจปิดกลับมาอีก คือ SAVE จะส่งค่าที่ค้างไป
+  lv_spinbox_set_value(spinTarget, uiTargetShown);
 
   applySdStatus();  // the label exists only now, on the first open — ป้ายเพิ่งมีตัวตนตอนนี้
   thaiKbSetScript(kb, false);  // same reason as the add form — ด้วยเหตุผลเดียวกับฟอร์มลงทะเบียน

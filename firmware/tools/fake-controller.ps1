@@ -22,23 +22,30 @@
 #      แต่ไม่ได้บันทึกลงไฟล์ ถ้าเริ่มสคริปต์ใหม่จะกลับเป็นค่าตั้งต้น
 #
 # It answers `hello` with a settings reply, then runs the device's real cycle:
-# LIFT -> HOLD 10 s -> LOWER -> REST 10 s, repeating. Ctrl+C stops, and the display
-# should fall back to ไม่พบตัวควบคุม (no link) about 2.5 s later.
-# Shorten a phase for a quicker watch with -HoldSec / -RestSec.
+# LIFT -> HOLD 10 s -> LOWER -> REST 10 s, repeating until the rep count reaches
+# the target (0 = until stopped). Ctrl+C stops, and the display should fall back
+# to ไม่พบตัวควบคุม (no link) about 2.5 s later. Shorten a phase for a quicker
+# watch with -LiftSec / -HoldSec / -LowerSec / -RestSec.
 #
-# Ending a session (x, or -Seconds running out mid-stop) sends `done`, the same
-# message the real controller emits, so the finish screen and the SD row can be
-# exercised with only the CYD attached. With no card in the slot the summary
-# should read "ยังไม่ได้บันทึก รอการ์ด" and the row waits in RAM; -Epoch 0
-# impersonates a controller with no RTC, which logs its datetime as "?".
+# There are no limit switches any more — travel is timed. LIFT always drives for
+# LiftSec and LOWER (including a safe-lower) always drives for LowerSec, matching
+# SessionSM::tick(): a timed stroke runs its full duration, it does not end early.
+#
+# Ending a session (x, the target being reached, or -Seconds running out mid-stop)
+# sends `done`, the same message the real controller emits, so the finish screen
+# and the SD row can be exercised with only the CYD attached. With no card in the
+# slot the summary should read "ยังไม่ได้บันทึก รอการ์ด" and the row waits in RAM;
+# -Epoch 0 impersonates a controller with no RTC, which logs its datetime as "?".
 # [TH] ตอนจบรอบจะส่งข้อความ done เหมือนคอนโทรลเลอร์จริง ใช้ทดสอบหน้าสรุปและการบันทึกลงการ์ดได้
 #      ด้วยจอ CYD ตัวเดียว
 
 param(
     [string]$Port = "",     # empty = auto-detect the ESP32's USB-serial port
+    [int]$LiftSec = 4,      # matches the real device's default liftSec/lowerSec
+    [int]$LowerSec = 4,
     [int]$HoldSec = 10,     # matches the real device (lift -> hold 10 s -> lower -> rest 10 s)
     [int]$RestSec = 10,
-    [int]$TravelSec = 2,
+    [int]$Target = 10,      # matches DEFAULT_TARGET_REPS; 0 = run until stopped
     [int]$Seconds = 0,      # 0 = run until Ctrl+C
     [switch]$AutoStart,     # begin a session immediately, without waiting for a touch
     # Epoch put in the `done` message at session end. 0 impersonates a controller
@@ -46,14 +53,15 @@ param(
     # -Epoch -1 means "use the PC's clock", i.e. a controller with a good RTC.
     # [TH] เวลาที่ใส่ในข้อความ done ตอนจบรอบ: 0 = เหมือนไม่มีนาฬิกา, -1 = ใช้เวลาจริงของเครื่องพีซี
     [long]$Epoch = -1,
-    # Ends the session with fault=true, the way the controller reports a session
-    # that hit a safety net: a stroke that ran past maxTravelSec with no limit
-    # closing, both limits reading pressed at once, an actuator cap trip, or a
-    # safe-lower that never reached the bottom switch. A limit switch closing is
-    # the normal path, not a fault. The finish screen should read the fault
-    # wording and the SD row should carry fault=1.
-    # [TH] จบรอบด้วย fault=true เหมือนตอนสวิตช์จำกัดระยะทำงาน หน้าสรุปต้องขึ้นข้อความเตือน
-    #      และแถวในไฟล์ต้องมี fault=1
+    # Ends a STOPPED session (x, or -Seconds running out) with fault=true, the way
+    # the controller reports one that hit the actuator's energize cap mid-LIFT or
+    # mid-LOWER — the only thing that raises FAULT now that the limit switches are
+    # gone. Never applied to a session that ends itself by reaching the rep target:
+    # that is always a clean stop in the real firmware too. The finish screen
+    # should read the fault wording and the SD row should carry fault=1.
+    # [TH] จบรอบด้วย fault=true เหมือนตอนเพดานเวลาของชุดขับเคลื่อนตัดกลางจังหวะยกหรือลง
+    #      ซึ่งเป็นสาเหตุเดียวที่เหลืออยู่ของ FAULT เมื่อไม่มีลิมิตสวิตช์แล้ว ไม่ใช้กับรอบที่จบเองเพราะถึงเป้าหมาย
+    #      หน้าสรุปต้องขึ้นข้อความเตือนและแถวในไฟล์ต้องมี fault=1
     [switch]$Fault
 )
 
@@ -79,34 +87,49 @@ function Send-Line([string]$json) {
 
 $settings = '{"t":"settings","ssid":"ClinicWiFi","pass":"secret123",' +
             '"server":"http://192.168.0.12:8000","code":"KNEE-01",' +
-            '"maxtravel":8,"hold":10,"rest":10}'
+            '"maxtravel":8,"lift":4,"lower":4,"hold":10,"rest":10,"target":10}'
 
 # phase ordinals per link-protocol.md: 0 Idle 1 Lift 2 Hold 3 Lower 4 Rest 5 SafeLower 6 Fault
 $running = $false
 $phase = 0
 $elapsed = 0
 $reps = 0
+$target = $Target
 $phaseLeft = 0
 $sessionStart = $null
+
+# One shot at session end, shared by a target-reached stop (never a fault, the
+# same as SessionSM::tick()'s Rest-phase check) and an operator/deadline stop
+# (may be a fault, when -Fault was passed).
+# [TH] จุดเดียวที่ส่งข้อความ done ใช้ร่วมกันระหว่างรอบที่จบเองเพราะถึงเป้าหมาย (ไม่ใช่ fault เหมือนของจริง)
+#      กับรอบที่หยุดโดยผู้ใช้หรือหมดเวลา (เป็น fault ได้ถ้าส่ง -Fault มา)
+function Send-Done([bool]$isFault) {
+    $ep = if ($Epoch -lt 0) { [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() } else { $Epoch }
+    $done = '{{"t":"done","elapsed":{0},"reps":{1},"epoch":{2},"fault":{3}}}'
+    Send-Line ([string]::Format($done, $elapsed, $reps, $ep, $isFault.ToString().ToLower()))
+}
 
 Send-Line $settings
 
 if ($AutoStart) {
-    $running = $true; $phase = 1; $phaseLeft = $TravelSec; $sessionStart = Get-Date
+    $running = $true; $phase = 1; $phaseLeft = $LiftSec; $reps = 0; $sessionStart = Get-Date
     Write-Host "   AUTOSTART" -ForegroundColor Green
 }
 
 # [TH] คุมด้วยแป้นพิมพ์ จำลองปุ่มหน้าปัดของคอนโทรลเลอร์ เพื่อทดสอบการตอบสนองของจอโดยไม่ต้องมีบอร์ดคอนโทรลเลอร์
 # Live keyboard control stands in for the controller's panel buttons so the
 # display's reaction to each session action can be exercised with only the CYD on
-# the desk. s=START (idle only), x=STOP, r=RESET reps (idle only), q=quit. This
-# drives the display SIDE of the button feature; it does not test the real button
-# GPIO/debounce, which lives in the controller firmware.
+# the desk. s=START (idle only), x=STOP, r=STOP-while-idle's rep clear, q=quit.
+# The real panel already has separate START/STOP buttons (GPIO 25/26) now, so s
+# and x map onto them directly; r stands in for STOP pressed while idle, which is
+# what clears the rep count on real hardware — there is no separate RESET any
+# more. This drives the display SIDE of the button feature; it does not test the
+# real button GPIO/debounce, which lives in the controller firmware.
 # Skipped when input is redirected (e.g. piped/non-interactive) so the loop still
 # runs headless with -AutoStart -Seconds.
 $interactive = -not [Console]::IsInputRedirected
 if ($interactive) {
-    Write-Host "keys: s=start  x=stop  r=reset  q=quit" -ForegroundColor Cyan
+    Write-Host "keys: s=start  x=stop  r=stop-while-idle (clear reps)  q=quit" -ForegroundColor Cyan
 }
 
 $deadline = if ($Seconds -gt 0) { (Get-Date).AddSeconds($Seconds) } else { [datetime]::MaxValue }
@@ -123,7 +146,7 @@ try {
         if (-not $stopping -and (Get-Date) -ge $deadline) {
             $stopping = $true
             if ($running -and $phase -ne 5) {
-                $phase = 5; $phaseLeft = $TravelSec
+                $phase = 5; $phaseLeft = $LowerSec
                 Write-Host "   STOP (deadline)" -ForegroundColor Green
             }
         }
@@ -162,6 +185,17 @@ try {
                 Write-Host "   (kept the display's settings)" -ForegroundColor Yellow
                 Send-Line $settings
             }
+            elseif ($line -match '"t"\s*:\s*"target"') {
+                # Live rep-target change from the main screen's +/- buttons,
+                # applied at once and echoed on the next `state` — never held the
+                # way a `settings` save is, matching link-protocol.md.
+                # [TH] การเปลี่ยนเป้าหมายแบบสดจากปุ่ม +/- บนหน้าหลัก นำไปใช้ทันทีและส่งค่ากลับไปในข้อความ state
+                #      ถัดไป ไม่ถูกพักไว้เหมือนการบันทึกค่าตั้งค่า
+                if ($line -match '"reps"\s*:\s*(\d+)') {
+                    $target = [int]$Matches[1]
+                    Write-Host "   (target set to $target via link)" -ForegroundColor Yellow
+                }
+            }
             # Run control used to travel over UART as a `cmd` message. It moved to
             # physical panel buttons on the controller, the display's main screen
             # is output-only, and link-protocol.md no longer defines the message -
@@ -173,22 +207,13 @@ try {
             #      ตัวรับปุ่มจากคีย์บอร์ดด้านล่างคือตัวแทนของปุ่มเหล่านั้น
         }
 
-        # keyboard: stand in for the controller's RUN/RESET panel buttons. The real
-        # panel has one RUN toggle rather than separate START and STOP, but `s` and
-        # `x` stay split here on purpose: this tool exists to drive the display
-        # through each phase, and being able to say "start" and "stop" outright is
-        # easier to steer than a key whose meaning depends on the fake's own state.
-        # [TH] แป้นพิมพ์ใช้แทนปุ่ม RUN/RESET บนหน้าปัดจริง
-        #      หน้าปัดจริงมีปุ่ม RUN แบบสลับปุ่มเดียว ไม่ได้แยก START กับ STOP
-        #      แต่ที่นี่ยังแยกปุ่ม s กับ x ไว้โดยตั้งใจ เพราะเครื่องมือนี้มีไว้พาจอไล่ดูทีละสถานะ
-        #      การสั่ง "เริ่ม" กับ "หยุด" ตรงๆ ควบคุมง่ายกว่าปุ่มที่ความหมายขึ้นกับสถานะของตัวจำลองเอง
         if ($interactive) {
             while ([Console]::KeyAvailable) {
                 $key = [Console]::ReadKey($true).KeyChar
                 switch -CaseSensitive ([char]::ToLower($key)) {
                     's' {
                         if (-not $running) {
-                            $running = $true; $phase = 1; $phaseLeft = $TravelSec
+                            $running = $true; $phase = 1; $phaseLeft = $LiftSec
                             $reps = 0; $sessionStart = Get-Date
                             Write-Host "   START (key)" -ForegroundColor Green
                         } else {
@@ -197,18 +222,18 @@ try {
                     }
                     'x' {
                         if ($running -and $phase -ne 5) {
-                            $phase = 5; $phaseLeft = $TravelSec   # SafeLower, then idle
+                            $phase = 5; $phaseLeft = $LowerSec   # SafeLower, then idle
                             Write-Host "   STOP (key)" -ForegroundColor Green
                         } else {
                             Write-Host "   STOP ignored (not running)" -ForegroundColor DarkYellow
                         }
                     }
                     'r' {
-                        if (-not $running) {                      # controller: RESET only when idle
+                        if (-not $running) {          # controller: STOP-while-idle clears reps
                             $reps = 0; $elapsed = 0
-                            Write-Host "   RESET reps (key)" -ForegroundColor Green
+                            Write-Host "   STOP-while-idle: reps cleared (key)" -ForegroundColor Green
                         } else {
-                            Write-Host "   RESET ignored (running)" -ForegroundColor DarkYellow
+                            Write-Host "   ignored (running)" -ForegroundColor DarkYellow
                         }
                     }
                     'q' { Write-Host "   quit (key)" -ForegroundColor Green; return }
@@ -222,31 +247,40 @@ try {
             if ($phaseLeft -le 0) {
                 switch ($phase) {
                     1 { $phase = 2; $phaseLeft = $HoldSec }        # Lift  -> Hold
-                    2 { $phase = 3; $phaseLeft = $TravelSec }      # Hold  -> Lower
+                    2 { $phase = 3; $phaseLeft = $LowerSec }       # Hold  -> Lower
                     3 { $phase = 4; $phaseLeft = $RestSec }        # Lower -> Rest
-                    4 { $reps++; $phase = 1; $phaseLeft = $TravelSec }  # Rest -> Lift
+                    4 {
+                        # [TH] พักครบ -> นับหนึ่งครั้ง แล้วตรวจเป้าหมายตรงนี้ที่เดียว เหมือน SessionSM::tick()
+                        # Rest -> Lift, or Rest -> Idle if the target was just
+                        # reached. Counted and checked here and nowhere else,
+                        # matching SessionSM::tick(): Rest is the one point in the
+                        # cycle where the leg is already down, so the session can
+                        # end on the spot with no safe-lower and no fault.
+                        $reps++
+                        if ($target -ne 0 -and $reps -ge $target) {
+                            $running = $false; $phase = 0
+                            Send-Done $false
+                            $elapsed = 0
+                        } else {
+                            $phase = 1; $phaseLeft = $LiftSec
+                        }
+                    }
                     5 {
                         # [TH] จบรอบ: ส่งข้อความ done เหมือนคอนโทรลเลอร์จริง จอจะได้บันทึกและขึ้นหน้าสรุป
                         # SafeLower -> Idle. The real controller emits `done` on this
                         # edge and the display logs it, so the bench must too -
                         # otherwise the finish screen and the SD row never appear here.
-                        # epoch: -Epoch 0 stands in for a controller with no RTC, which
-                        # is the case that logs a datetime of "?".
                         $running = $false; $phase = 0
-                        $ep = if ($Epoch -lt 0) { [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() }
-                              else { $Epoch }
-                        $done = '{{"t":"done","elapsed":{0},"reps":{1},"epoch":{2},"fault":{3}}}'
-                        Send-Line ([string]::Format($done, $elapsed, $reps, $ep,
-                                   $Fault.ToString().ToLower()))
+                        Send-Done $Fault.IsPresent
                         $elapsed = 0
                     }
                 }
             }
         }
 
-        $state = '{{"t":"state","running":{0},"phase":{1},"elapsed":{2},"reps":{3},' +
+        $state = '{{"t":"state","running":{0},"phase":{1},"elapsed":{2},"reps":{3},"target":{4},' +
                  '"wifi":true,"server":true}}'
-        $sp.WriteLine([string]::Format($state, $running.ToString().ToLower(), $phase, $elapsed, $reps))
+        $sp.WriteLine([string]::Format($state, $running.ToString().ToLower(), $phase, $elapsed, $reps, $target))
         Start-Sleep -Milliseconds 250
     }
 }

@@ -21,6 +21,11 @@ class DeviceState:
         self.live_state = "idle"
         self.live_elapsed_sec = 0
         self.live_reps = 0
+        self.live_target = 0
+        self._desired_target: int | None = None
+        self._target_queued_at = 0.0
+        self._desired_timings: dict | None = None
+        self._timings_queued_at = 0.0
 
     def queue_command(self, command: str) -> None:
         self._pending_command = command
@@ -72,11 +77,97 @@ class DeviceState:
             and self._now() - self._start_fetched_at <= COMMAND_TTL_SEC
         )
 
-    def heartbeat(self, state: str, elapsed_sec: int, reps: int) -> None:
+    def set_desired_target(self, reps: int) -> None:
+        self._desired_target = reps
+        self._target_queued_at = self._now()
+
+    def fetch_desired_target(self) -> int | None:
+        """The target the device should adopt, or None when it already has it.
+
+        Not consume-on-read, unlike commands: a command that is applied twice
+        starts two sessions, while a target that is applied twice is idempotent.
+        So it is repeated until the device's own heartbeat reports that value back,
+        which survives a dropped response.
+
+        The acknowledgement is not the only way out, though: it also expires after
+        COMMAND_TTL_SEC, like the timings do. A device whose heartbeat omits the
+        field entirely — the pre-target-echo image that `target: int | None` in
+        routes_device.py exists to model — can never ack, and without the clock
+        this would repeat on every 1 Hz poll for the life of the process while
+        current_status() kept reporting a desire the machine may never have taken.
+        The device polls once a second, so anything online has fetched it long
+        before the window closes.
+
+        [TH] ไม่ใช่อ่านแล้วล้างแบบคำสั่ง เพราะคำสั่งที่ถูกใช้ซ้ำจะเริ่มสองรอบ
+             แต่เป้าหมายที่ถูกใช้ซ้ำให้ผลเหมือนเดิม
+             จึงส่งซ้ำไปจนกว่าสัญญาณชีพของอุปกรณ์จะรายงานค่านั้นกลับมา ซึ่งทนต่อการที่คำตอบหายได้
+             แต่การยืนยันกลับไม่ใช่ทางออกทางเดียว ค่านี้หมดอายุตาม COMMAND_TTL_SEC เหมือนค่าเวลาของรอบด้วย
+             อุปกรณ์ที่สัญญาณชีพไม่มีฟิลด์นี้เลย ซึ่งเป็นรุ่นก่อนมีการยืนยันกลับที่ target: int | None
+             ใน routes_device.py มีไว้รองรับ จะยืนยันกลับไม่ได้เลย
+             ถ้าไม่มีการจับเวลา ค่านี้จะถูกส่งซ้ำทุกครั้งที่โพลวินาทีละครั้งไปตลอดอายุโปรเซส
+             และ current_status() ก็จะรายงานค่าที่เครื่องอาจไม่เคยรับไปใช้เลย
+             อุปกรณ์โพลวินาทีละครั้ง เครื่องที่ออนไลน์อยู่จึงดึงค่าไปนานแล้วก่อนหน้าต่างเวลาจะปิด
+        """
+        if (
+            self._desired_target is not None
+            and self._now() - self._target_queued_at > COMMAND_TTL_SEC
+        ):
+            self._desired_target = None
+        return self._desired_target
+
+    def set_desired_timings(self, timings: dict) -> None:
+        self._desired_timings = timings
+        self._timings_queued_at = self._now()
+
+    def fetch_desired_timings(self) -> dict | None:
+        """Cycle timings the device should adopt, until COMMAND_TTL_SEC passes.
+
+        Nothing echoes these back — the heartbeat has no room for four more
+        fields and there is nothing useful to do with a mismatch — so a clock
+        is the only way they ever expire. The target beside it now expires on
+        that same COMMAND_TTL_SEC clock too (see fetch_desired_target), so this
+        is no longer the difference between the two: the real difference is
+        that the target also clears itself early, the moment the device's own
+        heartbeat reports the value back, while timings have no such echo and
+        always ride the clock out. Repeating a stale edit forever would
+        re-apply it to a controller that had since been reconfigured at its own
+        screen.
+
+        [TH] สัญญาณชีพไม่มีที่ให้อีกสี่ฟิลด์ และถึงรู้ว่าไม่ตรงกันก็ทำอะไรไม่ได้
+             จึงหมดอายุได้ด้วยการจับเวลาเท่านั้น เป้าหมายจำนวนครั้งที่อยู่ข้างกันตอนนี้
+             ก็หมดอายุตาม COMMAND_TTL_SEC เดียวกันนี้เช่นกัน (ดู fetch_desired_target)
+             จึงไม่ใช่จุดต่างระหว่างสองค่านี้อีกต่อไป ความต่างจริงคือเป้าหมายจะล้างตัวเองก่อนเวลาได้
+             ทันทีที่สัญญาณชีพของอุปกรณ์รายงานค่านั้นกลับมา ส่วนค่าเวลาของรอบไม่มีการยืนยันกลับแบบนั้น
+             จึงต้องรอจนหมดเวลาเสมอ ถ้าส่งซ้ำไปเรื่อยๆ ค่าที่แก้ไว้นานแล้วจะไปทับเครื่องที่ถูกตั้งค่าใหม่จากหน้าจอของตัวเองไปแล้ว
+        """
+        if (
+            self._desired_timings is not None
+            and self._now() - self._timings_queued_at > COMMAND_TTL_SEC
+        ):
+            self._desired_timings = None
+        return self._desired_timings
+
+    def heartbeat(
+        self, state: str, elapsed_sec: int, reps: int, target: int | None = None
+    ) -> None:
+        # target is None, not 0, for a heartbeat that omits the field entirely
+        # (an ESP32 still on a pre-target-echo image) — 0 is itself a valid
+        # desired value (unlimited reps), so treating a missing field as 0
+        # would ack that desire away and clobber a live_target the device
+        # never actually reported. Skip both when the field was not sent.
+        # [TH] target เป็น None ไม่ใช่ 0 สำหรับสัญญาณชีพที่ไม่มีฟิลด์นี้เลย
+        #      (ESP32 รุ่นเก่าก่อนมีการยืนยันเป้าหมายกลับ) เพราะ 0 เองก็เป็นค่าเป้าหมายที่ถูกต้อง
+        #      (ทำไม่จำกัดจำนวนครั้ง) ถ้าถือว่าฟิลด์ที่หายไปคือ 0 จะไปยืนยันความต้องการนั้นทิ้งไป
+        #      และทับ live_target ด้วยค่าที่อุปกรณ์ไม่ได้รายงานมาจริง จึงข้ามทั้งสองกรณีถ้าไม่มีฟิลด์นี้ส่งมา
         self._last_heartbeat_at = self._now()
         self.live_state = state
         self.live_elapsed_sec = elapsed_sec
         self.live_reps = reps
+        if target is None:
+            return
+        self.live_target = target
+        if self._desired_target is not None and target == self._desired_target:
+            self._desired_target = None
 
     def device_online(self) -> bool:
         # [TH] อุปกรณ์ออนไลน์ = เพิ่งได้ยินสัญญาณชีพภายในเวลาที่กำหนด

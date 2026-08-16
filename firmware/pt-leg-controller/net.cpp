@@ -95,7 +95,14 @@ static bool post(const String& path, const String& body) {
   return serverOk;
 }
 
-String netPollCommand() {
+String netPollCommand(int16_t* targetOut, NetTimings* timingsOut) {
+  // Defaulted up front so every early return — including the one right below —
+  // leaves the caller with -1 / all-zero rather than a stale value from a
+  // previous poll.
+  // [TH] ตั้งค่าเริ่มต้นไว้ก่อน เพื่อให้ทุกทางออกก่อนกำหนด รวมถึงบรรทัดถัดไปนี้เอง
+  //      ส่งค่ากลับเป็น -1 / ศูนย์ทั้งหมด ไม่ใช่ค่าค้างจากการถามครั้งก่อน
+  if (targetOut) *targetOut = -1;
+  if (timingsOut) *timingsOut = NetTimings{0, 0, 0, 0, 0};
   if (!netWifiUp() || !baseUrl.length()) { serverOk = false; return ""; }
   HTTPClient http;
   http.setConnectTimeout(400);
@@ -126,12 +133,25 @@ String netPollCommand() {
     } else {
       JsonDocument filter;
       filter["command"] = true;
+      filter["targetReps"] = true;
+      filter["timings"] = true;
       JsonDocument doc;
       if (deserializeJson(doc, http.getStream(), DeserializationOption::Filter(filter)) ==
-              DeserializationError::Ok &&
-          !doc["command"].isNull()) {
-        cmd = doc["command"].as<String>();
-        if (cmd.length() > 32) cmd = "";  // no command is that long — คำสั่งไม่ยาวขนาดนั้น
+          DeserializationError::Ok) {
+        if (!doc["command"].isNull()) {
+          cmd = doc["command"].as<String>();
+          if (cmd.length() > 32) cmd = "";  // no command is that long — คำสั่งไม่ยาวขนาดนั้น
+        }
+        if (targetOut)
+          *targetOut = doc["targetReps"].isNull() ? -1 : (int16_t)doc["targetReps"];
+        if (timingsOut) {
+          JsonVariantConst t = doc["timings"];
+          timingsOut->liftSec = t["liftSec"] | (uint16_t)0;
+          timingsOut->lowerSec = t["lowerSec"] | (uint16_t)0;
+          timingsOut->holdSec = t["holdSec"] | (uint16_t)0;
+          timingsOut->restSec = t["restSec"] | (uint16_t)0;
+          timingsOut->maxTravelSec = t["maxTravelSec"] | (uint16_t)0;
+        }
       }
     }
   }
@@ -176,12 +196,13 @@ static void tryFlushEvent(uint32_t nowMs) {
   }
 }
 
-void netHeartbeat(const char* state, uint32_t elapsedSec, uint16_t reps) {
+void netHeartbeat(const char* state, uint32_t elapsedSec, uint16_t reps, uint16_t target) {
   // [TH] สัญญาณชีพ: บอกเซิร์ฟเวอร์ว่าอุปกรณ์ยังทำงานและอยู่สถานะใด (ส่งแล้วไม่รอผล)
   JsonDocument d;
   d["state"] = state;
   d["elapsedSec"] = elapsedSec;
   d["reps"] = reps;
+  d["target"] = target;
   d["deviceId"] = devCode;
   String body;
   serializeJson(d, body);

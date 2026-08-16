@@ -21,17 +21,20 @@ void settingsFileDefaults(DeviceSettings& s) {
   s.serverUrl = "";
   s.deviceCode = "default";
   s.maxTravelSec = 8;
+  s.liftSec = 4;
+  s.lowerSec = 4;
   s.holdSec = 10;
   s.restSec = 10;
+  s.targetReps = 10;
 }
 
 // Values a person typed into a text editor get the same range the spinboxes on
-// the settings screen enforce. maxTravelSec is the safety cap on how long a
-// relay may stay energized with no end-of-travel switch closing, and a typed 0
+// the settings screen enforce. maxTravelSec is now the ceiling for liftSec and
+// lowerSec — travel is timed rather than ended by a limit switch — and a typed 0
 // or 600 goes straight to the controller unchallenged otherwise. A missing key
 // takes its default; a present but silly one is pulled back to the edge.
 // [TH] ค่าที่พิมพ์มาจากคอมพิวเตอร์ต้องอยู่ในช่วงเดียวกับที่หน้าตั้งค่าบังคับไว้
-//      maxTravelSec คือเพดานเวลาที่รีเลย์จ่ายไฟได้โดยไม่มีสวิตช์ปลายทางปิด
+//      maxTravelSec ตอนนี้คือเพดานของ liftSec และ lowerSec เพราะการเดินทางนับเวลาแทนการรอสวิตช์ปลายทาง
 //      ถ้าพิมพ์ 0 หรือ 600 มาแล้วส่งต่อให้คอนโทรลเลอร์ตรงๆ จะอันตราย จึงต้องดึงกลับเข้าช่วง
 static uint16_t clampU16(uint16_t v, uint16_t lo, uint16_t hi, const char* key) {
   if (v >= lo && v <= hi) return v;
@@ -94,8 +97,11 @@ static bool loadFrom(const char* path, DeviceSettings& s, bool quarantine) {
   // The ranges are the settings screen's spinbox limits, kept in step by hand.
   // [TH] ช่วงตัวเลขตรงกับที่หน้าตั้งค่ากำหนดไว้ ต้องแก้ให้ตรงกันเองถ้ามีการเปลี่ยน
   out.maxTravelSec = clampU16(d["maxTravelSec"] | (uint16_t)8, 1, 20, "maxTravelSec");
+  out.liftSec = clampU16(d["liftSec"] | (uint16_t)4, 1, out.maxTravelSec, "liftSec");
+  out.lowerSec = clampU16(d["lowerSec"] | (uint16_t)4, 1, out.maxTravelSec, "lowerSec");
   out.holdSec = clampU16(d["holdSec"] | (uint16_t)10, 1, 60, "holdSec");
   out.restSec = clampU16(d["restSec"] | (uint16_t)10, 1, 60, "restSec");
+  out.targetReps = clampU16(d["targetReps"] | (uint16_t)10, 0, 99, "targetReps");
 
   s = out;
   return true;
@@ -162,8 +168,11 @@ bool settingsFileSave(const DeviceSettings& s) {
   d["serverUrl"] = s.serverUrl;
   d["deviceCode"] = s.deviceCode;
   d["maxTravelSec"] = s.maxTravelSec;
+  d["liftSec"] = s.liftSec;
+  d["lowerSec"] = s.lowerSec;
   d["holdSec"] = s.holdSec;
   d["restSec"] = s.restSec;
+  d["targetReps"] = s.targetReps;
 
   // Written to a temp file and renamed over the real one. A card pulled during
   // the write then costs the new settings, never the old ones — the alternative

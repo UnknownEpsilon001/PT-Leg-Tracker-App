@@ -154,6 +154,7 @@ def test_current_idle(clock):
         "elapsedSec": 0,
         "reps": 0,
         "deviceOnline": False,
+        "targetReps": 0,
     }
 
 
@@ -241,6 +242,54 @@ def test_two_devices_have_isolated_queues_and_sessions(clock):
     svc.handle_event("stopped", 40, 2, "KNEE-01")
     assert svc.current("KNEE-01")["state"] == "idle"
     assert svc.current("KNEE-02")["sessionId"] is None
+
+
+def test_queue_start_with_a_target_sets_the_desired_target(clock):
+    svc = make_service(clock)
+    svc.queue_start(target_reps=5)
+    assert svc.fetch_target() == 5
+    assert svc.fetch_command() == "start"
+
+
+def test_set_target_works_while_a_session_runs(clock):
+    svc = make_service(clock)
+    svc.handle_event("started", 0, 0)
+    svc.set_target(12)
+    assert svc.fetch_target() == 12
+
+
+def test_current_reports_the_live_target(clock):
+    svc = make_service(clock)
+    svc.handle_heartbeat("idle", 0, 0, target=8)
+    assert svc.current()["targetReps"] == 8
+
+
+# A target edit must show up in current() the moment it is made, with no
+# intervening heartbeat -- the app's re-read after setTarget() depends on
+# this, and a heartbeat is the one thing that is NOT guaranteed to have
+# happened yet (it can take up to a few seconds). Covers both branches of
+# current(): no open session (idle/starting) and an open session (running).
+def test_set_target_is_visible_in_current_with_no_heartbeat(clock):
+    svc = make_service(clock)
+    svc.set_target(11)
+    assert svc.current()["targetReps"] == 11
+
+
+def test_set_target_is_visible_in_current_while_running_with_no_heartbeat(clock):
+    svc = make_service(clock)
+    svc.handle_event("started", 0, 0)
+    svc.set_target(7)
+    assert svc.current()["targetReps"] == 7
+
+
+def test_current_falls_back_to_live_target_once_the_edit_is_acked(clock):
+    svc = make_service(clock)
+    svc.set_target(11)
+    assert svc.current()["targetReps"] == 11
+    svc.handle_heartbeat("idle", 0, 0, target=11)
+    # no longer outstanding -- current() now reports it via live_target
+    assert svc.current()["targetReps"] == 11
+    assert svc.fetch_target() is None
 
 
 def test_default_device_backcompat(clock):

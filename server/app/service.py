@@ -44,6 +44,22 @@ class SessionService:
     def fetch_command(self, device_id: str = DEFAULT_DEVICE_ID) -> str | None:
         return self._device(device_id).fetch_command()
 
+    def fetch_target(self, device_id: str = DEFAULT_DEVICE_ID) -> int | None:
+        return self._device(device_id).fetch_desired_target()
+
+    def set_target(self, reps: int, device_id: str = DEFAULT_DEVICE_ID) -> None:
+        # Never a ConflictError: the target is editable while a session runs, and
+        # the controller applies a lowered one at the end of the current rest.
+        # [TH] ไม่เคยชนสถานะ เพราะแก้เป้าหมายได้ระหว่างที่รอบกำลังเดิน
+        #      และคอนโทรลเลอร์จะใช้ค่าที่ปรับลดลงเมื่อสิ้นสุดการพักครั้งปัจจุบัน
+        self._device(device_id).set_desired_target(reps)
+
+    def set_timings(self, timings: dict, device_id: str = DEFAULT_DEVICE_ID) -> None:
+        self._device(device_id).set_desired_timings(timings)
+
+    def fetch_timings(self, device_id: str = DEFAULT_DEVICE_ID) -> dict | None:
+        return self._device(device_id).fetch_desired_timings()
+
     def handle_event(
         self,
         event_type: str,
@@ -68,11 +84,15 @@ class SessionService:
             session_id = db.create_session(self._iso_now(), origin, device_id)
             # an event is proof of life: refresh liveness so a fresh session isn't
             # immediately auto-closed by silence that preceded this event
-            dev.heartbeat("running", elapsed_sec, reps)
+            # target is carried through, not defaulted -- this is a lifecycle
+            # event, not a target report, so it must not blank live_target
+            # [TH] ส่งต่อค่าเป้าหมายเดิม ไม่ใช้ค่าเริ่มต้น เพราะนี่คือเหตุการณ์วงจรชีวิต
+            #      ไม่ใช่การรายงานเป้าหมาย จึงต้องไม่ทำให้ live_target ว่างไป
+            dev.heartbeat("running", elapsed_sec, reps, target=dev.live_target)
             return session_id
 
         open_session = db.get_open_session(device_id)
-        dev.heartbeat("idle", elapsed_sec, reps)
+        dev.heartbeat("idle", elapsed_sec, reps, target=dev.live_target)
         # a start cannot be in flight across a completed session
         dev.clear_start_in_flight()
         if open_session is None:
@@ -85,12 +105,13 @@ class SessionService:
         state: str,
         elapsed_sec: int,
         reps: int,
+        target: int | None = None,
         device_id: str = DEFAULT_DEVICE_ID,
     ) -> None:
         dev = self._device(device_id)
         prev_elapsed = dev.live_elapsed_sec
         prev_reps = dev.live_reps
-        dev.heartbeat(state, elapsed_sec, reps)
+        dev.heartbeat(state, elapsed_sec, reps, target=target)
         if state == "idle":
             # heal: device idle but a session is still open (lost 'stopped' event)
             # [TH] เยียวยา: อุปกรณ์ว่างแต่ยังมีเซสชันเปิดค้าง (เหตุการณ์ 'stopped' หาย) จึงปิดให้
@@ -102,7 +123,9 @@ class SessionService:
 
     # --- app-facing ---
 
-    def queue_start(self, device_id: str = DEFAULT_DEVICE_ID) -> None:
+    def queue_start(
+        self, device_id: str = DEFAULT_DEVICE_ID, target_reps: int | None = None
+    ) -> None:
         # [TH] แอปสั่งเริ่ม: กันซ้ำหลายทาง (มีเซสชันเปิดอยู่ / คำสั่งค้าง / start กำลังไปถึงอุปกรณ์)
         self._auto_close_if_silent(device_id)
         dev = self._device(device_id)
@@ -112,6 +135,11 @@ class SessionService:
             raise ConflictError("start already queued")
         if dev.start_in_flight():
             raise ConflictError("start in progress")
+        # set before queuing the command so a device that fetches on its very
+        # next poll already sees the target in the same response
+        # [TH] ตั้งค่าก่อนคิวคำสั่ง เพื่อให้อุปกรณ์ที่ถามทันทีในรอบถัดไปเห็นเป้าหมายในคำตอบเดียวกัน
+        if target_reps is not None:
+            dev.set_desired_target(target_reps)
         dev.queue_command("start")
 
     def queue_stop(self, device_id: str = DEFAULT_DEVICE_ID) -> None:
@@ -125,6 +153,17 @@ class SessionService:
         dev = self._device(device_id)
         online = dev.device_online()
         open_session = db.get_open_session(device_id)
+        # An edit the device has not yet echoed back over a heartbeat must
+        # still show up here immediately: the app's re-read after setTarget()
+        # relies on it, and live_target alone is the pre-edit number until the
+        # device's next heartbeat. Fall back to live_target only once nothing
+        # is outstanding.
+        # [TH] การแก้ไขที่อุปกรณ์ยังไม่ได้ส่งสัญญาณชีพยืนยันกลับมาต้องยังปรากฏตรงนี้ทันที
+        #      การอ่านซ้ำของแอปหลังเรียก setTarget() พึ่งพาค่านี้อยู่ และ live_target อย่างเดียว
+        #      จะเป็นตัวเลขก่อนแก้ไขจนกว่าจะถึงสัญญาณชีพครั้งถัดไปของอุปกรณ์
+        #      ใช้ live_target ก็ต่อเมื่อไม่มีค่าค้างอยู่เท่านั้น
+        desired_target = dev.fetch_desired_target()
+        target_reps = desired_target if desired_target is not None else dev.live_target
         if open_session is not None:
             return {
                 "sessionId": open_session["id"],
@@ -132,6 +171,7 @@ class SessionService:
                 "elapsedSec": dev.live_elapsed_sec,
                 "reps": dev.live_reps,
                 "deviceOnline": online,
+                "targetReps": target_reps,
             }
         state = (
             "starting"
@@ -144,6 +184,7 @@ class SessionService:
             "elapsedSec": 0,
             "reps": 0,
             "deviceOnline": online,
+            "targetReps": target_reps,
         }
 
     def claim(self, session_id: str, patient_code: str) -> bool:
