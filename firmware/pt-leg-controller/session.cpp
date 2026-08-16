@@ -158,6 +158,21 @@ void SessionSM::requestStop(uint32_t nowMs) {
       // [TH] ความผิดพลาดตัดรีเลย์ไม่ว่าขาจะอยู่ตรงไหน และอาจค้างกลางทาง
       //      ปุ่ม STOP คือปุ่มที่ผู้ใช้เอื้อมไปกด จึงพาขาลงมาและล้างสถานะเมื่อถึงพื้น
       //      ความผิดพลาดถูกบันทึกไปแล้วตอนเกิดเหตุ การลดขาครั้งนี้จึงไม่รายงานอะไร ดูตัวแปร recovering
+      //
+      // repCount is deliberately left alone here, unlike start()'s Fault branch,
+      // which zeroes it before queuing a lift. The two are not symmetric: start()
+      // is about to begin a NEW session, so the old count showing on the heartbeat
+      // and the state message during that descent is stale and misleading. This
+      // STOP path begins no new session — it is the tail end of the one that just
+      // faulted, already latched into finalRepCount by finish() when the fault
+      // happened. Continuing to show that same count while the leg comes down is
+      // the honest number, not a leftover.
+      // [TH] จงใจไม่ล้าง repCount ตรงนี้ ต่างจากสาขาผิดพลาดใน start() ที่ล้างค่าก่อนเข้าคิวยกขา
+      //      ทั้งสองไม่สมมาตรกันโดยเจตนา start() กำลังจะเริ่มรอบใหม่ จำนวนครั้งเก่าที่ยังค้างอยู่บนสัญญาณชีพ
+      //      และข้อความสถานะระหว่างการลดขานั้นจึงเป็นค่าเก่าที่ทำให้เข้าใจผิด
+      //      ส่วนเส้นทาง STOP นี้ไม่ได้เริ่มรอบใหม่เลย เป็นแค่ช่วงท้ายของรอบที่เพิ่งผิดพลาดไป
+      //      ซึ่งถูกบันทึกลง finalRepCount โดย finish() ไปแล้วตอนที่เกิดความผิดพลาด
+      //      การยังคงแสดงจำนวนครั้งเดิมนี้ระหว่างที่ขากำลังลงจึงเป็นตัวเลขที่ถูกต้อง ไม่ใช่ค่าตกค้าง
       recovering = true;
       startAfterRecovery = false;
       enter(Phase::SafeLower, nowMs);

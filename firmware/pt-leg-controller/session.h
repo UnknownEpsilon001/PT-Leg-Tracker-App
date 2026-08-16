@@ -6,6 +6,18 @@
 // Session state machine: Lift -> Hold -> Lower -> Rest, every phase ended by a
 // clock. There are no limit switches: travel length IS liftMs / lowerMs.
 
+// The enumerator ORDER here is wire protocol: the UART state message carries
+// "phase":int, which is this enum's ordinal, and pt-leg-display/session.h
+// holds a matching reduced copy (Phase only) that must stay byte-identical
+// in order to it. This is the file people actually edit, since it holds the
+// real state machine — reordering these for tidiness silently breaks the
+// display's phase name with no build error. Adding a value is safe only at
+// the end.
+// [TH] ลำดับค่าของ enum นี้คือรูปแบบข้อมูลบนสาย ข้อความสถานะ (state) ผ่าน UART มีฟิลด์
+//      "phase":int ซึ่งคือลำดับของ enum นี้ และไฟล์ pt-leg-display/session.h มีสำเนาย่อ
+//      (มีแค่ Phase) ที่ต้องมีลำดับตรงกันทุกตัวอักษรกับไฟล์นี้ ไฟล์นี้คือไฟล์ที่คนจะแก้จริง
+//      เพราะเป็นที่เก็บเครื่องสถานะจริง การสลับลำดับเพื่อความเรียบร้อยจะทำให้จอแสดงผลแสดงชื่อ
+//      สถานะผิดโดยไม่มี error ตอนคอมไพล์ เพิ่มค่าใหม่ได้อย่างปลอดภัยเฉพาะท้าย enum เท่านั้น
 // [TH] สถานะของรอบ: ว่าง / ยกขึ้น / ค้าง / ลดลง / พัก / กำลังลงเพื่อหยุด / ผิดพลาด
 enum class Phase { Idle, Lift, Hold, Lower, Rest, SafeLower, Fault };
 
