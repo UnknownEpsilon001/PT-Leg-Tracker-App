@@ -110,11 +110,26 @@ static void onLinkSettings(const LinkSettings& s) {
   DeviceSettings d;
   d.wifiSsid = s.ssid; d.wifiPass = s.pass; d.serverUrl = s.server;
   d.deviceCode = s.code;
-  d.maxTravelSec = clampSec(s.maxTravel, 1, 20, "maxTravelSec");
-  d.liftSec = clampSec(s.lift, 1, d.maxTravelSec, "liftSec");
-  d.lowerSec = clampSec(s.lower, 1, d.maxTravelSec, "lowerSec");
-  d.holdSec = clampSec(s.hold, 1, 60, "holdSec");
-  d.restSec = clampSec(s.rest, 1, 60, "restSec");
+  // A zero means "this field was not sent", not "zero seconds" — the same
+  // convention netPollCommand already uses for the server's timings, and none of
+  // these has a legal value of 0. It matters because the boards are flashed
+  // separately: a display still running an image from before lift/lower existed
+  // sends a settings message without those keys, link.cpp decodes the absent
+  // fields as 0, and clamping 0 up to the low bound would silently reconfigure
+  // both strokes to one second and persist that to NVS with nothing reported.
+  // [TH] ค่าศูนย์แปลว่า "ไม่ได้ส่งฟิลด์นี้มา" ไม่ใช่ "ศูนย์วินาที"
+  //      เป็นข้อตกลงเดียวกับที่ netPollCommand ใช้กับค่าเวลาจากเซิร์ฟเวอร์อยู่แล้ว
+  //      และไม่มีค่าใดในกลุ่มนี้ที่ใช้ 0 ได้จริง
+  //      เรื่องนี้สำคัญเพราะบอร์ดสองใบแฟลชแยกกัน จอที่ยังใช้เฟิร์มแวร์รุ่นก่อนจะมี lift/lower
+  //      จะส่งข้อความตั้งค่าที่ไม่มีคีย์เหล่านั้น link.cpp จะถอดรหัสฟิลด์ที่หายไปเป็น 0
+  //      การบีบ 0 ขึ้นไปหาขอบล่างจะเปลี่ยนการเคลื่อนที่ทั้งสองทางเป็นหนึ่งวินาทีแบบเงียบๆ
+  //      แล้วบันทึกลง NVS โดยไม่มีการรายงานใดๆ
+  d.maxTravelSec = clampSec(s.maxTravel ? s.maxTravel : gSettings.maxTravelSec, 1, 20,
+                            "maxTravelSec");
+  d.liftSec = clampSec(s.lift ? s.lift : gSettings.liftSec, 1, d.maxTravelSec, "liftSec");
+  d.lowerSec = clampSec(s.lower ? s.lower : gSettings.lowerSec, 1, d.maxTravelSec, "lowerSec");
+  d.holdSec = clampSec(s.hold ? s.hold : gSettings.holdSec, 1, 60, "holdSec");
+  d.restSec = clampSec(s.rest ? s.rest : gSettings.restSec, 1, 60, "restSec");
   d.targetReps = clampSec(s.target, 0, 99, "targetReps");
   if (gSession.running()) {
     gPending = d;
@@ -401,7 +416,7 @@ void loop() {
   //      ใช้ running() เป็นกฎทั้งหมด เป็นจริงตอนยกขึ้น/ค้าง/ลดลง/พัก และตอนลดขาเพื่อหยุด
   //      เป็นเท็จตอนว่างและตอนค้างสถานะผิดพลาด ซึ่งตรงกับความหมาย "ชุดขับเคลื่อนอาจเคลื่อนที่" พอดี
   //      และตรงกับหน้าที่ของหลอดพอดี
-  panelLampsSet(gSession.running());
+  panelLampsSet(gSession.running(), gSession.faulted());
   // The trip raised by actuatorTick's own software check is consumed at the top of
   // the NEXT iteration, alongside the hardware timer's. Both go through the one
   // place above, so a trip can never be charged to a session that started after
@@ -519,6 +534,16 @@ void loop() {
     // Applied before the command, so a start that carries a target runs with it
     // rather than with the previous one.
     // [TH] นำไปใช้ก่อนคำสั่ง คำสั่งเริ่มที่แนบเป้าหมายมาจะได้ใช้ค่าใหม่ ไม่ใช่ค่าเดิม
+    // Clamped here like every other entry point. The route validates 0..99, but
+    // this board owns the relay and the value reaches it from whatever is at the
+    // other end of serverUrl — which the operator types in by hand — so the range
+    // is enforced where it is used rather than trusted from the wire, exactly as
+    // onLinkTarget does for the UART path.
+    // [TH] จำกัดช่วงตรงนี้เหมือนทางเข้าอื่นทุกทาง เส้นทาง HTTP ตรวจ 0..99 อยู่แล้ว
+    //      แต่บอร์ดนี้เป็นเจ้าของรีเลย์ และค่านี้มาจากอะไรก็ตามที่อยู่ปลายทาง serverUrl
+    //      ซึ่งผู้ใช้พิมพ์เอง จึงบังคับช่วงค่าที่จุดที่ใช้งานจริง ไม่ใช่เชื่อค่าที่ส่งมา
+    //      แบบเดียวกับที่ onLinkTarget ทำกับเส้นทาง UART
+    if (wantTarget > 99) wantTarget = 99;
     if (wantTarget >= 0 && (uint16_t)wantTarget != gSettings.targetReps) {
       gSettings.targetReps = (uint16_t)wantTarget;
       gSession.setTarget((uint16_t)wantTarget);

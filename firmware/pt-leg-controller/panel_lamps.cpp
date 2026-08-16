@@ -51,10 +51,14 @@ void panelLampsBegin() {
   //      ข้อกำหนดคือให้มีไฟติดดวงเดียวตลอดเวลา
   //      การวาบไฟเขียวตอนเปิดเครื่องจะถูกอ่านว่าเครื่องเริ่มทำงานเอง
   //      ซึ่งเป็นความรู้สึกเดียวที่หน้าปัดนี้ต้องไม่สร้างขึ้นเลย
-  panelLampsSet(false);
+  panelLampsSet(false, false);
 }
 
-void panelLampsSet(bool inProgress) {
-  writeLamp(PIN_LAMP_GREEN, gLastGreen, inProgress);
-  writeLamp(PIN_LAMP_YELLOW, gLastYellow, !inProgress);
+void panelLampsSet(bool inProgress, bool faulted) {
+  // A fault lights both. Green is still only ever on when the actuator may move,
+  // so an operator who reads nothing but the green lamp is not misled by this.
+  // [TH] ความผิดพลาดจะติดทั้งสองดวง ไฟเขียวยังคงติดเฉพาะตอนที่ชุดขับเคลื่อนอาจเคลื่อนที่ได้เท่านั้น
+  //      ผู้ใช้ที่ดูแค่ไฟเขียวจึงไม่ถูกทำให้เข้าใจผิดจากกฎนี้
+  writeLamp(PIN_LAMP_GREEN, gLastGreen, inProgress || faulted);
+  writeLamp(PIN_LAMP_YELLOW, gLastYellow, !inProgress || faulted);
 }

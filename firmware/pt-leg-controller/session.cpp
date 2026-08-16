@@ -2,6 +2,14 @@
 // Session state-machine logic. Every transition is a clock; there are no switches.
 #include "session.h"
 
+// Slack added to a shortened safe-lower, so a descent computed from the drive
+// time still reaches the bottom when the leg comes down slower than it went up.
+// A full-length stroke is never shortened below what was actually driven.
+// [TH] เวลาเผื่อที่บวกให้การลดขาแบบย่นระยะ เพื่อให้การลดที่คำนวณจากเวลาที่ขับเคลื่อนไป
+//      ยังลงถึงพื้นได้แม้ขาจะลงช้ากว่าตอนขึ้น
+//      และจะไม่ย่นให้สั้นกว่าระยะที่ขับเคลื่อนไปจริง
+static const uint32_t LOWER_MARGIN_MS = 500;
+
 void SessionSM::enter(Phase p, uint32_t nowMs) {
   // Entering a descending phase begins a stroke that may keep driving the same
   // direction as the phase before it, which the actuator cannot see for itself.
@@ -10,7 +18,36 @@ void SessionSM::enter(Phase p, uint32_t nowMs) {
   // [TH] การเข้าสู่สถานะที่สั่งลงคือการเริ่มเคลื่อนที่ครั้งใหม่ ซึ่งอาจสั่งไปทางเดิมกับสถานะก่อนหน้า
   //      ตัวขับเคลื่อนมองไม่เห็นเรื่องนี้เอง จึงยกสัญญาณตรงนี้ซึ่งเป็นจุดเดียวที่การเข้าสถานะทุกครั้งต้องผ่าน
   //      แทนที่จะให้สเก็ตช์เดาจากสถานะที่มันบังเอิญเห็น
-  if (p == Phase::SafeLower) strokeRenewEdge = true;
+  if (p == Phase::SafeLower) {
+    strokeRenewEdge = true;
+    // How long this descent needs, rather than always a full lowerMs. Travel is
+    // timed, so the distance to give back is the distance actually driven: a stop
+    // half a second into a four-second lift needs half a second of DOWN, and the
+    // remaining three and a half were spent stalled against the bottom stop with
+    // the limb loaded — every time, on every early stop.
+    //
+    // Only the two phases whose position is known get the short version. From
+    // Hold the leg is fully up, and from Fault or Idle the position is unknown by
+    // definition, so those keep the full stroke.
+    // [TH] คำนวณว่าการลดขาครั้งนี้ต้องใช้เวลาเท่าไร แทนที่จะใช้ค่าเต็มของ lowerMs เสมอ
+    //      เพราะการเดินทางนับด้วยเวลา ระยะที่ต้องคืนจึงเท่ากับระยะที่ขับเคลื่อนไปจริง
+    //      การกดหยุดหลังเริ่มยกไปครึ่งวินาทีจากทั้งหมดสี่วินาที ต้องการการสั่งลงแค่ครึ่งวินาที
+    //      เวลาที่เหลืออีกสามวินาทีครึ่งคือการดันค้างชนกลไกด้านล่างโดยมีขาวางอยู่ ทุกครั้งที่หยุดก่อนกำหนด
+    //      ให้ใช้เวลาแบบสั้นเฉพาะสองสถานะที่รู้ตำแหน่งเท่านั้น
+    //      จากสถานะค้างขาอยู่บนสุด ส่วนจากสถานะผิดพลาดหรือว่างถือว่าไม่รู้ตำแหน่งอยู่แล้ว
+    //      สองกรณีหลังจึงใช้ระยะเต็ม
+    uint32_t dt = nowMs - phaseStart;
+    if (ph == Phase::Lift) {
+      uint32_t need = dt + LOWER_MARGIN_MS;
+      strokeCapMs = need < cfg.lowerMs ? need : cfg.lowerMs;
+    } else if (ph == Phase::Lower) {
+      uint32_t left = dt >= cfg.lowerMs ? 0 : cfg.lowerMs - dt;
+      uint32_t need = left + LOWER_MARGIN_MS;
+      strokeCapMs = need < cfg.lowerMs ? need : cfg.lowerMs;
+    } else {
+      strokeCapMs = cfg.lowerMs;
+    }
+  }
   ph = p;
   phaseStart = nowMs;  // จับเวลาเริ่มสถานะใหม่
 }
@@ -54,6 +91,16 @@ void SessionSM::start(uint32_t nowMs) {
   if (ph == Phase::Fault || legPositionUnknown) {
     recovering = true;
     startAfterRecovery = true;
+    // Zeroed now, not when the queued start finally fires. running() is already
+    // true for the whole recovery descent, so the heartbeat and the link state go
+    // out during it — carrying the PREVIOUS session's count, which reads on the
+    // phone and the CYD as a session that is somehow already part-done before it
+    // has begun. elapsedSec() is given exactly this treatment a few lines down.
+    // [TH] ล้างค่าตรงนี้ ไม่ใช่ตอนที่คำสั่งเริ่มที่เข้าคิวไว้ทำงานจริง
+    //      เพราะ running() เป็นจริงตลอดช่วงลดขากู้สถานการณ์ สัญญาณชีพและสถานะบนลิงก์จึงถูกส่งออกระหว่างนั้น
+    //      โดยพาจำนวนครั้งของรอบก่อนหน้าไปด้วย ซึ่งบนมือถือและบนจอจะอ่านได้ว่า
+    //      เป็นรอบที่ทำไปแล้วบางส่วนทั้งที่ยังไม่เริ่ม ค่า elapsedSec() ก็ถูกจัดการแบบเดียวกันนี้อยู่ไม่กี่บรรทัดถัดไป
+    repCount = 0;
     enter(Phase::SafeLower, nowMs);
     return;
   }
@@ -174,7 +221,7 @@ void SessionSM::tick(uint32_t nowMs) {
       enter(Phase::Lift, nowMs);
       return;
     case Phase::SafeLower:
-      if (dt < cfg.lowerMs) return;
+      if (dt < strokeCapMs) return;
       // Same signal as the Lower case above, and set unconditionally before
       // the branch below, so every exit out of SafeLower — recovering into a
       // queued start, recovering into Idle, or a clean stop — leaves the

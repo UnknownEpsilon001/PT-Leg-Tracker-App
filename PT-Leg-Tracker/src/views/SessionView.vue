@@ -41,10 +41,25 @@ const target = ref<number | null>(null)
 //      แอปจะไม่ยืนยันตัวเลขที่พิสูจน์ไม่ได้ ตอนกดเริ่มจะไม่ส่งค่านี้ไป การแก้ไขที่สำเร็จแล้วที่เซิร์ฟเวอร์
 //      จะได้ไม่ถูกทับ แต่ข้อความจะบอกผู้ใช้ว่าที่กดไปนั้นสำเร็จ ไม่ใช่ว่าพัง
 const targetUnconfirmed = ref(false)
+// The value the latest tap asked for, while its request is still in flight. Taps
+// accumulate on this rather than on `target`, which only ever holds a number the
+// server confirmed. Without it each tap computed its next value from the last
+// CONFIRMED number, so three quick taps on 10 all computed 11 and the user got
+// +1 for three presses with nothing to show the other two were dropped.
+// [TH] ค่าที่การกดครั้งล่าสุดขอไว้ ระหว่างที่คำขอยังไม่ได้คำตอบ
+//      การกดจะสะสมบนค่านี้ ไม่ใช่บน target ซึ่งเก็บเฉพาะตัวเลขที่เซิร์ฟเวอร์ยืนยันแล้ว
+//      ถ้าไม่มีค่านี้ การกดแต่ละครั้งจะคำนวณค่าถัดไปจากตัวเลขที่ยืนยันล่าสุด
+//      การกดเร็วๆ สามครั้งบนค่า 10 จึงคำนวณได้ 11 ทั้งสามครั้ง ผู้ใช้กดสามทีแต่ได้เพิ่มแค่หนึ่ง
+//      โดยไม่มีอะไรบอกว่าอีกสองครั้งหายไป
+const targetPending = ref<number | null>(null)
+// What the stepper reads and writes: the pending value while one is outstanding,
+// the confirmed one otherwise.
+// [TH] ค่าที่ปุ่มปรับใช้อ่านและเขียน คือค่าที่ค้างอยู่ถ้ามี ถ้าไม่มีก็ใช้ค่าที่ยืนยันแล้ว
+const targetShown = computed(() => targetPending.value ?? target.value)
 const targetLabel = computed(() => {
-  if (target.value === null)
+  if (targetShown.value === null)
     return targetUnconfirmed.value ? 'ส่งค่าไปแล้ว แต่ยืนยันค่าจริงไม่ได้' : 'ไม่ทราบค่า'
-  return target.value > 0 ? `${target.value} ครั้ง` : 'ไม่จำกัด'
+  return targetShown.value > 0 ? `${targetShown.value} ครั้ง` : 'ไม่จำกัด'
 })
 const attachAvailable = ref(false)
 const connLost = ref(false)
@@ -128,15 +143,23 @@ function failOffline() {
 //      จะไม่ถูกแสดงเลย จนกว่า start() จะส่งค่าเก่าก่อนแก้ไขกลับไปทับโดยที่ผู้ใช้ไม่รู้ตัว
 let targetOpSeq = 0 // guards against a slower earlier tap's re-read landing after a later tap's
 async function stepTarget(delta: number) {
-  if (target.value === null) return // unknown baseline: wait for a real value first
-  const next = Math.min(99, Math.max(0, target.value + delta))
-  if (next === target.value) return
+  // Stepped from what the stepper is showing, not from the last confirmed value,
+  // so taps made while an earlier request is still in flight accumulate instead
+  // of all landing on the same number.
+  // [TH] นับจากค่าที่ปุ่มปรับแสดงอยู่ ไม่ใช่จากค่าที่ยืนยันล่าสุด
+  //      การกดระหว่างที่คำขอก่อนหน้ายังไม่ได้คำตอบจึงสะสมกันไป ไม่ใช่ตกลงที่ตัวเลขเดียวกันหมด
+  const base = targetShown.value
+  if (base === null) return // unknown baseline: wait for a real value first
+  const next = Math.min(99, Math.max(0, base + delta))
+  if (next === base) return
   const opSeq = ++targetOpSeq
+  targetPending.value = next
   try {
     await setTarget(serverUrl.value, deviceCode.value, next)
   } catch {
     // a failed change is simply not applied; the next poll re-reads the truth
     // [TH] ถ้าเปลี่ยนไม่สำเร็จก็ถือว่าไม่เปลี่ยน การอ่านสถานะรอบถัดไปจะดึงค่าจริงกลับมาเอง
+    if (opSeq === targetOpSeq) targetPending.value = null
     return
   }
   try {
@@ -147,6 +170,7 @@ async function stepTarget(delta: number) {
     // [TH] ถ้ามีการกดครั้งใหม่กว่าเริ่มไปแล้ว ให้ผลของครั้งใหม่ชนะ ไม่เอาค่าเก่าที่เพิ่งอ่านมาทับ
     if (opSeq !== targetOpSeq) return
     target.value = cur.targetReps
+    targetPending.value = null
     targetUnconfirmed.value = false
   } catch {
     if (disposed) return
@@ -163,6 +187,7 @@ async function stepTarget(delta: number) {
     //      "ยังไม่เคยรู้ค่าเลย" จึงจัดการแบบเดียวกัน คือเป็น null ไม่เดาว่าเป็น next และไม่ใช้ค่าเก่า
     //      ก่อนแก้ไข นี่คือสิ่งที่ทำให้ start() ไม่ส่งค่านี้ไปทับการแก้ไขที่สำเร็จแล้วที่เซิร์ฟเวอร์
     target.value = null
+    targetPending.value = null
     targetUnconfirmed.value = true
   }
 }
@@ -276,7 +301,7 @@ onUnmounted(() => {
         <button
           class="step"
           aria-label="ลดจำนวนเป้าหมาย"
-          :disabled="target === null || target === 0"
+          :disabled="targetShown === null || targetShown === 0"
           @click="stepTarget(-1)"
         >
           −
@@ -285,7 +310,7 @@ onUnmounted(() => {
         <button
           class="step"
           aria-label="เพิ่มจำนวนเป้าหมาย"
-          :disabled="target === null || target === 99"
+          :disabled="targetShown === null || targetShown === 99"
           @click="stepTarget(1)"
         >
           +
@@ -320,13 +345,13 @@ onUnmounted(() => {
         <Transition name="pop" mode="out-in">
           <span :key="reps" class="reps-num">{{ reps }}</span>
         </Transition>
-        <span v-if="target !== null && target > 0"> / {{ target }}</span>
+        <span v-if="targetShown !== null && targetShown > 0"> / {{ targetShown }}</span>
       </p>
       <div class="target-stepper">
         <button
           class="step"
           aria-label="ลดจำนวนเป้าหมาย"
-          :disabled="target === null || target === 0"
+          :disabled="targetShown === null || targetShown === 0"
           @click="stepTarget(-1)"
         >
           −
@@ -335,7 +360,7 @@ onUnmounted(() => {
         <button
           class="step"
           aria-label="เพิ่มจำนวนเป้าหมาย"
-          :disabled="target === null || target === 99"
+          :disabled="targetShown === null || targetShown === 99"
           @click="stepTarget(1)"
         >
           +

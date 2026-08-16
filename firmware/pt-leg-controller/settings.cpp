@@ -51,10 +51,24 @@ void settingsLoad(DeviceSettings& s) {
   s.deviceCode = p.getString("code", DEFAULT_DEVICE_CODE);
   s.maxTravelSec = clampSec(p.getUShort("maxtravel", DEFAULT_MAX_TRAVEL_SEC), 1, 20,
                             DEFAULT_MAX_TRAVEL_SEC, "maxtravel");
-  s.liftSec = clampSec(p.getUShort("lift", DEFAULT_LIFT_SEC), 1, s.maxTravelSec, DEFAULT_LIFT_SEC,
-                       "lift");
-  s.lowerSec = clampSec(p.getUShort("lower", DEFAULT_LOWER_SEC), 1, s.maxTravelSec,
-                        DEFAULT_LOWER_SEC, "lower");
+  // The fallback is capped by maxTravelSec too, not just the stored value. These
+  // two are the only clamps whose upper bound is another setting rather than a
+  // constant, and DEFAULT_LIFT_SEC (4) can sit above a maxTravelSec the operator
+  // set low. An existing machine holding maxtravel=2 and no "lift" key yet — every
+  // machine, the first boot after this update — would take the 4 unchanged, and a
+  // 4 s stroke against a 2.5 s energize cap faults every single lift, then
+  // persists the pair so it faults again on the next boot.
+  // [TH] ค่าสำรองถูกจำกัดด้วย maxTravelSec ด้วย ไม่ใช่แค่ค่าที่เก็บไว้
+  //      สองค่านี้เป็นค่าเดียวที่มีขอบบนเป็นค่าตั้งค่าตัวอื่น ไม่ใช่ค่าคงที่
+  //      และ DEFAULT_LIFT_SEC (4) อาจสูงกว่า maxTravelSec ที่ผู้ใช้ตั้งไว้ต่ำ
+  //      เครื่องเดิมที่เก็บ maxtravel=2 ไว้และยังไม่มีคีย์ "lift" ซึ่งคือทุกเครื่องในการบูตครั้งแรกหลังอัปเดตนี้
+  //      จะรับค่า 4 มาทั้งอย่างนั้น การเคลื่อนที่ 4 วินาทีชนเพดานจ่ายไฟ 2.5 วินาที
+  //      จะทำให้การยกขาผิดพลาดทุกครั้ง แล้วบันทึกคู่ค่านั้นไว้จนผิดพลาดซ้ำในการบูตครั้งถัดไป
+  uint16_t liftDflt = DEFAULT_LIFT_SEC < s.maxTravelSec ? DEFAULT_LIFT_SEC : s.maxTravelSec;
+  uint16_t lowerDflt = DEFAULT_LOWER_SEC < s.maxTravelSec ? DEFAULT_LOWER_SEC : s.maxTravelSec;
+  s.liftSec = clampSec(p.getUShort("lift", DEFAULT_LIFT_SEC), 1, s.maxTravelSec, liftDflt, "lift");
+  s.lowerSec = clampSec(p.getUShort("lower", DEFAULT_LOWER_SEC), 1, s.maxTravelSec, lowerDflt,
+                        "lower");
   s.holdSec = clampSec(p.getUShort("hold", DEFAULT_HOLD_SEC), 1, 60, DEFAULT_HOLD_SEC, "hold");
   s.restSec = clampSec(p.getUShort("rest", DEFAULT_REST_SEC), 1, 60, DEFAULT_REST_SEC, "rest");
   s.targetReps = clampSec(p.getUShort("target", DEFAULT_TARGET_REPS), 0, 99, DEFAULT_TARGET_REPS,

@@ -106,6 +106,20 @@ def test_a_heartbeat_with_a_different_target_does_not_clear_the_desire():
     assert dev.fetch_desired_target() == 7
 
 
+def test_desired_target_expires_when_the_device_never_acks_it():
+    # A device on a pre-target-echo image never reports the field back, so the
+    # acknowledgement path can never fire; the clock is the only way out.
+    # [TH] อุปกรณ์รุ่นก่อนที่ยังไม่ส่งเป้าหมายกลับมาจะยืนยันไม่ได้เลย การจับเวลาจึงเป็นทางออกทางเดียว
+    clock = [1000.0]
+    dev = DeviceState(now=lambda: clock[0])
+    dev.set_desired_target(7)
+    clock[0] += 10
+    dev.heartbeat("idle", 0, 0)  # no target field at all — ไม่มีฟิลด์เป้าหมายเลย
+    assert dev.fetch_desired_target() == 7
+    clock[0] += 30
+    assert dev.fetch_desired_target() is None
+
+
 def test_desired_timings_are_handed_out_until_the_ttl_expires():
     clock = [1000.0]
     dev = DeviceState(now=lambda: clock[0])

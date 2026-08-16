@@ -16,8 +16,8 @@
 #
 # Two panel lamps are the out-of-band check throughout: green on GPIO 23 lit
 # whenever a session is in progress (including the safe-lower), yellow on
-# GPIO 32 lit otherwise (idle or a latched FAULT). Exactly one must be lit at
-# any instant - never both, never neither. Neither blinks - they are 12 V
+# GPIO 32 lit while idle, and BOTH lit for a latched FAULT. Outside a fault
+# exactly one must be lit - never neither. Neither blinks - they are 12 V
 # lamps on relays, so they only ever switch at a phase boundary, and you
 # should hear a relay click each time. If a step's serial output disagrees
 # with the lamps, trust neither and check wiring.
@@ -222,9 +222,9 @@ $steps = @(
         # Not just a serial check: this step's real pass criterion is what you
         # watched, not what matched. The two patterns below only prove a full
         # cycle ran; the lamp invariant has to be confirmed by eye.
-        Do      = "run one more full cycle and watch BOTH lamps the whole time: touch GPIO 25 briefly, wait for LIFT, then touch GPIO 26 and watch it through to IDLE. Exactly one lamp must be lit at every instant - never both, never neither"
+        Do      = "run one more full cycle and watch BOTH lamps the whole time: touch GPIO 25 briefly, wait for LIFT, then touch GPIO 26 and watch it through to IDLE. This cycle never faults, so exactly one lamp must be lit at every instant - never both, never neither"
         Expect  = @('EDGE START', 'phase=LIFT', 'EDGE STOP', 'phase=IDLE')
-        Hint    = "If green and yellow ever agreed - both lit, both dark, or a phase boundary above did not produce a relay click on either lamp - stop and check LED_ACTIVE_LOW in config.h and the lamp wiring before doing anything else."
+        Hint    = "If green and yellow ever agreed outside a latched FAULT - both lit, both dark, or a phase boundary above did not produce a relay click on either lamp - stop and check LED_ACTIVE_LOW in config.h and the lamp wiring before doing anything else. Both lit IS the fault indication, so it is only wrong when the phase is not FAULT."
     }
 )
 
@@ -233,7 +233,7 @@ try {
     Write-Host ""
     Write-Host "controller button bench on $Port" -ForegroundColor Green
     Write-Host "buttons are NO: leave open = at rest, touch to GND = press" -ForegroundColor Green
-    Write-Host "watch both lamps throughout - green and yellow must never agree" -ForegroundColor Green
+    Write-Host "watch both lamps throughout - outside a latched FAULT green and yellow must never agree" -ForegroundColor Green
     Write-Host "$($steps.Count) steps, ${StepTimeoutSec}s each. Ctrl+C to abort." -ForegroundColor Green
 
     $n = 0

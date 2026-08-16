@@ -248,6 +248,21 @@ static void targetStep(int delta) {
   int next = (int)uiTargetShown + delta;
   if (next < 0) next = 0;
   if (next > 99) next = 99;
+  // The tap is accumulated locally as well as sent. uiTargetShown is otherwise
+  // only written by the next state message, which is up to 250 ms away plus the
+  // UART round trip — so without this, every tap inside that window computed its
+  // next value from the same stale number and three quick presses moved the
+  // target by one. The controller still owns the value: the next state message
+  // overwrites this with whatever the machine actually took, so a rejected or
+  // clamped change corrects itself within a refresh.
+  // [TH] เก็บผลการกดไว้ที่นี่ด้วย ไม่ใช่แค่ส่งออกไป
+  //      ปกติค่า uiTargetShown จะถูกเขียนโดยข้อความสถานะครั้งถัดไปเท่านั้น
+  //      ซึ่งห่างได้ถึง 250 มิลลิวินาทีบวกเวลาไปกลับของ UART
+  //      ถ้าไม่ทำแบบนี้ การกดทุกครั้งในช่วงนั้นจะคำนวณค่าถัดไปจากตัวเลขเก่าตัวเดียวกัน
+  //      กดเร็วๆ สามครั้งจึงขยับเป้าหมายไปแค่หนึ่ง
+  //      ค่าจริงยังเป็นของคอนโทรลเลอร์ ข้อความสถานะครั้งถัดไปจะเขียนทับค่านี้ด้วยค่าที่เครื่องรับไปจริง
+  //      การเปลี่ยนที่ถูกปฏิเสธหรือถูกจำกัดช่วงจึงแก้ตัวเองได้ภายในหนึ่งรอบรีเฟรช
+  uiTargetShown = (uint16_t)next;
   if (cbTarget) cbTarget((uint16_t)next);
 }
 static void targetMinusClicked(lv_event_t*) { targetStep(-1); }

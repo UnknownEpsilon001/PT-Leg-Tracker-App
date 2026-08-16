@@ -367,12 +367,12 @@ a{color:var(--pad)}
         <td><span class="en"><b>Output</b> — lit while a session is in progress and the actuator may move</span><span class="th"><b>ขาออก</b> ติดตอนอยู่ในรอบการทำงานและชุดขับเคลื่อนอาจเคลื่อนที่</span></td></tr>
       <tr data-pin="32"><td><span class="en">Yellow lamp</span><span class="th">ไฟเหลือง</span></td>
         <td><span class="pad">GPIO 32</span></td>
-        <td><span class="en"><b>Output</b> — lit when idle or in a latched FAULT; nothing will move on its own</span><span class="th"><b>ขาออก</b> ติดตอนว่างหรือค้างสถานะผิดพลาด จะไม่มีอะไรเคลื่อนที่เอง</span></td></tr>
+        <td><span class="en"><b>Output</b> — lit when idle; nothing will move on its own. Lit together with green for a latched FAULT</span><span class="th"><b>ขาออก</b> ติดตอนว่าง จะไม่มีอะไรเคลื่อนที่เอง และติดพร้อมไฟเขียวเมื่อค้างสถานะผิดพลาด</span></td></tr>
       </tbody>
     </table></div>
     <p class="sub" style="margin:8px 0 0">
-      <span class="en">Each lamp is a 12 V bulb through its own relay. Exactly one is lit at any moment, and neither blinks — every change is a relay contact operation. Set <code>LED_ACTIVE_LOW</code> in <code>config.h</code> if the relay board energizes on LOW; it covers both lamps.</span>
-      <span class="th">ไฟแต่ละดวงเป็นหลอด 12 โวลต์ผ่านรีเลย์ของตัวเอง ติดครั้งละดวงเดียวเสมอ และไม่มีการกะพริบ เพราะทุกการเปลี่ยนสถานะคือการตัดต่อหน้าสัมผัสของรีเลย์ ถ้าบอร์ดรีเลย์เป็นแบบ active-low ให้เปิด <code>LED_ACTIVE_LOW</code> ใน <code>config.h</code> ซึ่งใช้กับไฟทั้งสองดวง</span>
+      <span class="en">Each lamp is a 12 V bulb through its own relay. Exactly one is lit in each normal state and both are lit for a latched FAULT, so "both" is unmistakably abnormal; neither ever blinks — every change is a relay contact operation. Set <code>LED_ACTIVE_LOW</code> in <code>config.h</code> if the relay board energizes on LOW; it covers both lamps.</span>
+      <span class="th">ไฟแต่ละดวงเป็นหลอด 12 โวลต์ผ่านรีเลย์ของตัวเอง สถานะปกติจะติดครั้งละดวงเดียว และจะติดทั้งสองดวงเมื่อค้างสถานะผิดพลาด การติดพร้อมกันจึงผิดปกติอย่างชัดเจน และไม่มีการกะพริบเลย เพราะทุกการเปลี่ยนสถานะคือการตัดต่อหน้าสัมผัสของรีเลย์ ถ้าบอร์ดรีเลย์เป็นแบบ active-low ให้เปิด <code>LED_ACTIVE_LOW</code> ใน <code>config.h</code> ซึ่งใช้กับไฟทั้งสองดวง</span>
     </p>
 
     <h3 style="--dot:var(--btn)"><span class="en">Panel buttons</span><span class="th">ปุ่มหน้าปัด</span></h3>

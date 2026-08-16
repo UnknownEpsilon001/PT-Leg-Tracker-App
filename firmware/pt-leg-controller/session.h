@@ -115,6 +115,14 @@ class SessionSM {
   void finish(uint32_t nowMs, Phase to, bool fault);
   Phase ph = Phase::Idle;
   uint32_t phaseStart = 0, sessionStart = 0;
+  // How long the safe-lower currently running should drive. Computed once, in
+  // enter(), from the phase it was entered from: a descent only has to give back
+  // the travel that was actually driven, and driving the full lowerMs regardless
+  // means the rest of the stroke is a stall against the bottom stop.
+  // [TH] เวลาที่การลดขาเพื่อหยุดครั้งที่กำลังทำงานอยู่ควรใช้ คำนวณครั้งเดียวใน enter()
+  //      จากสถานะที่เข้ามา เพราะการลดขาต้องคืนแค่ระยะที่ขับเคลื่อนไปจริง
+  //      ถ้าใช้ค่า lowerMs เต็มทุกครั้ง ส่วนที่เหลือของการเคลื่อนที่คือการดันค้างชนกลไกด้านล่าง
+  uint32_t strokeCapMs = 0;
   uint16_t repCount = 0;
   uint32_t finalElapsed = 0;
   uint16_t finalRepCount = 0;

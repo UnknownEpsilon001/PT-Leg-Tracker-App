@@ -23,6 +23,7 @@ class DeviceState:
         self.live_reps = 0
         self.live_target = 0
         self._desired_target: int | None = None
+        self._target_queued_at = 0.0
         self._desired_timings: dict | None = None
         self._timings_queued_at = 0.0
 
@@ -78,6 +79,7 @@ class DeviceState:
 
     def set_desired_target(self, reps: int) -> None:
         self._desired_target = reps
+        self._target_queued_at = self._now()
 
     def fetch_desired_target(self) -> int | None:
         """The target the device should adopt, or None when it already has it.
@@ -87,10 +89,30 @@ class DeviceState:
         So it is repeated until the device's own heartbeat reports that value back,
         which survives a dropped response.
 
+        The acknowledgement is not the only way out, though: it also expires after
+        COMMAND_TTL_SEC, like the timings do. A device whose heartbeat omits the
+        field entirely — the pre-target-echo image that `target: int | None` in
+        routes_device.py exists to model — can never ack, and without the clock
+        this would repeat on every 1 Hz poll for the life of the process while
+        current_status() kept reporting a desire the machine may never have taken.
+        The device polls once a second, so anything online has fetched it long
+        before the window closes.
+
         [TH] ไม่ใช่อ่านแล้วล้างแบบคำสั่ง เพราะคำสั่งที่ถูกใช้ซ้ำจะเริ่มสองรอบ
              แต่เป้าหมายที่ถูกใช้ซ้ำให้ผลเหมือนเดิม
              จึงส่งซ้ำไปจนกว่าสัญญาณชีพของอุปกรณ์จะรายงานค่านั้นกลับมา ซึ่งทนต่อการที่คำตอบหายได้
+             แต่การยืนยันกลับไม่ใช่ทางออกทางเดียว ค่านี้หมดอายุตาม COMMAND_TTL_SEC เหมือนค่าเวลาของรอบด้วย
+             อุปกรณ์ที่สัญญาณชีพไม่มีฟิลด์นี้เลย ซึ่งเป็นรุ่นก่อนมีการยืนยันกลับที่ target: int | None
+             ใน routes_device.py มีไว้รองรับ จะยืนยันกลับไม่ได้เลย
+             ถ้าไม่มีการจับเวลา ค่านี้จะถูกส่งซ้ำทุกครั้งที่โพลวินาทีละครั้งไปตลอดอายุโปรเซส
+             และ current_status() ก็จะรายงานค่าที่เครื่องอาจไม่เคยรับไปใช้เลย
+             อุปกรณ์โพลวินาทีละครั้ง เครื่องที่ออนไลน์อยู่จึงดึงค่าไปนานแล้วก่อนหน้าต่างเวลาจะปิด
         """
+        if (
+            self._desired_target is not None
+            and self._now() - self._target_queued_at > COMMAND_TTL_SEC
+        ):
+            self._desired_target = None
         return self._desired_target
 
     def set_desired_timings(self, timings: dict) -> None:

@@ -424,8 +424,9 @@ that follow.
 
 Both lamps are the out-of-band readout for the whole bench run: green lit while a
 session is in progress (including a recovery lowering out of FAULT), yellow lit
-otherwise. Neither blinks, so the only thing to watch is that exactly one is lit
-and that they swap at the phase boundaries and nowhere else. Details in
+otherwise, and both lit for a latched FAULT. Neither blinks, so the only thing to
+watch is that exactly one is lit outside a fault, and that they swap at the phase
+boundaries and nowhere else. Details in
 [The panel lamps](#the-panel-lamps) below.
 
 `firmware/tools/button-bench.ps1` walks that test as a pass/fail checklist: it
@@ -466,18 +467,27 @@ suspicion; until then a starting press prints
 ## The panel lamps
 
 Two 12 V lamps, each switched by its own mechanical relay: green on **GPIO 23**,
-yellow on **GPIO 32**. Exactly one is lit at any moment:
+yellow on **GPIO 32**. Exactly one is lit in each of the two normal states, and
+both are lit for a fault:
 
-| Lamp | Pin | Means |
-| ---- | --- | ----- |
-| Green  | 23 | a session is in progress and the actuator may move — keep clear |
-| Yellow | 32 | idle, or a latched FAULT — nothing will move on its own |
+| Lamps | Means |
+| ----- | ----- |
+| Green only  | a session is in progress and the actuator may move — keep clear |
+| Yellow only | idle; nothing will move on its own |
+| **Both lit** | a latched FAULT — the relays are off, but the leg may be raised |
 
-Green is lit exactly on `SessionSM::running()` — LIFT, HOLD, LOWER, REST **and**
-the safe-lower — and yellow is lit whenever green is not, which includes a
-latched FAULT: the relays genuinely are off in that state. The pair answers "is
-it about to move" and nothing else; faults are diagnosed on the CYD, the serial
-log and the card row.
+Green is lit on `SessionSM::running()` — LIFT, HOLD, LOWER, REST **and** the
+safe-lower — plus a latched FAULT; yellow is lit whenever the machine is not
+running, plus that same FAULT. So green still answers "may it move" on its own,
+and the both-lit combination is unmistakably abnormal without anything blinking.
+
+A fault used to read plain yellow, identical to an ordinary idle. That is fine
+when a CYD is attached, and wrong without one: on a machine running standalone
+the panel is the only indicator there is, and an operator reading "ready" on a
+machine that faulted with the leg raised is the one impression this panel must
+not give. It costs two extra contact operations per fault, not a blink, so the
+relay-life argument for never blinking is untouched. What a fault *is* is still
+diagnosed on the CYD, the serial log and the card row.
 
 **Why there is no blinking.** The relay makes every state change a contact
 operation and an audible click. A 5 Hz fault blink is 18,000 operations an hour,
@@ -648,8 +658,8 @@ patient-facing machine it recovers instead of appearing bricked.
   `config.h`). GPIO 4 and GPIO 33 are free — nothing reads them and nothing
   reserves them.
 - Panel lamps: green GPIO 23, yellow GPIO 32, each a 12 V lamp through its own
-  relay. Green lit while a session is in progress, yellow otherwise (idle or a
-  latched FAULT) — exactly one lit at any moment, never blinking. Set
+  relay. Green lit while a session is in progress, yellow while idle, **both**
+  lit for a latched FAULT — one lamp in each normal state, never blinking. Set
   `LED_ACTIVE_LOW` if the relay board energizes on LOW; it covers both lamps.
 - UART: controller GPIO 16 (RX) / 17 (TX) ↔ CYD GPIO 22 (RX) / 27 (TX),
   cross-wired, common GND. 115200 8N1. Pins to be confirmed on the bench.
