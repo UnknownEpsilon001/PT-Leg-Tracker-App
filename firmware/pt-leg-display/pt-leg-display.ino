@@ -184,8 +184,29 @@ static void onLinkSettingsReply(const LinkSettings& s) {
 
   gLast.wifiSsid = s.ssid; gLast.wifiPass = s.pass; gLast.serverUrl = s.server;
   gLast.deviceCode = s.code;
-  gLast.maxTravelSec = s.maxTravel; gLast.liftSec = s.lift; gLast.lowerSec = s.lower;
-  gLast.holdSec = s.hold; gLast.restSec = s.rest; gLast.targetReps = s.target;
+  // The absent-field conventions are consumed here too, not just on the
+  // controller. link.cpp is shared, so a reply decodes exactly the same way on
+  // this board: 0 for a timing field it did not carry, LINK_TARGET_ABSENT for a
+  // target it did not carry. Assigning those raw put 0 s timings and 65535 reps
+  // into gLast, which is what the settings screen shows, what settingsFileSave
+  // writes to the card, and what pushSettingsToController sends back — and 65535
+  // reads as "absent" at the controller, so the card's real target would be
+  // silently ignored on the very push that is supposed to carry it. That is the
+  // mixed-version case the sentinel exists for, defeated on the return leg.
+  // [TH] ข้อตกลงเรื่องฟิลด์ที่ไม่ได้ส่งมาต้องถูกจัดการที่นี่ด้วย ไม่ใช่แค่ฝั่งคอนโทรลเลอร์
+  //      เพราะ link.cpp ใช้ร่วมกัน ข้อความตอบกลับจึงถอดรหัสแบบเดียวกันเป๊ะบนบอร์ดนี้
+  //      คือ 0 สำหรับฟิลด์เวลาที่ไม่ได้ส่งมา และ LINK_TARGET_ABSENT สำหรับเป้าหมายที่ไม่ได้ส่งมา
+  //      ถ้ากำหนดค่าดิบเข้าไปเลย จะได้ค่าเวลาเป็น 0 วินาทีและเป้าหมาย 65535 ครั้งลงใน gLast
+  //      ซึ่งเป็นค่าที่หน้าตั้งค่าแสดง เป็นค่าที่ settingsFileSave เขียนลงการ์ด
+  //      และเป็นค่าที่ pushSettingsToController ส่งกลับไป
+  //      แล้วค่า 65535 จะถูกคอนโทรลเลอร์อ่านว่า "ไม่มีอยู่" เป้าหมายจริงบนการ์ดจึงถูกละเลยเงียบๆ
+  //      ในการส่งครั้งที่ควรจะพามันไปพอดี ซึ่งเป็นกรณีเฟิร์มแวร์คนละรุ่นที่ค่าบอกสถานะนี้มีไว้เพื่อมันโดยตรง
+  gLast.maxTravelSec = s.maxTravel ? s.maxTravel : gLast.maxTravelSec;
+  gLast.liftSec = s.lift ? s.lift : gLast.liftSec;
+  gLast.lowerSec = s.lower ? s.lower : gLast.lowerSec;
+  gLast.holdSec = s.hold ? s.hold : gLast.holdSec;
+  gLast.restSec = s.rest ? s.rest : gLast.restSec;
+  gLast.targetReps = s.target == LINK_TARGET_ABSENT ? gLast.targetReps : s.target;
   uiSetDeviceCode(s.code.c_str());
   gSettingsKnown = true;
   uiSetSettingsKnown(true);  // the controller's real values are on screen now
