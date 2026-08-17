@@ -97,8 +97,9 @@ git commit -m "feat(firmware): add the Confirm phase ordinal to both enum copies
 ### Task 2: `SessionSM` confirm transitions and expiry
 
 **Files:**
-- Modify: `firmware/pt-leg-controller/session.h` (public API + `pendingTargetReps` member)
-- Modify: `firmware/pt-leg-controller/session.cpp` (`tick()`, and the `phaseName()` in `pt-leg-controller.ino` under `BENCH_DEBUG`)
+- Modify: `firmware/pt-leg-controller/session.h` (public API, `running()`, `pendingTargetReps` member)
+- Modify: `firmware/pt-leg-controller/session.cpp` (the four transitions, `tick()` expiry)
+- Modify: `firmware/pt-leg-controller/pt-leg-controller.ino` (`phaseName()` under `BENCH_DEBUG`, and the session-end target restore)
 
 **Interfaces:**
 - Consumes: `Phase::Confirm` from Task 1.
@@ -151,6 +152,21 @@ Add to the private section, next to `repCount`:
   bool confirming() const { return ph == Phase::Confirm; }
 ```
 
+In the same file, `running()` must stop counting Confirm as a session. It is
+currently `ph != Phase::Idle && ph != Phase::Fault`, which reports **true** for
+Confirm:
+
+```c++
+  bool running() const {
+    return ph != Phase::Idle && ph != Phase::Fault && ph != Phase::Confirm;
+  }
+```
+
+**This is load-bearing well beyond the lamps.** `running()` also gates the
+heartbeat interval, the settings-deferral logic, and the display's gear button
+and logo screen. Confirm is not a session — nothing is moving and nothing is
+committed — and every one of those consumers wants that answer.
+
 - [ ] **Step 3: Implement the transitions in `session.cpp`**
 
 ```c++
@@ -184,7 +200,30 @@ void SessionSM::cancelConfirm(uint32_t nowMs) {
 }
 ```
 
-**Note for the implementer:** `cfg.targetReps` is both the stored default *and* what a running session compares against, which is why `confirmStart` writes it after `start()`. The stored default is re-seeded from `gSettings.targetReps` at the end of every session — verify that in `pt-leg-controller.ino`'s stopped-edge handling and, if it does not already happen, restore `cfg.targetReps = gSettings.targetReps` there as part of this task. Without that restore, a session-only value would leak into the next session and the spec's core promise breaks.
+- [ ] **Step 3b: Restore the stored default at session end — REQUIRED**
+
+`cfg.targetReps` is both the stored default *and* what a running session counts
+against, which is why `confirmStart` writes it after `start()`. That makes the
+restore mandatory, not optional.
+
+Find the stopped-edge handling in `pt-leg-controller.ino` (where
+`takeStoppedEdge()` is consumed). If it does not already re-seed the cycle
+config from settings, add:
+
+```c++
+  // The session just ended may have run a confirm-screen target, which lives in
+  // cfg.targetReps because that is what tick() counts against. Put the stored
+  // prescription back, or one patient's one-off becomes the next patient's
+  // default — the exact thing the confirmation screen exists to prevent.
+  // [TH] รอบที่เพิ่งจบอาจใช้ค่าเป้าหมายจากหน้ายืนยัน ซึ่งเก็บอยู่ใน cfg.targetReps
+  //      เพราะเป็นค่าที่ tick() ใช้นับ ต้องคืนค่าที่แพทย์สั่งกลับไป
+  //      ไม่งั้นค่าครั้งเดียวของคนไข้คนหนึ่งจะกลายเป็นค่าตั้งต้นของคนถัดไป
+  //      ซึ่งเป็นสิ่งที่หน้ายืนยันมีไว้เพื่อป้องกันโดยตรง
+  gSession.setTarget(gSettings.targetReps);
+```
+
+This must also cover a session that ends in a fault and one cancelled from
+Confirm. State in your report which path you attached it to and why.
 
 - [ ] **Step 4: Expire the phase in `tick()`**
 
@@ -446,7 +485,7 @@ git commit -m "feat(firmware): a target arriving with a start applies to that se
 ### Task 6: Lamps and phase naming for Confirm
 
 **Files:**
-- Modify: `firmware/pt-leg-controller/panel_lamps.cpp`
+- Verify (edit only if wrong): `firmware/pt-leg-controller/pt-leg-controller.ino` (lamp call site)
 - Modify: `firmware/pt-leg-display/ui.cpp` (`phaseName()`)
 
 **Interfaces:**
@@ -455,17 +494,14 @@ git commit -m "feat(firmware): a target arriving with a start applies to that se
 
 - [ ] **Step 1: Keep green meaning "running"**
 
-`panelLampsSet` is driven by `inProgress`. Confirm must **not** count as in progress — nothing is moving, so yellow stays lit exactly as at idle. Verify the call site in `pt-leg-controller.ino` passes `gSession.running()`, and that `running()` returns false for Confirm.
+`panelLampsSet` is driven by `inProgress`. Confirm must **not** count as in
+progress — nothing is moving, so yellow stays lit exactly as at idle.
 
-`running()` is currently `ph != Phase::Idle && ph != Phase::Fault`, which would wrongly report **true** for Confirm. Change it to:
-
-```c++
-  bool running() const {
-    return ph != Phase::Idle && ph != Phase::Fault && ph != Phase::Confirm;
-  }
-```
-
-**This is load-bearing beyond the lamps:** `running()` also gates the heartbeat interval, the settings-deferral logic and the gear button on the display. Confirm is not a session, and every one of those consumers wants that answer.
+`running()` was already changed in Task 2 to exclude Confirm, so this step is a
+verification, not an edit: confirm the lamp call site in `pt-leg-controller.ino`
+passes `gSession.running()` (and not a hand-rolled phase comparison that would
+have missed Task 2's change). If it passes something else, make it use
+`running()`.
 
 - [ ] **Step 2: Name the phase on the display**
 
@@ -478,8 +514,8 @@ Expected: success.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add firmware/pt-leg-controller/session.h firmware/pt-leg-controller/panel_lamps.cpp firmware/pt-leg-display/ui.cpp
-git commit -m "feat(firmware): Confirm is not a running session"
+git add firmware/pt-leg-display/ui.cpp
+git commit -m "feat(firmware): name the Confirm phase on the display"
 ```
 
 ---
@@ -740,7 +776,8 @@ The start handler currently calls `queueStart` directly. Split it: the button op
 ```bash
 npm run test
 ```
-Expected: all pass, including the pre-existing 46.
+Expected: all pass. Baseline before this plan is 14 files / 107 tests, so the
+suite must end at 107 plus whatever Task 9 added.
 
 ```bash
 npm run build
