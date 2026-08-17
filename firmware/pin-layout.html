@@ -262,9 +262,9 @@ a{color:var(--pad)}
     </div>
 
     <div class="timeline" id="timeline">
-      <div class="seg" data-ph="lift"><i></i><span>LIFT<b>4 s</b></span></div>
+      <div class="seg" data-ph="lift"><i></i><span>LIFT<b>7 s</b></span></div>
       <div class="seg" data-ph="hold"><i></i><span>HOLD<b>10 s</b></span></div>
-      <div class="seg" data-ph="lower"><i></i><span>LOWER<b>4 s</b></span></div>
+      <div class="seg" data-ph="lower"><i></i><span>LOWER<b>7 s</b></span></div>
       <div class="seg" data-ph="rest"><i></i><span>REST<b>10 s</b></span></div>
     </div>
 
@@ -290,8 +290,8 @@ a{color:var(--pad)}
       <button class="pbtn" id="cSpeed">×4</button>
     </div>
     <p class="hint">
-      <span class="en">The same two panel buttons the machine has — START on GPIO 25 and STOP on GPIO 26, both normally-open. START begins a session from idle; STOP always ends one, lowering the leg first if it might be up, and zeroes the rep count instead if the machine is already idle. The <b>×</b> field is the rep target — the session stops itself once it reaches that many reps, and 0 means run until STOP. The clock counts the machine's own seconds, so a rep reads 10 s of hold at any playback speed. The speed button steps ×4 → ×10 → ×1; ×1 is real time. Lift and lower each take a fixed 4 s now — a timed stroke, not one that ends at a switch.</span>
-      <span class="th">ปุ่มสองปุ่มเดียวกับที่อยู่บนหน้าปัดจริง คือ START ที่ขา 25 และ STOP ที่ขา 26 ทั้งคู่เป็นแบบปกติเปิด (NO) START เริ่มรอบจากสถานะว่าง ส่วน STOP จบรอบที่กำลังทำงานเสมอ โดยลดขาลงก่อนถ้ามีโอกาสขาอยู่ข้างบน และถ้าเครื่องว่างอยู่แล้วจะล้างจำนวนรอบแทน ช่อง <b>×</b> คือเป้าหมายจำนวนรอบ รอบจะหยุดเองเมื่อถึงจำนวนนั้น และ 0 แปลว่าทำไปเรื่อยๆ จนกว่าจะกด STOP นาฬิกานับเป็นวินาทีของเครื่องจริง เวลาค้างจึงอ่านได้ 10 วินาทีทุกความเร็วที่เล่น ปุ่มความเร็วสลับ ×4 → ×10 → ×1 โดย ×1 คือความเร็วจริง ส่วนจังหวะยกและลดใช้เวลาคงที่ 4 วินาทีแล้ว คือการเคลื่อนที่ตามเวลา ไม่ใช่จบที่สวิตช์</span>
+      <span class="en">The same two panel buttons the machine has — START on GPIO 25 and STOP on GPIO 26, both normally-open. START begins a session from idle; STOP always ends one, lowering the leg first if it might be up, and zeroes the rep count instead if the machine is already idle. The <b>×</b> field is the rep target — the session stops itself once it reaches that many reps, and 0 means run until STOP. The clock counts the machine's own seconds, so a rep reads 10 s of hold at any playback speed. The speed button steps ×4 → ×10 → ×1; ×1 is real time. Lift and lower each take a fixed 7 s now — a timed stroke, not one that ends at a switch.</span>
+      <span class="th">ปุ่มสองปุ่มเดียวกับที่อยู่บนหน้าปัดจริง คือ START ที่ขา 25 และ STOP ที่ขา 26 ทั้งคู่เป็นแบบปกติเปิด (NO) START เริ่มรอบจากสถานะว่าง ส่วน STOP จบรอบที่กำลังทำงานเสมอ โดยลดขาลงก่อนถ้ามีโอกาสขาอยู่ข้างบน และถ้าเครื่องว่างอยู่แล้วจะล้างจำนวนรอบแทน ช่อง <b>×</b> คือเป้าหมายจำนวนรอบ รอบจะหยุดเองเมื่อถึงจำนวนนั้น และ 0 แปลว่าทำไปเรื่อยๆ จนกว่าจะกด STOP นาฬิกานับเป็นวินาทีของเครื่องจริง เวลาค้างจึงอ่านได้ 10 วินาทีทุกความเร็วที่เล่น ปุ่มความเร็วสลับ ×4 → ×10 → ×1 โดย ×1 คือความเร็วจริง ส่วนจังหวะยกและลดใช้เวลาคงที่ 7 วินาทีแล้ว คือการเคลื่อนที่ตามเวลา ไม่ใช่จบที่สวิตช์</span>
     </p>
   </div>
  </div>
@@ -350,8 +350,8 @@ a{color:var(--pad)}
       </tbody>
     </table></div>
     <p class="sub" style="margin:8px 0 0">
-      <span class="en">Active-HIGH by default; uncomment <code>RELAY_ACTIVE_LOW</code> in <code>config.h</code> for an active-low board. The firmware always breaks before it makes and waits 50 ms on a reversal — never drive both relays from one pin.</span>
-      <span class="th">ค่าตั้งต้นสั่งงานด้วยลอจิก HIGH ถ้าบอร์ดรีเลย์เป็นแบบ active-low ให้เปิดบรรทัด <code>RELAY_ACTIVE_LOW</code> ใน <code>config.h</code> เฟิร์มแวร์จะตัดก่อนต่อเสมอ และหน่วง 50 มิลลิวินาทีเมื่อกลับทาง ห้ามใช้ขาเดียวสั่งรีเลย์สองตัว</span>
+      <span class="en">The fitted board is active-low, so <code>RELAY_ACTIVE_LOW</code> is set in <code>config.h</code>; clear it only for a board that energizes on HIGH. The firmware always breaks before it makes and waits 50 ms on a reversal — never drive both relays from one pin.</span>
+      <span class="th">บอร์ดที่ใช้เป็นแบบ active-low จึงเปิด <code>RELAY_ACTIVE_LOW</code> ไว้ใน <code>config.h</code> แล้ว ปิดค่านี้เฉพาะเมื่อใช้บอร์ดที่สั่งงานด้วยลอจิก HIGH เฟิร์มแวร์จะตัดก่อนต่อเสมอ และหน่วง 50 มิลลิวินาทีเมื่อกลับทาง ห้ามใช้ขาเดียวสั่งรีเลย์สองตัว</span>
     </p>
 
     <h3 style="--dot:var(--green)"><span class="en">Panel lamps</span><span class="th">ไฟหน้าปัด</span></h3>
@@ -371,8 +371,8 @@ a{color:var(--pad)}
       </tbody>
     </table></div>
     <p class="sub" style="margin:8px 0 0">
-      <span class="en">Each lamp is a 12 V bulb through its own relay. Exactly one is lit in each normal state and both are lit for a latched FAULT, so "both" is unmistakably abnormal; neither ever blinks — every change is a relay contact operation. Set <code>LED_ACTIVE_LOW</code> in <code>config.h</code> if the relay board energizes on LOW; it covers both lamps.</span>
-      <span class="th">ไฟแต่ละดวงเป็นหลอด 12 โวลต์ผ่านรีเลย์ของตัวเอง สถานะปกติจะติดครั้งละดวงเดียว และจะติดทั้งสองดวงเมื่อค้างสถานะผิดพลาด การติดพร้อมกันจึงผิดปกติอย่างชัดเจน และไม่มีการกะพริบเลย เพราะทุกการเปลี่ยนสถานะคือการตัดต่อหน้าสัมผัสของรีเลย์ ถ้าบอร์ดรีเลย์เป็นแบบ active-low ให้เปิด <code>LED_ACTIVE_LOW</code> ใน <code>config.h</code> ซึ่งใช้กับไฟทั้งสองดวง</span>
+      <span class="en">Each lamp is a 12 V bulb through its own relay. Exactly one is lit in each normal state and both are lit for a latched FAULT, so "both" is unmistakably abnormal; neither ever blinks — every change is a relay contact operation. The lamps are two more channels of the same active-low board, so <code>LED_ACTIVE_LOW</code> is set in <code>config.h</code>; it covers both lamps.</span>
+      <span class="th">ไฟแต่ละดวงเป็นหลอด 12 โวลต์ผ่านรีเลย์ของตัวเอง สถานะปกติจะติดครั้งละดวงเดียว และจะติดทั้งสองดวงเมื่อค้างสถานะผิดพลาด การติดพร้อมกันจึงผิดปกติอย่างชัดเจน และไม่มีการกะพริบเลย เพราะทุกการเปลี่ยนสถานะคือการตัดต่อหน้าสัมผัสของรีเลย์ ไฟทั้งสองดวงเป็นอีกสองช่องของบอร์ด active-low แผ่นเดียวกัน จึงเปิด <code>LED_ACTIVE_LOW</code> ไว้ใน <code>config.h</code> แล้ว ซึ่งใช้กับไฟทั้งสองดวง</span>
     </p>
 
     <h3 style="--dot:var(--btn)"><span class="en">Panel buttons</span><span class="th">ปุ่มหน้าปัด</span></h3>
@@ -688,11 +688,11 @@ a{color:var(--pad)}
           23:document.getElementById('ps23'),32:document.getElementById('ps32')};
   if(!leg) return;
 
-  var LIFT=4, LOWER=4, HOLD=10, REST=10;      // seconds, as the firmware ships
+  var LIFT=7, LOWER=7, HOLD=10, REST=10;      // seconds, as the firmware ships
   // Matches LOWER_MARGIN_MS in session.cpp: slack added to a shortened
   // safe-lower so it still reaches bottom when LOWER runs slower than LIFT.
   var LOWER_MARGIN=0.5;                       // seconds
-  /* ×10 crosses a 4 s stroke in 400 ms, which reads as a jump rather than a
+  /* ×10 crosses a 7 s stroke in 700 ms, which reads as a jump rather than a
      motion. ×4 is the slowest playback that still gets through a rep while
      you are looking at it. */
   var SPEEDS=[4,10,1], spIdx=0, speed=SPEEDS[0];
@@ -708,9 +708,9 @@ a{color:var(--pad)}
 
   var TEXT={
     idle:{en:['IDLE','Press START'],th:['ว่าง','กด START']},
-    lift:{en:['LIFT','Relay 22 energized, 4 s'],th:['ยกขึ้น','รีเลย์ขา 22 ทำงาน 4 วินาที']},
+    lift:{en:['LIFT','Relay 22 energized, 7 s'],th:['ยกขึ้น','รีเลย์ขา 22 ทำงาน 7 วินาที']},
     hold:{en:['HOLD','Both relays off, 10 s'],th:['ค้างไว้','รีเลย์ดับทั้งคู่ 10 วินาที']},
-    lower:{en:['LOWER','Relay 27 energized, 4 s'],th:['ลดลง','รีเลย์ขา 27 ทำงาน 4 วินาที']},
+    lower:{en:['LOWER','Relay 27 energized, 7 s'],th:['ลดลง','รีเลย์ขา 27 ทำงาน 7 วินาที']},
     rest:{en:['REST','Both relays off, 10 s'],th:['พัก','รีเลย์ดับทั้งคู่ 10 วินาที']},
     safe:{en:['SAFE-LOWER','STOP pressed — bringing the leg down'],th:['ลดลงอย่างปลอดภัย','กด STOP กำลังลดขาลง']}
   };

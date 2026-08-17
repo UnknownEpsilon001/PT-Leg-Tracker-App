@@ -996,9 +996,9 @@ static void buildSettings() {
   // [TH] MAX TRAVEL คือเพดานความปลอดภัยหลัก: เวลาที่รีเลย์จ่ายไฟได้โดยไม่มีสวิตช์ปลายทางปิด
   //      เพดานของมันตั้งไว้ต่ำกว่า HOLD/REST มากโดยตั้งใจ
   spinMax = makeSpinRow(col, "เวลาเดินทางสูงสุด (วิ)", 8, 1, 20);
-  spinLift = makeSpinRow(col, "ยกขึ้น (วิ)", 4, 1, 20);
+  spinLift = makeSpinRow(col, "ยกขึ้น (วิ)", 7, 1, 20);
   spinHold = makeSpinRow(col, "ค้าง (วิ)", 10, 1, 60);
-  spinLower = makeSpinRow(col, "ลดลง (วิ)", 4, 1, 20);
+  spinLower = makeSpinRow(col, "ลดลง (วิ)", 7, 1, 20);
   spinRest = makeSpinRow(col, "พัก (วิ)", 10, 1, 60);
   spinTarget = makeSpinRow(col, "จำนวนครั้ง (0=ไม่จำกัด)", 10, 0, 99);
 

@@ -41,8 +41,8 @@
 
 param(
     [string]$Port = "",     # empty = auto-detect the ESP32's USB-serial port
-    [int]$LiftSec = 4,      # matches the real device's default liftSec/lowerSec
-    [int]$LowerSec = 4,
+    [int]$LiftSec = 7,      # matches the real device's default liftSec/lowerSec
+    [int]$LowerSec = 7,
     [int]$HoldSec = 10,     # matches the real device (lift -> hold 10 s -> lower -> rest 10 s)
     [int]$RestSec = 10,
     [int]$Target = 10,      # matches DEFAULT_TARGET_REPS; 0 = run until stopped
@@ -87,7 +87,7 @@ function Send-Line([string]$json) {
 
 $settings = '{"t":"settings","ssid":"ClinicWiFi","pass":"secret123",' +
             '"server":"http://192.168.0.12:8000","code":"KNEE-01",' +
-            '"maxtravel":8,"lift":4,"lower":4,"hold":10,"rest":10,"target":10}'
+            '"maxtravel":8,"lift":7,"lower":7,"hold":10,"rest":10,"target":10}'
 
 # phase ordinals per link-protocol.md: 0 Idle 1 Lift 2 Hold 3 Lower 4 Rest 5 SafeLower 6 Fault
 $running = $false

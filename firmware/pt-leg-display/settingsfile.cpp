@@ -21,8 +21,8 @@ void settingsFileDefaults(DeviceSettings& s) {
   s.serverUrl = "";
   s.deviceCode = "default";
   s.maxTravelSec = 8;
-  s.liftSec = 4;
-  s.lowerSec = 4;
+  s.liftSec = 7;
+  s.lowerSec = 7;
   s.holdSec = 10;
   s.restSec = 10;
   s.targetReps = 10;
@@ -97,8 +97,8 @@ static bool loadFrom(const char* path, DeviceSettings& s, bool quarantine) {
   // The ranges are the settings screen's spinbox limits, kept in step by hand.
   // [TH] ช่วงตัวเลขตรงกับที่หน้าตั้งค่ากำหนดไว้ ต้องแก้ให้ตรงกันเองถ้ามีการเปลี่ยน
   out.maxTravelSec = clampU16(d["maxTravelSec"] | (uint16_t)8, 1, 20, "maxTravelSec");
-  out.liftSec = clampU16(d["liftSec"] | (uint16_t)4, 1, out.maxTravelSec, "liftSec");
-  out.lowerSec = clampU16(d["lowerSec"] | (uint16_t)4, 1, out.maxTravelSec, "lowerSec");
+  out.liftSec = clampU16(d["liftSec"] | (uint16_t)7, 1, out.maxTravelSec, "liftSec");
+  out.lowerSec = clampU16(d["lowerSec"] | (uint16_t)7, 1, out.maxTravelSec, "lowerSec");
   out.holdSec = clampU16(d["holdSec"] | (uint16_t)10, 1, 60, "holdSec");
   out.restSec = clampU16(d["restSec"] | (uint16_t)10, 1, 60, "restSec");
   out.targetReps = clampU16(d["targetReps"] | (uint16_t)10, 0, 99, "targetReps");

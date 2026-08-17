@@ -47,7 +47,7 @@ $ErrorActionPreference = "Stop"
 # no board attached: a pattern that stops matching the firmware's output fails
 # here first, instead of on the bench with jumpers in hand.
 $script:dryTranscript = @(
-    'pt-leg-controller 0.1.0 ssid=ClinicWiFi server=http://192.168.0.12:8000 code=default cycle lift/hold/lower/rest=4/10/4/10 target=10'
+    'pt-leg-controller 0.1.0 ssid=ClinicWiFi server=http://192.168.0.12:8000 code=default cycle lift/hold/lower/rest=7/10/7/10 target=10'
     'debug prints ON - btn start=25(NO) stop=26(NO), lamps green=23 yellow=32'
     '[dbg 210] btn levels start=HIGH/rest stop=HIGH/rest'
     '[dbg 210] phase=IDLE reps=0 elapsed=0s'
@@ -57,19 +57,19 @@ $script:dryTranscript = @(
     '[dbg 5260] btn levels start=HIGH/rest stop=HIGH/rest'
     '[dbg 6000] EDGE STOP'
     '[dbg 6000] phase=SAFE-LOWER reps=0 elapsed=1s'
-    '[dbg 10000] phase=IDLE reps=0 elapsed=0s'   # safe-lower ran the full 4 s lowerSec
+    '[dbg 7400] phase=IDLE reps=0 elapsed=0s'    # 0.9 s into LIFT, so the safe-lower is that 0.9 s plus the 0.5 s margin, not a full 7 s lowerSec
     '[dbg 12000] EDGE STOP'
     '[dbg 12000] phase=IDLE reps=0 elapsed=0s'
     '[dbg 15000] EDGE START'
     '[dbg 15000] phase=LIFT reps=0 elapsed=0s'
-    '[dbg 19000] phase=HOLD reps=0 elapsed=4s'
-    '[dbg 20000] EDGE STOP'
-    '[dbg 20000] phase=SAFE-LOWER reps=0 elapsed=5s'
-    '[dbg 24000] phase=IDLE reps=0 elapsed=0s'
-    '[dbg 30000] EDGE START'
-    '[dbg 30000] phase=LIFT reps=0 elapsed=0s'
+    '[dbg 22000] phase=HOLD reps=0 elapsed=7s'
+    '[dbg 23000] EDGE STOP'
+    '[dbg 23000] phase=SAFE-LOWER reps=0 elapsed=8s'
+    '[dbg 30000] phase=IDLE reps=0 elapsed=0s'   # stopped from HOLD, so this one is the full 7 s lowerSec
+    '[dbg 33000] EDGE START'
+    '[dbg 33000] phase=LIFT reps=0 elapsed=0s'
     'actuator: energize cap opened the relays'
-    '[dbg 31500] phase=FAULT reps=0 elapsed=1s'
+    '[dbg 34500] phase=FAULT reps=0 elapsed=1s'
 )
 $script:dryIndex = 0
 $script:seenLines = [System.Collections.ArrayList]::new()
@@ -186,7 +186,7 @@ $steps = @(
         Name    = "debug build is running"
         Do      = "nothing, but watch the lamps through boot: yellow (GPIO 32) should come on and stay on, green (GPIO 23) must stay dark - neither should flash or click at power-up"
         Expect  = @('debug prints ON')
-        Hint    = "No banner: the image was built without the flag, or -NoReset skipped the reboot that prints it. Green LIT while idle instead of yellow: the relay board is active-low and LED_ACTIVE_LOW is not set in config.h - fix that before anything else, because the lamps currently mean the opposite of what they should."
+        Hint    = "No banner: the image was built without the flag, or -NoReset skipped the reboot that prints it. Green LIT while idle instead of yellow: the lamp polarity is backwards - LED_ACTIVE_LOW is set in config.h for the active-low board fitted here, so either the board on the bench energizes on HIGH or that line got lost. Fix it before anything else, because the lamps currently mean the opposite of what they should."
         Fatal   = $true   # every later step reads that same debug output
     },
     [pscustomobject]@{
@@ -212,11 +212,11 @@ $steps = @(
         # one that reaches a physical bottom. It is no longer always the full
         # lowerSec, though: a STOP taken mid-LIFT drives DOWN for roughly the same
         # fraction of lowerSec as the fraction of liftSec already spent lifting,
-        # plus a small margin - not a flat "~4 s regardless of when you pressed".
-        # With the stock 4 s/4 s config that fraction is subtle to eyeball, so the
+        # plus a small margin - not a flat "~7 s regardless of when you pressed".
+        # With the stock 7 s/7 s config that fraction is subtle to eyeball, so the
         # part of this step that actually proves the arithmetic is right needs
         # liftSec and lowerSec unequal - see the second Do line.
-        Do      = "(a) with default timings (4 s/4 s), touch GPIO 26 to GND briefly while phase=LIFT - green stays lit right through the safe-lower and only goes dark, with yellow lighting, once phase reaches IDLE roughly (time already spent in LIFT) later, never more than 4 s. (b) then set DEFAULT_LIFT_SEC=2 and DEFAULT_LOWER_SEC=8 in config.h (both within DEFAULT_MAX_TRAVEL_SEC=8) and erase NVS before reflashing - `esptool --chip esp32 --port COMx erase_flash`, or skip the reflash and set lift=2 / lower=8 from the settings UI instead. A plain reflash alone does NOT do it: any board that has ever taken a settings message from the CYD or the server has its own lift/lower pair saved in NVS, and settingsLoad only falls back to the compiled config.h default when that key is absent, so the board would silently keep running whatever pair was already saved. Confirm this by reading the boot banner before touching STOP - it must print `cycle lift/hold/lower/rest=2/10/8/10`; anything else (4/10/4/10 included) means the NVS erase did not take and the rest of this step proves nothing. Then repeat, pressing STOP right at the end of LIFT: a CORRECT descent drives DOWN for close to the full 8 s - watch the leg, it should be visibly at the bottom by the time phase=IDLE prints. An UNDER-DRIVEN descent (the bug this step exists to catch) reaches phase=IDLE after only ~2.5 s with the leg still visibly raised - that is a FAIL even though the three Expect patterns below still print, because they only prove the phase transitions happened, not that the leg got anywhere"
+        Do      = "(a) with default timings (7 s/7 s), touch GPIO 26 to GND briefly while phase=LIFT - green stays lit right through the safe-lower and only goes dark, with yellow lighting, once phase reaches IDLE roughly (time already spent in LIFT) later, never more than 7 s. (b) then set DEFAULT_LIFT_SEC=2 and DEFAULT_LOWER_SEC=8 in config.h (both within DEFAULT_MAX_TRAVEL_SEC=8) and erase NVS before reflashing - `esptool --chip esp32 --port COMx erase_flash`, or skip the reflash and set lift=2 / lower=8 from the settings UI instead. A plain reflash alone does NOT do it: any board that has ever taken a settings message from the CYD or the server has its own lift/lower pair saved in NVS, and settingsLoad only falls back to the compiled config.h default when that key is absent, so the board would silently keep running whatever pair was already saved. Confirm this by reading the boot banner before touching STOP - it must print `cycle lift/hold/lower/rest=2/10/8/10`; anything else (7/10/7/10 included) means the NVS erase did not take and the rest of this step proves nothing. Then repeat, pressing STOP right at the end of LIFT: a CORRECT descent drives DOWN for close to the full 8 s - watch the leg, it should be visibly at the bottom by the time phase=IDLE prints. An UNDER-DRIVEN descent (the bug this step exists to catch) reaches phase=IDLE after only ~2.5 s with the leg still visibly raised - that is a FAIL even though the three Expect patterns below still print, because they only prove the phase transitions happened, not that the leg got anywhere"
         Expect  = @('EDGE STOP', 'phase=SAFE-LOWER', 'phase=IDLE')
         Hint    = "STOP also lowers out of a latched FAULT, and zeroes the rep count instead when the machine is already idle - so this step passing alone does not by itself prove a fresh session was running. The three Expect patterns are timing-blind: they pass whether the descent was proportional or under-driven, so part (b)'s visual check of the leg - still raised at phase=IDLE means FAIL - is the actual test, not optional color. Press STOP during LIFT only - the stated ratio only holds there. A press during LOWER instead drives DOWN for (lowerMs - time already spent in LOWER + 0.5 s), not the LIFT-based figure above. A press during REST gives no SAFE-LOWER at all: the leg is already down, so the session finishes straight to phase=IDLE and this step's phase=SAFE-LOWER pattern never shows up - that is a mistimed press, not a bug, so wait for the next LIFT and press again."
     },

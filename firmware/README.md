@@ -194,8 +194,8 @@ touchscreen, and a controller board can be swapped without retyping anything.
   "serverUrl": "http://192.168.0.12:8000",
   "deviceCode": "default",
   "maxTravelSec": 8,
-  "liftSec": 4,
-  "lowerSec": 4,
+  "liftSec": 7,
+  "lowerSec": 7,
   "holdSec": 10,
   "restSec": 10,
   "targetReps": 10
@@ -514,12 +514,12 @@ If the lamps are ever moved onto MOSFETs or SSRs the constraint disappears and
 patterns become free again — but the semantics above are the ones the panel is
 built and documented around.
 
-`panelLampsBegin()` writes the level **before** `pinMode(OUTPUT)` for both
-lamps, which is the opposite order to `actuatorBegin()`. A pin leaves reset as a
-high-Z input, and `pinMode(OUTPUT)` makes it drive whatever the output register
-holds — LOW. On an active-low relay board LOW is *energized*, so mode-then-write
-would flick a lamp on at every boot. The motor relays get away with the other
-order only because they are active-high.
+`panelLampsBegin()` and `actuatorBegin()` both write the level **before**
+`pinMode(OUTPUT)`. A pin leaves reset as a high-Z input, and `pinMode(OUTPUT)`
+makes it drive whatever the output register holds — LOW. The board fitted here
+is active-low, so LOW is *energized* and mode-then-write would flick a lamp on
+at every boot, or close both motor relays at once — the pair break-before-make
+exists to keep apart.
 
 There is deliberately **no power-on lamp test**. Idle is the boot state, so
 yellow comes on and stays on — that is not a lamp test and must not become one:
@@ -527,9 +527,10 @@ the panel is specified to show exactly one lamp at all times, and a green flash
 at power-up would read as the machine starting by itself, the one impression it
 must never give. Test the lamps by starting a session.
 
-Set `LED_ACTIVE_LOW` in `config.h` if your relay board energizes on LOW, as most
-cheap opto-isolated modules do. It covers **both** lamps, on the assumption they
-are two channels of one board. **Check this before first power-up**: backwards,
+`LED_ACTIVE_LOW` is **set** in `config.h`, because the lamps are two more
+channels of the same active-low relay board the motors are on (`RELAY_ACTIVE_LOW`
+is set for the same reason). It covers **both** lamps. Clear it only for a board
+that energizes on HIGH, and **check this before first power-up**: backwards,
 green is lit whenever the machine is idle and yellow while it is working, which
 is the dangerous way round.
 
@@ -661,16 +662,16 @@ patient-facing machine it recovers instead of appearing bricked.
 
 ## Wiring
 
-- Controller relays: UP GPIO 22, DOWN GPIO 27. There are no limit switches —
-  travel is timed by `liftSec`/`lowerSec`, both editable and capped by
-  `maxTravelSec`.
+- Controller relays: UP GPIO 22, DOWN GPIO 27, active-low (`RELAY_ACTIVE_LOW`
+  set). There are no limit switches — travel is timed by `liftSec`/`lowerSec`,
+  both editable and capped by `maxTravelSec`.
 - Panel buttons: START GPIO 25, STOP GPIO 26. Momentary, INPUT_PULLUP, other
   side to GND; both normally-open (`BTN_START_NC` / `BTN_STOP_NC`, both `0` in
   `config.h`). GPIO 4 and GPIO 33 are free — nothing reads them and nothing
   reserves them.
 - Panel lamps: green GPIO 23, yellow GPIO 32, each a 12 V lamp through its own
   relay. Green lit while a session is in progress, yellow while idle, **both**
-  lit for a latched FAULT — one lamp in each normal state, never blinking. Set
-  `LED_ACTIVE_LOW` if the relay board energizes on LOW; it covers both lamps.
+  lit for a latched FAULT — one lamp in each normal state, never blinking. The
+  relay board is active-low, so `LED_ACTIVE_LOW` is set; it covers both lamps.
 - UART: controller GPIO 16 (RX) / 17 (TX) ↔ CYD GPIO 22 (RX) / 27 (TX),
   cross-wired, common GND. 115200 8N1. Pins to be confirmed on the bench.

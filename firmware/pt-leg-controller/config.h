@@ -8,8 +8,8 @@
 
 #define PIN_RELAY_UP 22   // P3 connector — ขารีเลย์สั่งมอเตอร์ "ยกขึ้น"
 #define PIN_RELAY_DOWN 27 // CN1 connector — ขารีเลย์สั่งมอเตอร์ "ลดลง"
-// #define RELAY_ACTIVE_LOW  // uncomment if relay board is active-low
-// [TH] เปิดบรรทัดนี้ถ้าบอร์ดรีเลย์เป็นแบบ active-low (สั่งงานด้วยลอจิก LOW)
+#define RELAY_ACTIVE_LOW  // the fitted relay board is active-low
+// [TH] บอร์ดรีเลย์ที่ใช้จริงเป็นแบบ active-low (สั่งงานด้วยลอจิก LOW)
 
 // The top and bottom limit switches are gone. Travel is timed now: LIFT drives
 // the UP relay for liftSec and LOWER drives DOWN for lowerSec, both editable.
@@ -104,14 +104,16 @@
 //      ไม่ใช่ขา strapping และไม่มีสัญญาณแกว่งตอนบูตแบบขา 0/2/5/12/15
 #define PIN_LAMP_GREEN 23
 #define PIN_LAMP_YELLOW 32
-// Uncomment for an active-low relay board — most cheap opto-isolated modules are.
-// Covers BOTH lamps, on the assumption they are two channels of one board. Check
-// before first power-up: backwards, green is lit whenever the machine is idle,
-// which is the dangerous way round.
-// [TH] เปิดบรรทัดนี้ถ้าบอร์ดรีเลย์เป็นแบบสั่งงานด้วยลอจิกต่ำ ซึ่งโมดูลออปโตราคาถูกส่วนใหญ่เป็นแบบนั้น
+// The lamps are relay channels too, on the same active-low board as the motor
+// relays — so this is set for the same reason RELAY_ACTIVE_LOW is. Covers BOTH
+// lamps, on the assumption they are two channels of one board. Check before
+// first power-up: backwards, green is lit whenever the machine is idle, which is
+// the dangerous way round.
+// [TH] หลอดไฟก็เป็นช่องรีเลย์เหมือนกัน อยู่บนบอร์ดสั่งงานด้วยลอจิกต่ำแผ่นเดียวกับรีเลย์มอเตอร์
+//      จึงเปิดค่านี้ด้วยเหตุผลเดียวกับ RELAY_ACTIVE_LOW
 //      ใช้กับหลอดทั้งสองดวง โดยถือว่าเป็นสองช่องของบอร์ดเดียวกัน
 //      ต้องตรวจก่อนเปิดเครื่องครั้งแรก ถ้ากลับด้าน ไฟเขียวจะติดตอนเครื่องว่าง ซึ่งเป็นด้านที่อันตราย
-// #define LED_ACTIVE_LOW
+#define LED_ACTIVE_LOW
 
 // DS3231 real-time clock on the controller I2C bus. Not the ESP32 default pair
 // (21/22): 22 drives a relay, and 25 is now START. 21 and 19 are what is left
@@ -139,8 +141,8 @@
 
 // cycle defaults (seconds) — user-adjustable in the settings UI
 // [TH] ค่าตั้งต้นของรอบ (วินาที) ผู้ใช้ปรับได้ในหน้าตั้งค่า
-#define DEFAULT_LIFT_SEC 4  // เวลาที่รีเลย์ยกขึ้นจ่ายไฟ
-#define DEFAULT_LOWER_SEC 4 // เวลาที่รีเลย์ลดลงจ่ายไฟ
+#define DEFAULT_LIFT_SEC 7  // เวลาที่รีเลย์ยกขึ้นจ่ายไฟ
+#define DEFAULT_LOWER_SEC 7 // เวลาที่รีเลย์ลดลงจ่ายไฟ
 #define DEFAULT_HOLD_SEC 10 // เวลาค้างตอนยกสุด
 #define DEFAULT_REST_SEC 10 // เวลาพักตอนลงสุด
 

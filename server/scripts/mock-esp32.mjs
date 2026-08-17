@@ -5,9 +5,9 @@
 const base = process.argv[2] || 'http://localhost:8000'
 const deviceId = process.argv[3] || 'default'
 
-// Real device motion cycle: lift (up) 10 s, then lower + rest 10 s = 1 rep / 20 s.
+// Real device motion cycle: lift 7 s, hold 10 s, lower 7 s, rest 10 s = 1 rep / 34 s.
 // snapshot() floors repCounter, so the count ticks to 1 only after a full cycle.
-const REP_SECONDS = 20
+const REP_SECONDS = 34
 
 let running = false
 let startedAt = 0
@@ -54,7 +54,7 @@ setInterval(async () => {
 }, 1000)
 
 setInterval(async () => {
-  if (running) repCounter += 1 / REP_SECONDS // 1 rep per full 20 s up+down cycle
+  if (running) repCounter += 1 / REP_SECONDS // 1 rep per full 34 s up+down cycle
   if (!running && Date.now() - lastIdleBeat < 5000) return
   lastIdleBeat = Date.now()
   try {

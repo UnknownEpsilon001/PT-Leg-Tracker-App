@@ -126,10 +126,22 @@ static void disarmCapTimer() {
 }
 
 void actuatorBegin() {
-  // [TH] ตั้งขาเป็นเอาต์พุตและบังคับรีเลย์ดับทั้งคู่ ต้องเรียกเป็นอย่างแรกใน setup()
+  // Level before mode, the same order beginLamp() uses and for the same reason. A
+  // pin comes out of reset high-Z; pinMode(OUTPUT) makes it drive whatever the
+  // output register already holds, which is LOW. With RELAY_ACTIVE_LOW that is
+  // energized, so mode-then-write would close BOTH motor relays for the
+  // microseconds until the next line — at every boot and every reset, and with
+  // both directions commanded at once, which is the pair break-before-make exists
+  // to keep apart.
+  // [TH] ตั้งระดับก่อนตั้งโหมด ลำดับเดียวกับ beginLamp() และด้วยเหตุผลเดียวกัน
+  //      ขา GPIO ออกจากรีเซ็ตมาเป็นอินพุตอิมพีแดนซ์สูง
+  //      คำสั่ง pinMode(OUTPUT) จะทำให้ขาเริ่มขับค่าที่ค้างอยู่ในรีจิสเตอร์ ซึ่งคือ LOW
+  //      เมื่อเปิด RELAY_ACTIVE_LOW ค่านั้นคือสถานะที่รีเลย์ทำงาน
+  //      การตั้งโหมดก่อนจะทำให้รีเลย์มอเตอร์ทำงานพร้อมกันทั้งสองตัวชั่วไมโครวินาที
+  //      ทุกครั้งที่เปิดเครื่องและทุกครั้งที่รีเซ็ต ซึ่งเป็นคู่ที่กลไกตัดก่อนต่อมีไว้กันไม่ให้ทำงานพร้อมกัน
+  writePins(OFF, OFF);
   pinMode(PIN_RELAY_UP, OUTPUT);
   pinMode(PIN_RELAY_DOWN, OUTPUT);
-  writePins(OFF, OFF);
   state = ACT_OFF;
   pending = ACT_OFF;
   const esp_timer_create_args_t args = {capTimerCb, nullptr, ESP_TIMER_TASK, "actcap", false};

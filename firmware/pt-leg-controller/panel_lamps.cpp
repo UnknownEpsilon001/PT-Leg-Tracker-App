@@ -20,12 +20,12 @@ static void writeLamp(uint8_t pin, int& last, bool on) {
 }
 
 static void beginLamp(uint8_t pin) {
-  // Level before mode, deliberately the opposite order to actuatorBegin(). A pin
+  // Level before mode, the same order actuatorBegin() uses. A pin
   // comes out of reset high-Z; pinMode(OUTPUT) makes it drive whatever the output
   // register already holds, which is LOW. On an active-low relay board LOW is
   // energized, so mode-then-write flicks the lamp on for the microseconds until
   // the next line — a click nobody asked for, at every boot.
-  // [TH] ตั้งระดับก่อนตั้งโหมด ซึ่งเป็นลำดับตรงข้ามกับ actuatorBegin() โดยตั้งใจ
+  // [TH] ตั้งระดับก่อนตั้งโหมด ลำดับเดียวกับ actuatorBegin()
   //      ขา GPIO ออกจากรีเซ็ตมาเป็นอินพุตอิมพีแดนซ์สูง
   //      คำสั่ง pinMode(OUTPUT) จะทำให้ขาเริ่มขับค่าที่ค้างอยู่ในรีจิสเตอร์ ซึ่งคือ LOW
   //      บนบอร์ดรีเลย์แบบสั่งงานด้วยลอจิกต่ำ ค่า LOW คือสถานะที่รีเลย์ทำงาน
