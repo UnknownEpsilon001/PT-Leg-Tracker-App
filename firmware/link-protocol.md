@@ -2,10 +2,74 @@
 
 Newline-delimited JSON, one message per line, over a dedicated UART (controller
 `Serial2` on GPIO 16 RX / 17 TX ↔ CYD `Serial2` on GPIO 22 RX / 27 TX,
-cross-wired RX↔TX with a common GND). Both ends 115200 8N1.
+cross-wired RX↔TX with a common GND). Both ends **19200 8N1**.
 
-`println(json)` to send; the reader accumulates until `\n` and parses with
-ArduinoJson. Malformed lines are dropped. Lines over 512 chars reset the buffer.
+Each line is the JSON object followed by `*` and a four-hex-digit
+CRC-16/CCITT-FALSE (init `0xFFFF`, poly `0x1021`) computed over the JSON text
+only — not the `*`, the checksum, or the newline:
+
+```
+{"t":"state","running":true,...,"server":false}*3A7C
+```
+
+The reader accumulates until `\n`, trims anything before the first `{`, splits
+at the **last** `*` (an SSID or password may legally contain one), verifies the
+checksum, and only then parses with ArduinoJson. Lines over 512 chars reset the
+buffer.
+
+Three things this arrangement exists to survive, all measured on the bench:
+
+- **Junk before the payload.** An RX pin floats whenever the other board is not
+  transmitting, and noise on it fakes start bits, so frames arrive with 25-32
+  bytes of `0xFF` in front. Trimming to the first `{` recovers them; a rising
+  `rxTrimmed` means the line still floats and wants a 10k pull-up to 3V3.
+- **Bit flips inside the payload.** A flipped bit turned `"target"` into
+  `"targep"`, which still parsed as valid JSON — the absent key then fell back
+  to its default and the display applied "not running, 0 seconds" for that
+  frame, flicking to the idle screen and back. The checksum turns that into a
+  detected drop, and `state` additionally requires all its fields to be present.
+- **Mixed firmware.** The two boards are flashed separately. A board running an
+  image from before the checksum sends unchecksummed lines, which this reader
+  drops and counts in `rxNoCrc`. A dead link with `rxNoCrc` climbing means the
+  other board still needs flashing — **flash both together.**
+
+19200 rather than 115200: the link carries about 4 messages a second of ~120
+bytes, under 500 B/s, so the higher rate bought nothing but noise sensitivity.
+A slower bit is sampled further from its edges.
+
+Receive counters live on `Link` (`rxLines`, `rxBad`, `rxUnknown`, `rxTrimmed`,
+`rxCrcBad`, `rxNoCrc`, `rxDupes`, `txRetries`, `txDropped`) and the display's
+`LOOP_DEBUG` build prints them once a second. `lastRxMs()` is stamped for every
+complete line **before** parsing, so it answers "is the wire alive", not "is the
+data good" — count outcomes instead.
+
+## Acknowledgement and retransmission
+
+The one-shot messages carry an `"id"` and are resent until acknowledged;
+`state` and `ping` never are. The split is deliberate: another `state` follows in
+250 ms, so resending a stale snapshot is worse than dropping it, while the
+one-shots are single events whose loss is silent and permanent.
+
+| message | reliable | why |
+|---|---|---|
+| `done` | yes | the session's only route to the SD card — a lost one is lost data |
+| `settings` | yes | a SAVE the operator watched succeed |
+| `target` | yes | a rep count they just changed |
+| `hello` | no | already re-sent every 3 s until settings arrive |
+| `state` | no | superseded 4× a second |
+| `ping` | no | superseded every second |
+
+The receiver replies `{"t":"ack","id":n}*CRC` and remembers the last 8 ids to
+suppress duplicates. The ack is sent **before** the duplicate check on purpose: a
+repeat means our previous ack was what got lost, so staying silent would keep the
+sender retrying. The sender holds up to 4 unacknowledged messages, resends every
+300 ms, and gives up after 8 tries (~2.4 s), counting that in `txDropped` — a
+non-zero `txDropped` means a session row or a settings save really was lost, and
+is worth surfacing rather than hiding.
+
+Ids start from `millis()` rather than 1, because a board that reboots would
+otherwise restart into ids the peer still remembers and have its first messages
+discarded as repeats.
 
 ## Display → Controller
 

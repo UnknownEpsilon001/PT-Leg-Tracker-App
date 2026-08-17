@@ -7,7 +7,9 @@ Two ESP32s per machine:
 | `pt-leg-controller/` | plain ESP32 dev board (`esp32:esp32:esp32`) | relays, timed motion state machine, panel buttons + lamps, Wi-Fi + server client, NVS settings |
 | `pt-leg-display/` | ESP32-2432S028R "Cheap Yellow Display" (`esp32:esp32:esp32`) | LVGL touch UI only |
 
-They talk over UART (115200 8N1, cross-wired RX↔TX + common GND). Protocol:
+They talk over UART (19200 8N1, cross-wired RX↔TX + common GND, each line
+checksummed — **flash both boards together when the protocol changes**).
+Protocol:
 `link-protocol.md`.
 
 Spec: `../docs/superpowers/specs/2026-07-19-esp32-firmware-design.md`
@@ -674,4 +676,7 @@ patient-facing machine it recovers instead of appearing bricked.
   lit for a latched FAULT — one lamp in each normal state, never blinking. The
   relay board is active-low, so `LED_ACTIVE_LOW` is set; it covers both lamps.
 - UART: controller GPIO 16 (RX) / 17 (TX) ↔ CYD GPIO 22 (RX) / 27 (TX),
-  cross-wired, common GND. 115200 8N1. Pins to be confirmed on the bench.
+  cross-wired, common GND. 19200 8N1, bench-confirmed. Both RX pins enable their
+  internal pull-up in `setup()`; a floating RX prefixes every frame with `0xFF`
+  junk, and the ~45k internal is weak enough that a **10k to 3V3 on the CYD's
+  GPIO 22** is still worth fitting — watch `rxTrimmed` to tell.

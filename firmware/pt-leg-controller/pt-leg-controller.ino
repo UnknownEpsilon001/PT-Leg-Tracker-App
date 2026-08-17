@@ -14,6 +14,24 @@
 #define BENCH_DEBUG 0
 #endif
 
+// Bench aid: time each part of the loop and print any pass that runs long. The
+// display sends state at 4 Hz and the CYD measured it arriving in bursts with
+// ~1.3 s gaps every 4-5 s, which means this loop stops running for about a
+// second at a time. That starves the state cadence and, when two stalls land
+// together, trips the display's 2.5 s link timeout. This names the call
+// responsible instead of eliminating candidates one reflash at a time.
+// Off for real hardware; enable per-build:
+//   --build-property compiler.cpp.extra_flags=-DLOOP_DEBUG=1 --clean
+// [TH] โหมดทดสอบ: จับเวลาแต่ละส่วนของลูป แล้วพิมพ์เฉพาะรอบที่ใช้เวลานาน
+//      บอร์ดนี้ส่งสถานะ 4 ครั้ง/วินาที แต่ฝั่งจอวัดได้ว่าข้อความมาเป็นช่วง
+//      และเว้นช่วงราว 1.3 วินาที ทุกๆ 4-5 วินาที แปลว่าลูปนี้หยุดเดินราวหนึ่งวินาที
+//      ทำให้ส่งสถานะไม่ทัน และถ้าเกิดติดกันสองครั้งจะเลยเกณฑ์ 2.5 วินาทีของฝั่งจอ
+//      โหมดนี้ชี้ตัวการโดยตรง แทนการไล่ตัดทีละข้อแล้วแฟลชใหม่ทุกครั้ง
+#ifndef LOOP_DEBUG
+#define LOOP_DEBUG 0
+#endif
+#define LOOP_DEBUG_SLOW_MS 200
+
 #include "config.h"
 #include "settings.h"
 #include "actuator.h"
@@ -24,6 +42,8 @@
 #include "link.h"
 #include "rtc.h"
 #include <time.h>
+#include <esp_log.h>
+#include <driver/gpio.h>
 
 DeviceSettings gSettings;  // ค่าตั้งค่าปัจจุบัน
 SessionSM gSession;        // เครื่องสถานะของรอบการทำงาน
@@ -326,8 +346,51 @@ void setup() {
   panelLampsBegin();  // lamps dark before anything can drive them — ให้หลอดดับไว้ก่อนที่อะไรจะมาสั่งได้
   rtcBegin();  // absent chip is fine: epochs just read 0 — ไม่มีชิปก็ไม่เป็นไร เวลาจะเป็น 0
   Serial.begin(115200);
+  // The IDF logger is silenced for every tag, and this is a safety measure rather
+  // than a tidiness one. A station that cannot associate makes the WiFi driver
+  // print "sta is connecting, return error" on every retry — measured at ~1500
+  // lines/s, about 26 KB/s — while UART0 carries ~11.5 KB/s. HardwareSerial's
+  // write() blocks until the buffer drains (setTxTimeoutMs exists only on the
+  // native-USB classes, not on a real UART), so the overflow stalls the loop that
+  // sends state every 250 ms, services the actuator energize cap and reads the
+  // panel STOP button. Muting the source is the only lever this core offers.
+  //
+  // Nothing worth reading is lost: these are driver logs, not ours. Serial.printf
+  // does not go through esp_log, so the boot banner, the fault lines and the
+  // BENCH_DEBUG output all still appear — and they print on change, so they
+  // cannot flood the port the way a retry loop does.
+  // [TH] ปิดข้อความของไลบรารีระบบทุกหมวด ทำเพื่อความปลอดภัย ไม่ใช่แค่ให้ดูสะอาด
+  //      ถ้าต่อ WiFi ไม่ได้ ไดรเวอร์จะพิมพ์ข้อความผิดพลาดทุกครั้งที่ลองใหม่
+  //      วัดได้ราว 1500 บรรทัดต่อวินาที หรือราว 26 กิโลไบต์ต่อวินาที ขณะที่ UART0 ส่งได้ราว 11.5 กิโลไบต์ต่อวินาที
+  //      การเขียนพอร์ตจะรอจนกว่าบัฟเฟอร์จะว่าง (ฟังก์ชันตั้งเวลารอมีเฉพาะพอร์ต USB ในตัว ไม่มีสำหรับ UART จริง)
+  //      พอร์ตที่ล้นจึงทำให้ลูปที่ส่งสถานะทุก 250 มิลลิวินาที ดูแลเพดานเวลาจ่ายไฟ และอ่านปุ่มหยุด ต้องหยุดรอ
+  //      แกนนี้ทำได้ทางเดียวคือปิดที่ต้นทาง
+  //      ไม่ได้เสียข้อความที่ต้องใช้ เพราะที่ปิดคือข้อความของไดรเวอร์ ไม่ใช่ของเรา
+  //      Serial.printf ไม่ได้ผ่านระบบนี้ ข้อความตอนเปิดเครื่อง ข้อความผิดพลาด และโหมดดีบักจึงยังพิมพ์ตามปกติ
+  //      และพิมพ์เฉพาะตอนค่าเปลี่ยน จึงไม่ทำให้พอร์ตล้นแบบการลองเชื่อมต่อซ้ำ
+  esp_log_level_set("*", ESP_LOG_NONE);
   delay(200);  // let UART0 settle so the boot banner is not clipped — รอ UART0 นิ่งกันข้อความต้นเปิดเครื่องขาด
-  Serial2.begin(115200, SERIAL_8N1, 16, 17);  // UART to CYD — สาย UART ไปบอร์ดจอ (RX=16, TX=17)
+  // 19200, not 115200. The link carries ~4 messages a second of about 120 bytes
+  // — under 500 B/s — so 115200 bought nothing but noise sensitivity. A slower
+  // bit is a wider bit: each one is sampled further from its edges, which is the
+  // cheapest margin available on unshielded jumper wire between two boards.
+  // Both ends must match; flash them together.
+  // [TH] ใช้ 19200 ไม่ใช่ 115200 สายนี้ส่งราว 4 ข้อความต่อวินาที ข้อความละราว 120 ไบต์
+  //      ไม่ถึง 500 ไบต์ต่อวินาที ความเร็ว 115200 จึงไม่ได้ประโยชน์ มีแต่ไวต่อสัญญาณรบกวน
+  //      บิตที่ช้าลงคือบิตที่กว้างขึ้น จุดที่อ่านค่าจะห่างจากขอบมากขึ้น
+  //      เป็นวิธีเพิ่มความทนทานที่ถูกที่สุดบนสายจัมเปอร์เปลือยระหว่างสองบอร์ด
+  //      ทั้งสองฝั่งต้องตั้งค่าเท่ากัน ต้องแฟลชพร้อมกัน
+  Serial2.begin(19200, SERIAL_8N1, 16, 17);  // UART to CYD — สาย UART ไปบอร์ดจอ (RX=16, TX=17)
+  // Hold RX high while the other board is idle. A floating RX picks up noise
+  // that the UART reads as start bits, prefixing every message with a run of
+  // 0xFF; link.cpp trims that off, but not creating it is better. Internal
+  // pull-up is ~45k — weak. An external 10k to 3V3 is the stronger fix if junk
+  // survives this.
+  // [TH] ดึงขารับให้เป็นลอจิกสูงไว้ตอนที่อีกฝั่งไม่ได้ส่ง
+  //      ขารับที่ลอยจะรับสัญญาณรบกวนซึ่ง UART อ่านเป็นบิตเริ่ม ทำให้มีไบต์ 0xFF นำหน้าทุกข้อความ
+  //      link.cpp ตัดทิ้งให้อยู่แล้ว แต่ไม่ให้เกิดตั้งแต่แรกดีกว่า
+  //      ตัวต้านทานภายในราว 45 กิโลโอห์มซึ่งค่อนข้างอ่อน ถ้ายังมีขยะอยู่ให้ใส่ตัวต้านทาน 10 กิโลโอห์มไป 3.3V
+  gpio_set_pull_mode(GPIO_NUM_16, GPIO_PULLUP_ONLY);
 
   settingsLoad(gSettings);
   gSession.cfg = {gSettings.liftSec * 1000u,  gSettings.lowerSec * 1000u,
@@ -359,11 +422,30 @@ void setup() {
 #endif
 }
 
+#if LOOP_DEBUG
+// Each segment's elapsed ms for the current pass, printed together when the pass
+// runs long. File scope so the timing points can sit inside the branches they
+// measure without threading locals through them.
+// [TH] เวลาที่ใช้ของแต่ละส่วนในลูปรอบปัจจุบัน พิมพ์พร้อมกันเมื่อรอบนั้นใช้เวลานาน
+//      ประกาศไว้ระดับไฟล์เพื่อให้จุดจับเวลาอยู่ในบล็อกที่มันวัดได้เลย
+static uint32_t dSeg_net, dSeg_ntp, dSeg_linkPoll, dSeg_cmd, dSeg_hb, dSeg_state, dSeg_btn;
+#define LD_START(v) uint32_t v##_t0 = millis()
+#define LD_END(v, seg) seg = millis() - v##_t0
+#endif
+
 void loop() {
   // [TH] ลำดับสำคัญ: อ่านปุ่ม -> เดินเครื่องสถานะ -> สั่งรีเลย์ -> ตรวจเพดานเวลา ก่อนงานเครือข่าย
   uint32_t now = millis();
+#if LOOP_DEBUG
+  uint32_t dIter_t0 = now;
+  dSeg_net = dSeg_ntp = dSeg_linkPoll = dSeg_cmd = dSeg_hb = dSeg_state = dSeg_btn = 0;
+  LD_START(btn);
+#endif
   buttonsPoll(now);
   gSession.tick(now);
+#if LOOP_DEBUG
+  LD_END(btn, dSeg_btn);
+#endif
 
   // The energize cap is charged to the stroke that was actually driving, which
   // means consuming it BEFORE the buttons can start a new session. A long loop
@@ -442,7 +524,13 @@ void loop() {
   // [TH] การตัดที่เกิดจากการตรวจฝั่งซอฟต์แวร์ใน actuatorTick จะถูกอ่านที่ต้นลูปรอบถัดไป
   //      พร้อมกับของตัวจับเวลาฮาร์ดแวร์ ทั้งคู่ผ่านจุดเดียวกันด้านบน
   //      การตัดจึงไม่มีทางถูกคิดให้กับรอบที่เริ่มหลังการเคลื่อนที่ที่มันเป็นเจ้าของ
+#if LOOP_DEBUG
+  LD_START(net);
+#endif
   netLoop(now);
+#if LOOP_DEBUG
+  LD_END(net, dSeg_net);
+#endif
   // One-shot NTP -> RTC. time(nullptr) returns a small number until SNTP has
   // answered, so the threshold is what distinguishes "clock not set yet" from a
   // real time; writing the former into the DS3231 would replace a good
@@ -456,11 +544,21 @@ void loop() {
   // [TH] ถือว่าเสร็จเฉพาะตอนที่ชิปรับค่าไปจริง ถ้าตั้งค่าสถานะตั้งแต่ตอนที่ลองเขียน
   //      สัญญาณ I2C สะดุดครั้งเดียว หรือบอร์ดที่ยังไม่ได้ติดชิปซึ่งการเขียนไม่เกิดอะไรขึ้น
   //      จะเผาการซิงก์ครั้งเดียวของการเปิดเครื่องนั้นทิ้ง และชิปที่ยังไม่ได้ตั้งเวลาก็จะไม่ถูกตั้งทั้งวัน
+#if LOOP_DEBUG
+  LD_START(ntp);
+#endif
   if (!gNtpDone && netWifiUp()) {
     time_t t = time(nullptr);
     if (t > 1700000000) gNtpDone = rtcSetFromEpoch((uint32_t)t);  // ~2023-11
   }
+#if LOOP_DEBUG
+  LD_END(ntp, dSeg_ntp);
+  LD_START(lp);
+#endif
   gLink.poll();
+#if LOOP_DEBUG
+  LD_END(lp, dSeg_linkPoll);
+#endif
 
   // UART-loss safe-stop: the screen may be dead and no touch-stop is possible, so
   // a link that goes quiet mid-session lowers the leg and stops.
@@ -501,7 +599,13 @@ void loop() {
     lastPoll = now;
     int16_t wantTarget = -1;
     NetTimings wantTimings{0, 0, 0, 0, 0};
+#if LOOP_DEBUG
+    LD_START(cmd);
+#endif
     String cmd = netPollCommand(&wantTarget, &wantTimings);
+#if LOOP_DEBUG
+    LD_END(cmd, dSeg_cmd);
+#endif
     // Timings go through applySettings, which clamps them, persists them and — if
     // a session is running — holds the whole change until it ends. That deferral
     // is the point: the NVS commit and the Wi-Fi restart it performs must not
@@ -578,8 +682,14 @@ void loop() {
   uint32_t hbInterval = gSession.running() ? 1000 : 5000;
   if (now - lastHb >= hbInterval) {
     lastHb = now;
+#if LOOP_DEBUG
+    LD_START(hb);
+#endif
     netHeartbeat(gSession.running() ? "running" : "idle", gSession.elapsedSec(now),
                  gSession.reps(), gSession.target());
+#if LOOP_DEBUG
+    LD_END(hb, dSeg_hb);
+#endif
   }
   // Stopped is handled BEFORE started, and the order is load-bearing. Both edges
   // can be pending in one iteration: tick() can end a session on a fault, and the
@@ -678,10 +788,47 @@ void loop() {
     lastState = now;
     LinkState st{gSession.running(), (int)gSession.phase(), gSession.elapsedSec(now),
                  gSession.reps(), gSession.target(), netWifiUp(), netServerUp()};
+#if LOOP_DEBUG
+    LD_START(st);
+#endif
     gLink.sendState(st);
+#if LOOP_DEBUG
+    LD_END(st, dSeg_state);
+#endif
   }
 #if BENCH_DEBUG
   debugTick(now, pressStart, pressStop);
+#endif
+#if LOOP_DEBUG
+  // Printed before the delay so the figure is this pass's work, not the pacing.
+  // Segments that did not run this pass read 0, which is the answer for them.
+  // [TH] พิมพ์ก่อนหน่วงเวลา ตัวเลขจะได้เป็นงานจริงของรอบนี้ ไม่รวมการหน่วง
+  //      ส่วนที่ไม่ได้ทำงานในรอบนี้จะเป็น 0 ซึ่งก็คือคำตอบของส่วนนั้น
+  uint32_t dIter = millis() - dIter_t0;
+  if (dIter >= LOOP_DEBUG_SLOW_MS)
+    Serial.printf(
+        "[ctl %lu] SLOW iter=%lums btn=%lu net=%lu ntp=%lu linkpoll=%lu cmd=%lu hb=%lu state=%lu\n",
+        (unsigned long)millis(), (unsigned long)dIter, (unsigned long)dSeg_btn,
+        (unsigned long)dSeg_net, (unsigned long)dSeg_ntp, (unsigned long)dSeg_linkPoll,
+        (unsigned long)dSeg_cmd, (unsigned long)dSeg_hb, (unsigned long)dSeg_state);
+  // Heartbeat line: proves the loop is alive and shows its normal pace, so a
+  // silent stretch in the log is distinguishable from a board that stopped
+  // printing altogether.
+  // [TH] บรรทัดบอกจังหวะปกติของลูป เพื่อให้ช่วงที่เงียบในบันทึกแยกออกจาก
+  //      กรณีที่บอร์ดหยุดพิมพ์ไปเลย
+  static uint32_t dWindow = 0;
+  static uint32_t dMaxIter = 0;
+  static uint16_t dPasses = 0;
+  if (dIter > dMaxIter) dMaxIter = dIter;
+  dPasses++;
+  if (millis() - dWindow >= 1000) {
+    dWindow = millis();
+    Serial.printf("[ctl %lu] passes=%u maxiter=%lums running=%d elapsed=%lus\n",
+                  (unsigned long)dWindow, (unsigned)dPasses, (unsigned long)dMaxIter,
+                  gSession.running() ? 1 : 0, (unsigned long)gSession.elapsedSec(millis()));
+    dPasses = 0;
+    dMaxIter = 0;
+  }
 #endif
   delay(2);
 }

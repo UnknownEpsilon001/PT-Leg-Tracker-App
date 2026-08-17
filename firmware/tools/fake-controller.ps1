@@ -80,9 +80,26 @@ $sp.RtsEnable = $false
 $sp.Open()
 Write-Host "fake controller on $Port. Ctrl+C to stop." -ForegroundColor Green
 
+# [TH] คำนวณค่าตรวจสอบแบบ CRC-16/CCITT-FALSE ให้ตรงกับ crc16() ใน link.cpp
+# CRC-16/CCITT-FALSE, matching crc16() in link.cpp. The display drops any line
+# without a valid checksum, so this script has to speak it too or the bench
+# harness goes silent against real firmware.
+function Get-LinkCrc([string]$text) {
+    $crc = 0xFFFF
+    foreach ($b in [System.Text.Encoding]::ASCII.GetBytes($text)) {
+        $crc = $crc -bxor ([int]$b -shl 8)
+        for ($i = 0; $i -lt 8; $i++) {
+            if ($crc -band 0x8000) { $crc = (($crc -shl 1) -bxor 0x1021) -band 0xFFFF }
+            else { $crc = ($crc -shl 1) -band 0xFFFF }
+        }
+    }
+    return $crc
+}
+
 function Send-Line([string]$json) {
-    $sp.WriteLine($json)
-    Write-Host "-> $json" -ForegroundColor DarkGray
+    $line = "{0}*{1:X4}" -f $json, (Get-LinkCrc $json)
+    $sp.WriteLine($line)
+    Write-Host "-> $line" -ForegroundColor DarkGray
 }
 
 $settings = '{"t":"settings","ssid":"ClinicWiFi","pass":"secret123",' +
@@ -173,6 +190,18 @@ try {
             try { $line = $sp.ReadLine() } catch { break }
             if (-not $line) { continue }
             Write-Host "<- $line" -ForegroundColor DarkCyan
+            # [TH] ข้อความที่มีรหัสต้องตอบรับ ไม่งั้นจอจะส่งซ้ำจนเลิกส่งแล้วนับว่าหาย
+            # Anything carrying an id must be acknowledged, or the display retries
+            # it eight times and then counts it as dropped — a SAVE would report
+            # itself lost even though this script acted on it.
+            if ($line -match '"id"\s*:\s*(\d+)') {
+                Send-Line ('{{"t":"ack","id":{0}}}' -f $Matches[1])
+            }
+            # The settings the display keeps re-sending carry an id; strip it so
+            # the copy echoed back does not replay the display's own id at it.
+            # [TH] ค่าตั้งค่าที่จอส่งมามีรหัสติดมาด้วย ต้องตัดออกก่อนส่งกลับ
+            #      ไม่งั้นจะเป็นการส่งรหัสของจอเองย้อนกลับไปหาจอ
+            $line = $line -replace ',"id":\d+', '' -replace '\*[0-9A-Fa-f]{4}$', ''
             if ($line -match '"t"\s*:\s*"hello"') { Send-Line $settings }
             elseif ($line -match '"t"\s*:\s*"settings"') {
                 # Keep what the display sent, the way the real controller keeps it
@@ -280,7 +309,11 @@ try {
 
         $state = '{{"t":"state","running":{0},"phase":{1},"elapsed":{2},"reps":{3},"target":{4},' +
                  '"wifi":true,"server":true}}'
-        $sp.WriteLine([string]::Format($state, $running.ToString().ToLower(), $phase, $elapsed, $reps, $target))
+        # Through Send-Line, not WriteLine: the state frame needs the checksum
+        # like every other message, and it is the one the display acts on most.
+        # [TH] ส่งผ่าน Send-Line ไม่ใช่ WriteLine เพราะข้อความสถานะก็ต้องมีค่าตรวจสอบเหมือนข้อความอื่น
+        #      และเป็นข้อความที่ฝั่งจอใช้งานมากที่สุด
+        Send-Line ([string]::Format($state, $running.ToString().ToLower(), $phase, $elapsed, $reps, $target))
         Start-Sleep -Milliseconds 250
     }
 }

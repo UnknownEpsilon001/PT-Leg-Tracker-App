@@ -12,6 +12,23 @@
 #define LINK_OVER_USB 0
 #endif
 
+// Bench aid: time the loop and the arriving link frames, to tell a display that
+// stalls apart from a link that starves. The screen showing 1-3-6 instead of
+// 1-2-3 can mean either, and they need opposite fixes. Prints a slow-iteration
+// line whenever one pass exceeds LOOP_DEBUG_SLOW_MS with a breakdown of where
+// the time went, plus a once-a-second summary of frames received and the
+// longest gap between them. Off for real hardware; enable per-build:
+//   --build-property compiler.cpp.extra_flags=-DLOOP_DEBUG=1 --clean
+// [TH] โหมดทดสอบ: จับเวลาลูปและข้อความที่เข้ามา เพื่อแยกว่าจอค้างเอง หรือข้อมูลไม่มาถึง
+//      หน้าจอที่นับ 1-3-6 แทน 1-2-3 เกิดได้จากทั้งสองสาเหตุ ซึ่งต้องแก้คนละทาง
+//      จะพิมพ์เมื่อลูปรอบใดใช้เวลาเกินค่าที่ตั้ง พร้อมบอกว่าเวลาหมดไปกับส่วนไหน
+//      และสรุปทุกหนึ่งวินาทีว่ารับข้อความได้กี่ครั้ง และเว้นช่วงนานสุดเท่าไร
+//      ใช้เฉพาะตอนทดสอบ ห้าม commit ทั้งค่าเปิดไว้
+#ifndef LOOP_DEBUG
+#define LOOP_DEBUG 0
+#endif
+#define LOOP_DEBUG_SLOW_MS 300
+
 #include "ui.h"
 #include "link.h"
 #include "session.h"   // Phase enum for uiUpdateMain — ใช้ enum Phase
@@ -20,6 +37,7 @@
 #include "sdlog.h"     // session rows written to the SD card — บันทึกผลแต่ละรอบลงการ์ด
 #include "settingsfile.h"  // /settings.json on the card — ค่าตั้งค่าบนการ์ด
 #include "uitest.h"        // bench-only serial control of the UI — โหมดทดสอบผ่านสาย
+#include <driver/gpio.h>
 
 // Both drive the USB serial port, so enabling both means two readers fighting
 // over the same bytes and neither working.
@@ -245,14 +263,94 @@ static void onLinkDone(const LinkDone& d) {
   uiShowFinish(r.patientName.c_str(), r.durationSec, r.reps, r.fault, saved);
 }
 
+// When the last accepted state frame landed. The seconds shown on screen are
+// counted locally from it, so a run of rejected frames does not freeze the
+// clock — see uiElapsedNow().
+// [TH] เวลาที่ได้รับสถานะที่ผ่านการตรวจสอบล่าสุด วินาทีที่แสดงบนจอนับต่อเองจากจุดนี้
+//      ช่วงที่ข้อความถูกปฏิเสธติดกันหลายครั้งนาฬิกาบนจอจึงไม่ค้าง ดู uiElapsedNow()
+static uint32_t uiElapsedRxMs = 0;
+// The controller reports running with a clock that does not advance in two
+// states: the safe-lower recovery that precedes a start out of a latched fault
+// (which is not a session and has no elapsed time of its own), and a latched
+// FAULT, where the value is frozen at what it was when the fault hit. Counting
+// locally through either produces a screen that climbs, gets snapped back by the
+// next frame, and climbs again — 0-1-0-1-0-1-2-0... So the local clock is only
+// allowed to run while the controller's own is seen to move.
+// [TH] มีสองสถานะที่คอนโทรลเลอร์รายงานว่ากำลังทำงานแต่เวลาไม่เดิน
+//      อย่างแรกคือช่วงลดขาเพื่อกู้สถานการณ์ก่อนเริ่มรอบจากสถานะผิดพลาดที่ค้างอยู่
+//      ซึ่งไม่ใช่รอบการทำงานจึงไม่มีเวลาของตัวเอง อย่างที่สองคือสถานะผิดพลาดที่ค้างอยู่
+//      ซึ่งค่าเวลาถูกแช่ไว้ที่ค่าตอนเกิดเหตุ
+//      ถ้านับต่อเองในสองสถานะนี้ จอจะไต่ขึ้นแล้วถูกดึงกลับด้วยข้อความถัดไป แล้วไต่ใหม่
+//      กลายเป็น 0-1-0-1-0-1-2-0... จึงให้นาฬิกาบนจอเดินได้เฉพาะตอนที่เห็นว่าเวลาฝั่งคอนโทรลเลอร์เดินจริง
+static bool uiElapsedMoving = false;
+
 static void onLinkState(const LinkState& s) {
+  // Resync the local clock only when the controller has really diverged.
+  //
+  // The wire carries whole seconds, truncated: a frame reading 3 can arrive when
+  // the true elapsed is 3.9, so a clock started from it runs up to a second
+  // behind and the next frame drags it forward again. Snapping on every frame
+  // makes that visible as a stall followed by a skip — 1-2-3, pause, 4-5. Inside
+  // one second the local count is as accurate as the message, so it keeps its
+  // own phase; a gap of 2 s or more is a real divergence (a long run of rejected
+  // frames, or a session that restarted) and is taken from the controller.
+  // [TH] ปรับเทียบนาฬิกาบนจอเฉพาะตอนที่ค่าจากคอนโทรลเลอร์ต่างไปจริงๆ
+  //      ค่าที่ส่งมาเป็นวินาทีเต็มแบบตัดเศษทิ้ง ข้อความที่บอกว่า 3 อาจมาถึงตอนที่เวลาจริงคือ 3.9
+  //      นาฬิกาที่เริ่มนับจากค่านั้นจึงช้าได้ถึงหนึ่งวินาที แล้วข้อความถัดไปก็ดึงกลับไปข้างหน้า
+  //      ถ้าปรับตามทุกข้อความจะเห็นเป็นการค้างแล้วกระโดด คือ 1-2-3 หยุด แล้ว 4-5
+  //      ภายในหนึ่งวินาที การนับบนจอแม่นเท่ากับตัวข้อความอยู่แล้ว จึงให้รักษาจังหวะของตัวเองไว้
+  //      ส่วนที่ต่างกันตั้งแต่ 2 วินาทีขึ้นไปถือว่าต่างกันจริง
+  //      (ข้อความถูกปฏิเสธติดกันนาน หรือรอบเริ่มใหม่) กรณีนั้นให้ยึดค่าจากคอนโทรลเลอร์
+  uint32_t now = millis();
+  uint32_t shown = (uiRunning && uiElapsedMoving && uiElapsedRxMs != 0)
+                       ? uiElapsed + (uint32_t)((int32_t)(now - uiElapsedRxMs) / 1000)
+                       : uiElapsed;
+  // A value that changed proves the controller's clock is running; one that has
+  // not changed for over 1.5 s says it is held, and holding is a real state here
+  // rather than a gap in the link — the link's own gaps are covered by the 2.5 s
+  // watchdog above.
+  // [TH] ค่าที่เปลี่ยนไปเป็นหลักฐานว่านาฬิกาฝั่งคอนโทรลเลอร์เดินอยู่
+  //      ค่าที่ไม่เปลี่ยนเกิน 1.5 วินาทีแปลว่าเวลาถูกแช่ไว้ ซึ่งเป็นสถานะจริงของเครื่อง
+  //      ไม่ใช่ช่วงที่ลิงก์ขาด เพราะช่วงที่ลิงก์ขาดมีตัวเฝ้าระวัง 2.5 วินาทีด้านบนดูแลอยู่แล้ว
+  if (s.elapsed != uiElapsed) uiElapsedMoving = true;
+  else if (uiElapsedRxMs != 0 && (int32_t)(now - uiElapsedRxMs) > 1500) uiElapsedMoving = false;
+  bool diverged = !s.running || !uiRunning || uiElapsedRxMs == 0 || !uiElapsedMoving ||
+                  s.elapsed > shown + 1 || shown > s.elapsed + 1;
+  if (diverged) {
+    uiElapsed = s.elapsed;
+    uiElapsedRxMs = now;
+  }
   uiRunning = s.running;
   uiPhase = (Phase)s.phase;
-  uiElapsed = s.elapsed;
   uiReps = s.reps;
   uiTarget = s.target;
   uiWifi = s.wifi;
   uiServer = s.server;
+}
+
+// The controller's seconds, carried forward locally between frames.
+//
+// The link drops a real share of its frames — the checksum rejects roughly half
+// of them on the bench wiring, and a run of consecutive rejects leaves the
+// screen with nothing new for a second or two, which reads as a clock that
+// stalls and then skips (1-2-3 ... 5). The controller remains the authority:
+// every accepted frame resets both the value and its timestamp, so this only
+// fills the gaps and can never drift more than the gap itself.
+//
+// Free-running is bounded by the link watchdog above: past 2.5 s of silence
+// gLinkUp goes false and the screen stops presenting the state as live, so this
+// cannot keep counting against a machine that has actually stopped.
+// [TH] วินาทีของฝั่งคอนโทรลเลอร์ นับต่อเองบนจอในช่วงระหว่างข้อความ
+//      สายลิงก์ทำข้อความหายจริงพอสมควร ค่าตรวจสอบปฏิเสธราวครึ่งหนึ่งบนสายที่ใช้ทดสอบ
+//      ถ้าถูกปฏิเสธติดกันหลายครั้ง จอจะไม่มีค่าใหม่ราวหนึ่งถึงสองวินาที
+//      ซึ่งเห็นเป็นนาฬิกาที่ค้างแล้วกระโดด (1-2-3 ... 5)
+//      ฝั่งคอนโทรลเลอร์ยังเป็นเจ้าของค่าจริง ทุกข้อความที่ผ่านการตรวจสอบจะรีเซ็ตทั้งค่าและเวลาที่รับ
+//      ตรงนี้แค่เติมช่วงที่ขาด จึงคลาดเคลื่อนได้ไม่เกินความยาวของช่วงที่ขาดนั้น
+//      การนับต่อเองถูกจำกัดด้วยตัวเฝ้าระวังลิงก์ด้านบน ถ้าเงียบเกิน 2.5 วินาที gLinkUp จะเป็นเท็จ
+//      จอจะเลิกแสดงว่าสถานะยังสด จึงนับต่อไปเรื่อยๆ กับเครื่องที่หยุดไปแล้วไม่ได้
+static uint32_t uiElapsedNow(uint32_t now) {
+  if (!uiRunning || !uiElapsedMoving || uiElapsedRxMs == 0) return uiElapsed;
+  return uiElapsed + (uint32_t)((int32_t)(now - uiElapsedRxMs) / 1000);
 }
 
 // The operator's -/+ taps on the main screen go straight to the controller, live
@@ -280,7 +378,24 @@ void setup() {
   //      สายไม่ดี ไฟตก หรือเฟิร์มแวร์ผิดพลาด ซึ่งแก้คนละทางกันหมด
   //      1 คือเปิดเครื่องปกติ 3 คือกดรีเซ็ต 4 คือ watchdog 5 คือโปรแกรมพัง 9 คือไฟตก
   Serial.printf("pt-leg-display boot (reset reason %d)\n", (int)esp_reset_reason());
-  Serial2.begin(115200, SERIAL_8N1, 22, 27);  // UART to controller (CYD free pins) — สาย UART ไปคอนโทรลเลอร์ (ขาว่างของ CYD)
+  // 19200, matching the controller. The link needs under 500 B/s, and a wider
+  // bit is sampled further from its edges — the cheapest noise margin there is
+  // on jumper wire. Both ends must match; flash them together.
+  // [TH] ใช้ 19200 ให้ตรงกับฝั่งคอนโทรลเลอร์ สายนี้ใช้ไม่ถึง 500 ไบต์ต่อวินาที
+  //      บิตที่กว้างขึ้นจะถูกอ่านที่จุดห่างจากขอบมากขึ้น เป็นการเพิ่มความทนต่อสัญญาณรบกวนที่ถูกที่สุดบนสายจัมเปอร์
+  //      ทั้งสองฝั่งต้องตั้งค่าเท่ากัน ต้องแฟลชพร้อมกัน
+  Serial2.begin(19200, SERIAL_8N1, 22, 27);  // UART to controller (CYD free pins) — สาย UART ไปคอนโทรลเลอร์ (ขาว่างของ CYD)
+  // Hold RX high while the controller is idle. Measured on this board: a
+  // floating GPIO 22 prefixed every incoming frame with 25-32 bytes of 0xFF,
+  // which failed the JSON parse and left this screen showing idle through a
+  // whole running session. link.cpp now trims the junk; this stops most of it
+  // being generated. An external 10k to 3V3 is the stronger fix.
+  // [TH] ดึงขารับให้เป็นลอจิกสูงตอนที่คอนโทรลเลอร์ไม่ได้ส่ง
+  //      วัดได้บนบอร์ดนี้: ขา 22 ที่ลอยทำให้ทุกข้อความมีไบต์ 0xFF นำหน้า 25-32 ตัว
+  //      ซึ่งแปลง JSON ไม่ผ่าน จอจึงค้างที่หน้าว่างตลอดรอบที่เครื่องทำงานอยู่
+  //      ตอนนี้ link.cpp ตัดขยะให้แล้ว ส่วนนี้ช่วยไม่ให้เกิดขยะตั้งแต่ต้น
+  //      ถ้ายังมีอยู่ ให้ใส่ตัวต้านทาน 10 กิโลโอห์มไป 3.3V จะแน่นอนกว่า
+  gpio_set_pull_mode(GPIO_NUM_22, GPIO_PULLUP_ONLY);
   uiBegin();
   // A missing or unreadable card is not an error worth stopping for: the roster
   // is empty, sessions ring-buffer, and the machine still runs.
@@ -314,10 +429,51 @@ void setup() {
   gLink.sendHello();  // ask controller for current settings + state
 }
 
+#if LOOP_DEBUG
+// Counters for the once-a-second summary. A "frame" here is any message the link
+// accepted, spotted by lastRxMs() moving — the display has no per-message hook,
+// and for this question the message type does not matter, only that bytes made
+// it through intact.
+// [TH] ตัวนับสำหรับสรุปทุกหนึ่งวินาที นับ "ข้อความ" จากการที่ค่าเวลารับล่าสุดขยับ
+//      เพราะฝั่งจอไม่มีจุดต่อรายข้อความ และคำถามนี้ไม่สนใจชนิดข้อความ
+//      สนใจแค่ว่ามีข้อมูลผ่านเข้ามาครบถ้วนหรือไม่
+static uint32_t dbgPrevRx = 0;       // last lastRxMs() seen — ค่าเวลารับล่าสุดที่เห็นรอบก่อน
+static uint32_t dbgLastFrameMs = 0;  // when the previous frame landed — เวลาที่ข้อความก่อนหน้ามาถึง
+static uint16_t dbgFrames = 0;       // frames this window — จำนวนข้อความในช่วงนี้
+static uint32_t dbgMaxGapMs = 0;     // longest quiet stretch — ช่วงเงียบที่ยาวที่สุด
+static uint32_t dbgMaxIterMs = 0;    // slowest iteration this window — รอบที่ช้าที่สุด
+static uint32_t dbgWindowMs = 0;     // start of this window — เวลาเริ่มช่วง
+#endif
+
 void loop() {
+#if LOOP_DEBUG
+  uint32_t dbgT0 = millis();
+  uint32_t dbgUiMs = 0, dbgPollMs = 0, dbgDrawMs = 0, dbgSdMs = 0;
+#endif
   uint32_t now = millis();
   uiLoop();
+#if LOOP_DEBUG
+  dbgUiMs = millis() - dbgT0;
+  uint32_t dbgTPoll = millis();
+#endif
   gLink.poll();
+#if LOOP_DEBUG
+  dbgPollMs = millis() - dbgTPoll;
+  // A frame is only counted once: lastRxMs() holds its arrival time, so a value
+  // that has not moved means nothing new was parsed this pass.
+  // [TH] นับข้อความละครั้งเดียว ค่าเวลารับล่าสุดคือเวลาที่ข้อความมาถึง
+  //      ถ้าค่ายังเท่าเดิมแปลว่ารอบนี้ไม่มีข้อความใหม่ที่อ่านได้
+  uint32_t dbgRx = gLink.lastRxMs();
+  if (dbgRx != dbgPrevRx) {
+    if (dbgLastFrameMs != 0) {
+      uint32_t gap = dbgRx - dbgLastFrameMs;
+      if (gap > dbgMaxGapMs) dbgMaxGapMs = gap;
+    }
+    dbgLastFrameMs = dbgRx;
+    dbgPrevRx = dbgRx;
+    dbgFrames++;
+  }
+#endif
 
   // The controller sends state at ~4 Hz. Nothing for 2.5 s means the link is
   // gone and the cached state is stale, so the UI must stop presenting it as
@@ -339,7 +495,13 @@ void loop() {
   static uint32_t lastUi = 0, lastPing = 0, lastHello = 0;
   if (now - lastUi >= 250) {  // [TH] รีเฟรชหน้าจอ ~4 ครั้ง/วินาที
     lastUi = now;
-    uiUpdateMain(uiRunning, uiPhase, uiElapsed, uiReps, uiTarget, uiWifi, uiServer, gLinkUp);
+#if LOOP_DEBUG
+    uint32_t dbgTDraw = millis();
+#endif
+    uiUpdateMain(uiRunning, uiPhase, uiElapsedNow(now), uiReps, uiTarget, uiWifi, uiServer, gLinkUp);
+#if LOOP_DEBUG
+    dbgDrawMs = millis() - dbgTDraw;
+#endif
   }
   if (now - lastPing >= 1000) {  // keep the controller's UART watchdog fed — ส่ง ping เลี้ยงตัวเฝ้าระวังของคอนโทรลเลอร์
     lastPing = now;
@@ -364,6 +526,9 @@ void loop() {
   static uint32_t lastSd = 0;
   if (now - lastSd > 5000) {
     lastSd = now;
+#if LOOP_DEBUG
+    uint32_t dbgTSd = millis();
+#endif
     // Unconditional, where this used to run only with rows waiting or no card
     // mounted. With a card in the slot and nothing to write, the whole block was
     // skipped, so a card swapped on an idle machine was never noticed: the
@@ -421,8 +586,56 @@ void loop() {
       gActiveName = "";
     }
     gCardWasPresent = cardNow;
+#if LOOP_DEBUG
+    dbgSdMs = millis() - dbgTSd;
+#endif
   }
   uitestPoll();  // no-op unless UI_TEST_HOOK — ไม่ทำอะไรเลยถ้าไม่ได้เปิดโหมดทดสอบ
+#if LOOP_DEBUG
+  // Printed before the delay, so the number is the work this pass did rather
+  // than the pacing that follows it.
+  // [TH] พิมพ์ก่อนหน่วงเวลา ตัวเลขจะได้เป็นเวลาที่ใช้ทำงานจริงของรอบนี้ ไม่รวมการหน่วง
+  uint32_t dbgIter = millis() - dbgT0;
+  if (dbgIter > dbgMaxIterMs) dbgMaxIterMs = dbgIter;
+  if (dbgIter >= LOOP_DEBUG_SLOW_MS)
+    Serial.printf("[loop %lu] SLOW iter=%lums ui=%lu poll=%lu draw=%lu sd=%lu\n",
+                  (unsigned long)millis(), (unsigned long)dbgIter, (unsigned long)dbgUiMs,
+                  (unsigned long)dbgPollMs, (unsigned long)dbgDrawMs, (unsigned long)dbgSdMs);
+  // The summary is what answers the question. frames≈4/s with a small gap means
+  // the link is healthy and the stutter is in the UI; frames far below 4 or a gap
+  // in the seconds means the data never arrived and the UI is only reporting it.
+  // [TH] บรรทัดสรุปคือคำตอบของคำถามนี้ ถ้ารับได้ราว 4 ครั้ง/วินาที และเว้นช่วงสั้น
+  //      แปลว่าลิงก์ปกติ อาการกระตุกอยู่ที่การแสดงผล
+  //      ถ้ารับได้น้อยกว่านั้นมาก หรือเว้นช่วงเป็นวินาที แปลว่าข้อมูลไม่มาถึง จอแค่รายงานตามที่ได้รับ
+  if (millis() - dbgWindowMs >= 1000) {
+    dbgWindowMs = millis();
+    Serial.printf(
+        "[loop %lu] frames=%u maxgap=%lums maxiter=%lums link=%d elapsed=%lus lines=%lu bad=%lu "
+        "unknown=%lu trimmed=%lu crcbad=%lu nocrc=%lu dupes=%lu retries=%lu txdrop=%lu\n",
+        (unsigned long)dbgWindowMs, (unsigned)dbgFrames, (unsigned long)dbgMaxGapMs,
+        (unsigned long)dbgMaxIterMs, gLinkUp ? 1 : 0, (unsigned long)uiElapsed,
+        (unsigned long)gLink.rxLines, (unsigned long)gLink.rxBad, (unsigned long)gLink.rxUnknown,
+        (unsigned long)gLink.rxTrimmed, (unsigned long)gLink.rxCrcBad,
+        (unsigned long)gLink.rxNoCrc, (unsigned long)gLink.rxDupes,
+        (unsigned long)gLink.txRetries, (unsigned long)gLink.txDropped);
+    // Printed as hex alongside the text: a line that looks plausible on screen
+    // can still carry a flipped bit, and only the byte values show it.
+    // [TH] พิมพ์ทั้งข้อความและค่าฐานสิบหก บรรทัดที่ดูเหมือนปกติอาจมีบิตเพี้ยนอยู่
+    //      ซึ่งเห็นได้จากค่าไบต์เท่านั้น
+    if (gLink.rxLastBad.length()) {
+      Serial.printf("[loop %lu] badline text=[%s]\n", (unsigned long)dbgWindowMs,
+                    gLink.rxLastBad.c_str());
+      Serial.printf("[loop %lu] badline hex=", (unsigned long)dbgWindowMs);
+      for (size_t i = 0; i < gLink.rxLastBad.length() && i < 48; i++)
+        Serial.printf("%02X ", (uint8_t)gLink.rxLastBad[i]);
+      Serial.println();
+      gLink.rxLastBad = "";
+    }
+    dbgFrames = 0;
+    dbgMaxGapMs = 0;
+    dbgMaxIterMs = 0;
+  }
+#endif
   delay(2);
 }
 
