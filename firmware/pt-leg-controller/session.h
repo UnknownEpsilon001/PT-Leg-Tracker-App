@@ -41,35 +41,60 @@ class SessionSM {
  public:
   CycleCfg cfg{7000, 7000, 10000, 10000, 8000, 10};
 
-  // Idle -> Confirm. Commits the machine to nothing: the actuator is untouched
-  // and both relays stay off. The pending target seeds from the stored default,
-  // which is the prescription; editing it on the confirm screen changes only
-  // this session.
-  // [TH] ว่าง -> รอยืนยัน ยังไม่ผูกมัดอะไรทั้งสิ้น ไม่แตะชุดขับเคลื่อนและรีเลย์ดับทั้งคู่
-  //      ค่าเป้าหมายที่รอยืนยันเริ่มจากค่าตั้งต้นที่บันทึกไว้ ซึ่งเป็นค่าที่แพทย์สั่ง
-  //      การแก้ที่หน้ายืนยันมีผลเฉพาะรอบนี้เท่านั้น
+  // Idle/Fault -> Confirm. Commits the machine to nothing: the actuator is
+  // untouched and both relays stay off, from either origin. Accepting Fault
+  // matters because start() also accepts Fault (and forceFault() can latch
+  // one at any time), so refusing it here would make START-in-Fault a silent
+  // no-op once panel buttons route through this call, quietly retiring an
+  // existing recovery route. Confirming from Fault still gets the mandatory
+  // lower-before-lift recovery at the real start -- see the legPositionUnknown
+  // line below for how that survives the Fault -> Confirm -> Lift detour.
+  // The pending target seeds from the stored default, which is the
+  // prescription; editing it on the confirm screen changes only this session.
+  // [TH] ว่าง/ผิดพลาด -> รอยืนยัน ยังไม่ผูกมัดอะไรทั้งสิ้น ไม่แตะชุดขับเคลื่อนและรีเลย์ดับทั้งคู่
+  //      ไม่ว่าจะมาจากสถานะไหน การยอมรับสถานะผิดพลาดสำคัญเพราะ start() ก็ยอมรับสถานะผิดพลาดเช่นกัน
+  //      (และ forceFault() ตั้งสถานะผิดพลาดได้ทุกเมื่อ) ถ้าปฏิเสธตรงนี้ ปุ่ม START ตอนอยู่ในสถานะผิดพลาด
+  //      จะกลายเป็นไม่ทำอะไรเลยแบบเงียบๆ ทันทีที่ปุ่มหน้าปัดเปลี่ยนมาผ่านฟังก์ชันนี้
+  //      ซึ่งเท่ากับเลิกใช้เส้นทางกู้สถานการณ์ที่มีอยู่เดิมไปโดยไม่ตั้งใจ การยืนยันจากสถานะผิดพลาด
+  //      ยังคงได้รับการลดขาก่อนเสมอตอนเริ่มจริง ดูบรรทัด legPositionUnknown ด้านล่างว่าทำไมเรื่องนี้
+  //      ถึงยังเป็นจริงแม้จะอ้อมผ่านสถานะรอยืนยันก่อนไปถึงสถานะยกขา ค่าเป้าหมายที่รอยืนยันเริ่มจากค่าตั้งต้น
+  //      ที่บันทึกไว้ ซึ่งเป็นค่าที่แพทย์สั่ง การแก้ที่หน้ายืนยันมีผลเฉพาะรอบนี้เท่านั้น
   void requestStart(uint32_t nowMs);
 
   // Mirrors what the operator is looking at on the display. Ignored outside
   // Confirm, so a late or stray message can never retarget a running session.
+  // Also extends the 30 s expiry, exactly like any other activity would --
+  // without it, stepping the value with repeated taps (10 -> 45 is 35 of
+  // them) burns down the same fixed window entry itself started, and the
+  // screen can vanish mid-edit even with someone actively using it. Takes
+  // nowMs for exactly that reason -- signature changed from Task 2's brief.
   // [TH] สะท้อนตัวเลขที่ผู้ใช้กำลังดูอยู่บนจอ จะถูกละเว้นถ้าไม่ได้อยู่สถานะรอยืนยัน
   //      ข้อความที่มาช้าหรือหลงมาจึงเปลี่ยนเป้าหมายของรอบที่กำลังทำงานอยู่ไม่ได้
-  void setPendingTarget(uint16_t reps);
+  //      ยังต่อเวลาหมดอายุ 30 วินาทีด้วยเหมือนกิจกรรมอื่นๆ ถ้าไม่ทำแบบนี้ การกดปรับค่าซ้ำๆ
+  //      (เช่นจาก 10 ไป 45 คือกด 35 ครั้ง) จะกินเวลาจากหน้าต่างเดิมตั้งแต่ตอนเข้าสถานะ
+  //      และหน้าจออาจหายไปกลางการแก้ค่าทั้งที่มีคนกำลังใช้งานอยู่จริง จึงต้องรับค่า nowMs ด้วยเหตุนี้
+  void setPendingTarget(uint32_t nowMs, uint16_t reps);
 
-  // Confirm -> Lift, running the pending target for this session only. The
-  // stored prescription (cfg.targetReps, as loaded from settings) is left
-  // untouched until this call, and is put back once the session ends — see the
-  // restore in pt-leg-controller.ino where the stopped edge is consumed.
+  // Confirm -> Lift, running the pending target for this session only.
+  // Writes sessionTargetReps, never cfg.targetReps -- the stored prescription
+  // is not merely "restored later", it is never touched by this call at all,
+  // so there is nothing to put back once the session ends. See
+  // sessionTargetReps and target() for the field this actually feeds.
   // [TH] รอยืนยัน -> ยกขึ้น ใช้ค่าเป้าหมายที่รอยืนยันเฉพาะรอบนี้เท่านั้น
-  //      ค่าที่แพทย์สั่ง (cfg.targetReps ที่โหลดจากค่าตั้งค่า) จะไม่ถูกแตะจนกว่าจะเรียกฟังก์ชันนี้
-  //      และจะถูกคืนกลับเมื่อรอบจบ ดูจุดคืนค่าใน pt-leg-controller.ino ตรงที่อ่านสัญญาณหยุด
+  //      เขียนลง sessionTargetReps ไม่แตะ cfg.targetReps เลย ค่าที่แพทย์สั่งไม่ได้แค่ "ถูกคืนค่าทีหลัง"
+  //      แต่ไม่ถูกแตะโดยฟังก์ชันนี้เลยตั้งแต่ต้น จึงไม่มีอะไรต้องคืนค่าเมื่อรอบจบ
+  //      ดู sessionTargetReps และ target() ว่าค่านี้ไปป้อนอะไรจริงๆ
   void confirmStart(uint32_t nowMs);
 
   // Confirm -> Idle, discarding the pending target. requestStart() and
-  // setPendingTarget() never committed anything, so there is nothing else to
-  // undo.
+  // setPendingTarget() never committed anything to cfg.targetReps or
+  // sessionTargetReps, so there is nothing else to undo -- including when
+  // Confirm was entered from Fault: legPositionUnknown, set by requestStart()
+  // in that case, is untouched here and stays armed for the next start.
   // [TH] รอยืนยัน -> ว่าง ทิ้งค่าเป้าหมายที่รอยืนยัน เพราะ requestStart() กับ setPendingTarget()
-  //      ไม่เคยผูกมัดอะไรไว้เลย จึงไม่มีอะไรอื่นต้องย้อนคืน
+  //      ไม่เคยผูกมัดอะไรไว้กับ cfg.targetReps หรือ sessionTargetReps เลย จึงไม่มีอะไรอื่นต้องย้อนคืน
+  //      รวมถึงตอนที่เข้าสถานะรอยืนยันมาจากสถานะผิดพลาดด้วย: legPositionUnknown ที่ requestStart()
+  //      ตั้งไว้ในกรณีนั้นจะไม่ถูกแตะตรงนี้ และยังคงพร้อมทำงานสำหรับการเริ่มครั้งถัดไป
   void cancelConfirm(uint32_t nowMs);
   uint16_t pendingTarget() const { return pendingTargetReps; }
   bool confirming() const { return ph == Phase::Confirm; }
@@ -128,13 +153,50 @@ class SessionSM {
   //      กับที่ forceFault มีไว้ป้องกันสำหรับการตัดอื่นทุกครั้ง
   void cancelQueuedStart() { startAfterRecovery = false; }
 
-  // Change the target mid-session as well as at rest, because both UIs can edit
-  // it while the machine runs. Lowering it below the reps already done ends the
-  // session at the end of the current Rest, which is where the check lives.
-  // [TH] เปลี่ยนเป้าหมายได้ทั้งตอนว่างและตอนกำลังทำงาน เพราะทั้งสองหน้าจอแก้ได้ระหว่างเครื่องเดิน
+  // Change the target mid-session as well as at rest, because both UIs (the
+  // CYD's live stepper and the app's /target route) can edit it while the
+  // machine runs, and both are meant to move the stored prescription too --
+  // that is what makes this a live, persistent edit rather than a
+  // confirm-screen one-off. Writes cfg.targetReps AND sessionTargetReps
+  // together so the edit actually reaches what tick() is counting toward, not
+  // just what a settings screen echoes back; leaving sessionTargetReps
+  // unwritten here would silently stop a live mid-session edit from ending
+  // the session any earlier, while still looking like it took effect
+  // everywhere else. confirmStart() deliberately does NOT go through this
+  // setter -- a confirm-screen edit is session-only and must not move the
+  // prescription, which is the whole point of the confirm screen.
+  // Lowering it below the reps already done ends the session at the end of
+  // the current Rest, which is where the check lives.
+  // [TH] เปลี่ยนเป้าหมายได้ทั้งตอนว่างและตอนกำลังทำงาน เพราะทั้งสองหน้าจอ (ตัวปรับค่าแบบสดบนจอ CYD
+  //      กับเส้นทาง /target ของแอป) แก้ได้ระหว่างเครื่องเดิน และทั้งสองตั้งใจให้ขยับค่าที่แพทย์สั่งด้วย
+  //      นั่นคือสิ่งที่ทำให้เป็นการแก้แบบสดที่คงอยู่ถาวร ไม่ใช่ค่าครั้งเดียวจากหน้ายืนยัน
+  //      เขียนทั้ง cfg.targetReps และ sessionTargetReps พร้อมกัน เพื่อให้การแก้นี้มีผลกับสิ่งที่ tick()
+  //      กำลังนับจริง ไม่ใช่แค่ค่าที่หน้าตั้งค่าสะท้อนกลับไป ถ้าไม่เขียน sessionTargetReps ด้วย
+  //      การแก้แบบสดกลางรอบจะไม่ทำให้รอบจบเร็วขึ้นจริง ทั้งที่ดูเหมือนมีผลทุกที่อื่น
+  //      confirmStart() จงใจไม่ผ่านฟังก์ชันนี้ เพราะการแก้ที่หน้ายืนยันมีผลเฉพาะรอบนี้เท่านั้น
+  //      ต้องไม่ไปขยับค่าที่แพทย์สั่ง ซึ่งเป็นจุดประสงค์หลักของหน้ายืนยัน
   //      ถ้าตั้งต่ำกว่าจำนวนครั้งที่ทำไปแล้ว รอบจะจบเมื่อสิ้นสุดสถานะพักครั้งปัจจุบัน ซึ่งเป็นจุดที่ตรวจค่านี้
-  void setTarget(uint16_t reps) { cfg.targetReps = reps; }
-  uint16_t target() const { return cfg.targetReps; }
+  void setTarget(uint16_t reps) {
+    cfg.targetReps = reps;
+    sessionTargetReps = reps;
+  }
+
+  // What a running (or just-faulted) session actually counts toward, which
+  // may be a confirm-screen one-off and so may differ from the stored
+  // prescription; the stored prescription itself the rest of the time (Idle,
+  // or Confirm before it is committed), since nothing has a target of its own
+  // yet. Feeds the "target" field of the heartbeat and the link state message
+  // -- see firmware/link-protocol.md's "a session ends by itself when reps
+  // reaches target", which is only true on the wire if this reports the same
+  // number tick() is actually comparing against.
+  // [TH] เป้าหมายที่รอบที่กำลังทำงาน (หรือเพิ่งผิดพลาด) กำลังนับจริง ซึ่งอาจเป็นค่าครั้งเดียวจากหน้ายืนยัน
+  //      จึงอาจไม่ตรงกับค่าที่แพทย์สั่ง ส่วนเวลาอื่น (ว่าง หรือรอยืนยันที่ยังไม่กดยืนยัน) จะเป็นค่าที่แพทย์สั่งเอง
+  //      เพราะยังไม่มีรอบที่มีเป้าหมายเป็นของตัวเอง ค่านี้ใช้ป้อนฟิลด์ "target" ในสัญญาณชีพและข้อความสถานะ
+  //      ดู firmware/link-protocol.md ที่ว่า "รอบจบเองเมื่อ reps ถึง target" ซึ่งจะเป็นจริงบนสายจริง
+  //      ก็ต่อเมื่อค่านี้รายงานตัวเลขเดียวกับที่ tick() กำลังเทียบอยู่จริงเท่านั้น
+  uint16_t target() const {
+    return (ph == Phase::Idle || ph == Phase::Confirm) ? cfg.targetReps : sessionTargetReps;
+  }
 
   void tick(uint32_t nowMs);
   // Confirm does not count as a session: the actuator is untouched and nothing
@@ -188,13 +250,28 @@ class SessionSM {
   uint32_t strokeCapMs = 0;
   uint16_t repCount = 0;
   // The target the confirm screen is showing and may still be edited. Seeded
-  // from cfg.targetReps by requestStart() and copied into cfg.targetReps by
-  // confirmStart() only once the operator actually confirms — see
+  // from cfg.targetReps by requestStart() and copied into sessionTargetReps
+  // by confirmStart() only once the operator actually confirms — see
   // setPendingTarget().
   // [TH] เป้าหมายที่หน้ายืนยันกำลังแสดงและยังแก้ไขได้ เริ่มจากค่า cfg.targetReps โดย requestStart()
-  //      และถูกคัดลอกไปยัง cfg.targetReps โดย confirmStart() ก็ต่อเมื่อผู้ใช้กดยืนยันจริงเท่านั้น
+  //      และถูกคัดลอกไปยัง sessionTargetReps โดย confirmStart() ก็ต่อเมื่อผู้ใช้กดยืนยันจริงเท่านั้น
   //      ดู setPendingTarget()
   uint16_t pendingTargetReps = 0;
+  // What the CURRENT (or most recently run/faulted) session actually counts
+  // toward — see target()'s comment for the full contract. Defaulted to 0,
+  // which is never observed: target() only reads this outside Idle/Confirm,
+  // and by the time the phase first leaves those two, either start() or
+  // confirmStart() has always just written a real value here first. Not the
+  // same field as cfg.targetReps: that one is permanently the stored
+  // prescription and this one may be a confirm-screen one-off that must not
+  // reach it — see confirmStart() and setTarget().
+  // [TH] เป้าหมายที่รอบปัจจุบัน (หรือรอบล่าสุดที่ทำงาน/ผิดพลาด) กำลังนับจริง ดูคอมเมนต์ของ target()
+  //      สำหรับสัญญาว่าค่านี้หมายถึงอะไรทั้งหมด ค่าเริ่มต้นเป็น 0 แต่ไม่มีทางถูกอ่านเจอ เพราะ target()
+  //      จะอ่านค่านี้เฉพาะนอกสถานะว่าง/รอยืนยันเท่านั้น และก่อนที่สถานะจะออกจากสองสถานะนั้นเป็นครั้งแรก
+  //      ต้องมี start() หรือ confirmStart() เขียนค่าจริงลงมาก่อนเสมอ ไม่ใช่ตัวแปรเดียวกับ cfg.targetReps
+  //      ตัวนั้นคือค่าที่แพทย์สั่งถาวร ส่วนตัวนี้อาจเป็นค่าครั้งเดียวจากหน้ายืนยันซึ่งต้องไม่ไปถึงตัวนั้น
+  //      ดู confirmStart() กับ setTarget()
+  uint16_t sessionTargetReps = 0;
   uint32_t finalElapsed = 0;
   uint16_t finalRepCount = 0;
   bool finalFault = false;
@@ -225,8 +302,18 @@ class SessionSM {
   // long as an arithmetic inference from the drive time says it needs to —
   // this machine has no position feedback at all — so its timer reaching zero
   // is not the same signal as the leg actually being at the bottom, and must
-  // not clear this flag. Never set back to true except by this class's own
-  // initializer, so it cannot re-arm itself into a lower-forever loop.
+  // not clear this flag. Set back to true only by this class's own
+  // initializer and by one deliberate exception -- requestStart() re-arms it
+  // when leaving a latched Fault through Confirm, because by the time
+  // confirmStart() later calls start(), ph reads Confirm rather than Fault,
+  // and start()'s recovery check would otherwise miss both conditions
+  // whenever an earlier session had already cleared this flag. See
+  // requestStart() for why that one-shot response to a specific event cannot
+  // become the re-arm-into-a-loop hazard this comment used to rule out
+  // unconditionally: nothing in the running/ticking path ever sets it, only
+  // the act of leaving Fault without having lowered does, and a cancelled or
+  // expired Confirm just leaves it true until a real recovery eventually runs
+  // — it never drives the actuator by itself.
   // [TH] เป็นจริงจนกว่าการลดขาแบบเต็มระยะจะทำงานจบครบอย่างน้อยหนึ่งครั้ง ตั้งไว้ตั้งแต่สร้างอ็อบเจกต์
   //      (และเป็นจริงข้ามการเปิดเครื่องใหม่เสมอ เพราะค่านี้ไม่ถูกบันทึกลง NVS)
   //      เพื่อให้การเริ่มครั้งแรกของการเปิดเครื่องทุกครั้งถูกปฏิบัติเหมือนการเริ่มจากสถานะผิดพลาด
@@ -236,8 +323,15 @@ class SessionSM {
   //      (คือไม่ใช่แบบย่นระยะที่ enter() คำนวณจากการหยุดกลางจังหวะยกหรือกลางจังหวะลง)
   //      การลดขาเพื่อหยุดแบบย่นระยะทำงานสั้นเท่าที่การอนุมานทางคณิตศาสตร์จากเวลาที่ขับเคลื่อนไปบอกว่าต้องใช้เท่านั้น
   //      เครื่องนี้ไม่มีสัญญาณตำแหน่งใดๆ เลย ตัวจับเวลาของมันหมดเวลาจึงไม่ใช่สัญญาณเดียวกับที่บอกว่า
-  //      ขาอยู่ล่างสุดจริง และต้องไม่ล้างสัญญาณนี้ ไม่มีที่ใดตั้งค่านี้กลับเป็นจริงอีกนอกจากค่าเริ่มต้นของคลาสนี้เอง
-  //      จึงไม่มีทางย้อนตัวเองกลับเข้าวงวนลดขาไม่รู้จบ
+  //      ขาอยู่ล่างสุดจริง และต้องไม่ล้างสัญญาณนี้ ตั้งค่ากลับเป็นจริงได้เฉพาะจากค่าเริ่มต้นของคลาสนี้เอง
+  //      กับข้อยกเว้นที่ตั้งใจไว้หนึ่งจุดเท่านั้น คือ requestStart() จะตั้งค่านี้กลับเป็นจริงเมื่อออกจากสถานะผิดพลาด
+  //      ที่ค้างอยู่ผ่านสถานะรอยืนยัน เพราะตอนที่ confirmStart() เรียก start() ในภายหลัง ph จะอ่านได้เป็นรอยืนยัน
+  //      ไม่ใช่ผิดพลาดแล้ว และการตรวจการกู้สถานการณ์ของ start() จะพลาดทั้งสองเงื่อนไข ถ้าไม่ทำเช่นนี้
+  //      ในกรณีที่รอบก่อนหน้าเคยล้างสัญญาณนี้ไปแล้ว ดู requestStart() ว่าทำไมการตอบสนองครั้งเดียวต่อเหตุการณ์
+  //      เฉพาะจุดหนึ่งนี้จึงไม่กลายเป็นอันตรายย้อนตัวเองกลับเข้าวงวนไม่รู้จบที่คอมเมนต์นี้เคยกันไว้แบบไม่มีเงื่อนไข
+  //      ไม่มีจุดใดในเส้นทางทำงาน/นับเวลาที่ตั้งค่านี้เลย มีเพียงการออกจากสถานะผิดพลาดโดยยังไม่ได้ลดขาเท่านั้น
+  //      ที่ตั้งค่านี้ และสถานะรอยืนยันที่ถูกยกเลิกหรือหมดเวลาจะปล่อยให้ค่านี้เป็นจริงค้างไว้
+  //      จนกว่าการกู้สถานการณ์จริงจะทำงานในที่สุด ซึ่งจะไม่สั่งชุดขับเคลื่อนด้วยตัวมันเองเลย
   //
   // One case here ends up optimistic rather than exact: a STOP taken at the very
   // end of a Lift computes a descent longer than lowerMs, caps to lowerMs, and

@@ -99,17 +99,38 @@ void SessionSM::finish(uint32_t nowMs, Phase to, bool fault) {
 }
 
 void SessionSM::requestStart(uint32_t nowMs) {
-  // [TH] ว่าง -> รอยืนยัน เท่านั้น เพราะสถานะอื่นทั้งหมดหมายความว่ามีบางอย่างเกิดขึ้นอยู่แล้ว
-  if (ph != Phase::Idle) return;
+  // Idle or Fault only — every other phase means something is already under
+  // way. See session.h for why Fault must not be refused here.
+  // [TH] ว่างหรือผิดพลาดเท่านั้น สถานะอื่นทั้งหมดหมายความว่ามีบางอย่างเกิดขึ้นอยู่แล้ว
+  //      ดู session.h ว่าทำไมต้องไม่ปฏิเสธสถานะผิดพลาดตรงนี้
+  if (ph != Phase::Idle && ph != Phase::Fault) return;
+  // Re-arm the recovery flag before ph stops saying Fault out loud: by the
+  // time confirmStart() calls start(), ph will read Confirm, so start()'s own
+  // "ph == Phase::Fault" check will already have failed. legPositionUnknown is
+  // the only thing left that can still force the lower-before-lift recovery at
+  // the real start — see its declaration in session.h for why this one-shot
+  // re-arm cannot become a loop hazard.
+  // [TH] ตั้งสัญญาณกู้สถานการณ์กลับเป็นจริงก่อนที่ ph จะเลิกบอกว่าเป็นสถานะผิดพลาด เพราะตอนที่
+  //      confirmStart() เรียก start() ในภายหลัง ph จะอ่านได้เป็นรอยืนยันแล้ว เงื่อนไข
+  //      "ph == Phase::Fault" ของ start() เองจะไม่เป็นจริงอีกต่อไป legPositionUnknown จึงเป็นสิ่งเดียว
+  //      ที่เหลืออยู่ซึ่งยังบังคับให้ลดขาก่อนยกได้ตอนเริ่มจริง ดูคำอธิบายที่จุดประกาศตัวแปรนี้ใน session.h
+  //      ว่าทำไมการตั้งกลับเป็นจริงครั้งเดียวนี้จึงไม่กลายเป็นอันตรายเข้าวงวนไม่รู้จบ
+  if (ph == Phase::Fault) legPositionUnknown = true;
   pendingTargetReps = cfg.targetReps;
   enter(Phase::Confirm, nowMs);
 }
 
-void SessionSM::setPendingTarget(uint16_t reps) {
+void SessionSM::setPendingTarget(uint32_t nowMs, uint16_t reps) {
   // [TH] จำกัดช่วงเหมือนทางเข้าอื่นทุกทาง ค่า 0 ผ่านได้ตามปกติ เพราะเป็นเป้าหมายที่ถูกต้อง
   //      (แปลว่า "ทำจนกว่าจะกด STOP") ไม่ใช่ค่าที่ต้องกันไว้
   if (ph != Phase::Confirm) return;
   pendingTargetReps = reps > 99 ? 99 : reps;
+  // Extends the 30 s window like any other activity would — see session.h —
+  // so stepping the value with repeated taps cannot burn down the same fixed
+  // window entry itself started.
+  // [TH] ต่อเวลาหมดอายุ 30 วินาทีด้วยเหมือนกิจกรรมอื่นๆ ดู session.h
+  //      การกดปรับค่าซ้ำๆ จึงไม่กินเวลาจากหน้าต่างเดิมตั้งแต่ตอนเข้าสถานะ
+  phaseStart = nowMs;
 }
 
 void SessionSM::confirmStart(uint32_t nowMs) {
@@ -129,16 +150,19 @@ void SessionSM::confirmStart(uint32_t nowMs) {
   //      ก็ไม่ได้อิงกับสถานะที่เพิ่งออกมา สนใจแค่ว่าทราบตำแหน่งขาจริงหรือไม่
   //      การลดขากู้สถานการณ์จึงยังทำงานตอนเริ่มจริงเหมือนเดิม ไม่ว่าจะมาจากรอยืนยันหรือไม่
   start(nowMs);
-  // Written after start(), not before: start() never reads cfg.targetReps at
-  // all (only tick()'s Rest case does, long after this call returns), and the
-  // stored prescription must stay untouched for as long as this call is still
-  // deciding whether to run. Put back once the session ends — see the restore
-  // in pt-leg-controller.ino where the stopped edge is consumed.
-  // [TH] เขียนหลัง start() ไม่ใช่ก่อน เพราะ start() ไม่อ่าน cfg.targetReps เลย
-  //      (มีแต่ tick() ตอนสถานะพักเท่านั้นที่อ่านค่านี้ ซึ่งอยู่หลังจากนี้ไปอีกไกล)
-  //      และค่าที่แพทย์สั่งต้องไม่ถูกแตะตราบเท่าที่ฟังก์ชันนี้ยังตัดสินใจไม่เสร็จว่าจะเริ่มจริงหรือไม่
-  //      จะถูกคืนกลับเมื่อรอบจบ ดูจุดคืนค่าใน pt-leg-controller.ino ตรงที่อ่านสัญญาณหยุด
-  cfg.targetReps = reps;
+  // Written after start(), not before: start() unconditionally seeds
+  // sessionTargetReps from cfg.targetReps as its own default (see start()) —
+  // needed because it is still also called directly, bypassing Confirm
+  // entirely (the panel button and the server "start" command do today) — and
+  // writing this here first would just have that default clobber it a few
+  // lines later. Never cfg.targetReps: see session.h for why the stored
+  // prescription must not move for a confirm-screen one-off.
+  // [TH] เขียนหลัง start() ไม่ใช่ก่อน เพราะ start() จะตั้งค่าเริ่มต้นของ sessionTargetReps จาก
+  //      cfg.targetReps เองโดยไม่มีเงื่อนไข (ดู start()) จำเป็นเพราะฟังก์ชันนั้นยังถูกเรียกตรงๆ ได้อยู่
+  //      โดยข้ามสถานะรอยืนยันไปเลย (ปุ่มหน้าปัดกับคำสั่ง start จากเซิร์ฟเวอร์ยังทำแบบนั้นอยู่ในตอนนี้)
+  //      ถ้าเขียนตรงนี้ก่อน ค่าเริ่มต้นนั้นจะมาทับค่านี้อีกทีในอีกไม่กี่บรรทัดถัดไป ไม่แตะ cfg.targetReps เลย
+  //      ดู session.h ว่าทำไมค่าที่แพทย์สั่งต้องไม่ขยับเพราะค่าครั้งเดียวจากหน้ายืนยัน
+  sessionTargetReps = reps;
 }
 
 void SessionSM::cancelConfirm(uint32_t nowMs) {
@@ -148,6 +172,19 @@ void SessionSM::cancelConfirm(uint32_t nowMs) {
 
 void SessionSM::start(uint32_t nowMs) {
   if (running()) return;  // ignore while a session is under way — ถ้ากำลังทำงานอยู่ให้ข้าม
+  // Default the session target to the stored prescription before either
+  // branch below transitions the phase. Covers this function's other callers
+  // directly — the panel button and the server "start" command still bypass
+  // Confirm entirely — and confirmStart() overwrites this right after calling
+  // in with the confirmed value, for the one call site where the two may
+  // differ. See sessionTargetReps and target() in session.h for the field
+  // this feeds.
+  // [TH] ตั้งค่าเริ่มต้นของเป้าหมายรอบนี้เป็นค่าที่แพทย์สั่ง ก่อนที่สาขาใดสาขาหนึ่งด้านล่างจะเปลี่ยนสถานะ
+  //      ครอบคลุมผู้เรียกฟังก์ชันนี้ทางอื่นด้วยโดยตรง ปุ่มหน้าปัดและคำสั่ง start จากเซิร์ฟเวอร์ยังข้าม
+  //      สถานะรอยืนยันไปเลยอยู่ในตอนนี้ ส่วน confirmStart() จะเขียนทับค่านี้อีกทีทันทีหลังเรียกเข้ามา
+  //      ด้วยค่าที่ยืนยันแล้ว สำหรับจุดเรียกจุดเดียวที่ทั้งสองค่าอาจต่างกัน
+  //      ดู sessionTargetReps กับ target() ใน session.h ว่าค่านี้ไปป้อนอะไร
+  sessionTargetReps = cfg.targetReps;
   // Out of a latched Fault, lower before lifting. The fault stopped the relays
   // wherever the leg happened to be, and this firmware has no way to find out
   // where that was. The lowering runs first and the start is queued behind it.
@@ -156,11 +193,16 @@ void SessionSM::start(uint32_t nowMs) {
   //      จึงให้การลดขาทำงานก่อน แล้วเข้าคิวเริ่มรอบไว้ข้างหลัง
   // legPositionUnknown covers the reboot case the Fault branch does not: a
   // power cut mid-Lift boots straight to Idle, not Fault, and the state
-  // machine has no memory of where the leg was left. See session.h for why
-  // this flag exists and when it clears.
+  // machine has no memory of where the leg was left. It is also, since
+  // requestStart() re-arms it, what makes this branch still trigger for a
+  // start reached through Confirm from a latched Fault — ph itself has
+  // already moved off Fault by the time control gets here. See session.h for
+  // why the flag exists, when it clears, and that one re-arm.
   // [TH] legPositionUnknown ครอบคลุมกรณีเปิดเครื่องใหม่ที่สาขาผิดพลาดครอบคลุมไม่ถึง
   //      ไฟตกกลางจังหวะยกขาจะบูตตรงไปสถานะว่าง ไม่ใช่ผิดพลาด และเครื่องสถานะไม่มีความจำว่าขาถูกทิ้งไว้ตรงไหน
-  //      ดู session.h ว่าทำไมตัวแปรนี้ถึงมีอยู่และล้างเมื่อไหร่
+  //      และเพราะ requestStart() ตั้งค่านี้กลับเป็นจริง มันจึงเป็นสิ่งที่ทำให้สาขานี้ยังทำงานได้เหมือนกัน
+  //      สำหรับการเริ่มที่มาถึงผ่านสถานะรอยืนยันจากสถานะผิดพลาดที่ค้างอยู่ ph เองได้ออกจากสถานะผิดพลาด
+  //      ไปแล้วตอนที่มาถึงจุดนี้ ดู session.h ว่าทำไมตัวแปรนี้ถึงมีอยู่ ล้างเมื่อไหร่ และเรื่องการตั้งกลับเป็นจริงนั้น
   if (ph == Phase::Fault || legPositionUnknown) {
     recovering = true;
     startAfterRecovery = true;
@@ -322,14 +364,20 @@ void SessionSM::tick(uint32_t nowMs) {
       repCount++;  // พักครบ -> นับ 1 ครั้ง
       // The target is checked here and nowhere else, because here is the one
       // point in the cycle where the leg is already down: the session can end on
-      // the spot with no safe-lower and no fault. A target of 0 means "until
-      // STOP", and a target already passed (someone lowered it mid-session) ends
-      // the session at the end of this rest for the same reason.
+      // the spot with no safe-lower and no fault. Against sessionTargetReps, not
+      // cfg.targetReps: this session may be running a confirm-screen one-off
+      // that must count against itself, not against the stored prescription —
+      // see sessionTargetReps in session.h. A target of 0 means "until STOP",
+      // and a target already passed (someone lowered it mid-session, through
+      // setTarget()) ends the session at the end of this rest for the same
+      // reason.
       // [TH] ตรวจเป้าหมายที่นี่ที่เดียว เพราะเป็นจุดเดียวในรอบที่ขาลงถึงพื้นอยู่แล้ว
-      //      รอบจึงจบได้ทันทีโดยไม่ต้องลดขาและไม่เป็นความผิดพลาด
-      //      ค่า 0 แปลว่าทำจนกว่าจะกด STOP ส่วนเป้าหมายที่เลยมาแล้ว (มีคนปรับลดกลางรอบ)
+      //      รอบจึงจบได้ทันทีโดยไม่ต้องลดขาและไม่เป็นความผิดพลาด เทียบกับ sessionTargetReps
+      //      ไม่ใช่ cfg.targetReps เพราะรอบนี้อาจกำลังใช้ค่าครั้งเดียวจากหน้ายืนยัน ซึ่งต้องนับกับตัวมันเอง
+      //      ไม่ใช่กับค่าที่แพทย์สั่งไว้ ดู sessionTargetReps ใน session.h
+      //      ค่า 0 แปลว่าทำจนกว่าจะกด STOP ส่วนเป้าหมายที่เลยมาแล้ว (มีคนปรับลดกลางรอบผ่าน setTarget())
       //      ก็จบรอบเมื่อสิ้นสุดการพักครั้งนี้ด้วยเหตุผลเดียวกัน
-      if (cfg.targetReps != 0 && repCount >= cfg.targetReps) {
+      if (sessionTargetReps != 0 && repCount >= sessionTargetReps) {
         finish(nowMs, Phase::Idle, false);
         return;
       }
