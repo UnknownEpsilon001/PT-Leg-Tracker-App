@@ -10,4 +10,4 @@
 //      pt-leg-controller/session.h บอร์ดนี้รับแค่หมายเลขสถานะผ่านลิงก์แล้วมาเทียบกับ enum นี้
 //      (ดู pt-leg-display.ino และ ui.cpp) ลำดับค่าต้องตรงกันทุกตัวอักษรระหว่างสองไฟล์นี้
 //      เพราะ "phase":int บนสายอ้างอิงลำดับนี้โดยตรง
-enum class Phase { Idle, Lift, Hold, Lower, Rest, SafeLower, Fault };
+enum class Phase { Idle, Lift, Hold, Lower, Rest, SafeLower, Fault, Confirm };

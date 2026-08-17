@@ -19,7 +19,7 @@
 //      เพราะเป็นที่เก็บเครื่องสถานะจริง การสลับลำดับเพื่อความเรียบร้อยจะทำให้จอแสดงผลแสดงชื่อ
 //      สถานะผิดโดยไม่มี error ตอนคอมไพล์ เพิ่มค่าใหม่ได้อย่างปลอดภัยเฉพาะท้าย enum เท่านั้น
 // [TH] สถานะของรอบ: ว่าง / ยกขึ้น / ค้าง / ลดลง / พัก / กำลังลงเพื่อหยุด / ผิดพลาด
-enum class Phase { Idle, Lift, Hold, Lower, Rest, SafeLower, Fault };
+enum class Phase { Idle, Lift, Hold, Lower, Rest, SafeLower, Fault, Confirm };
 
 struct CycleCfg {
   uint32_t liftMs;       // เวลาที่รีเลย์ยกขึ้นจ่ายไฟต่อหนึ่งจังหวะ

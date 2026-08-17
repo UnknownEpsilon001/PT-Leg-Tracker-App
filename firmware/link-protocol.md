@@ -55,7 +55,8 @@ ArduinoJson. Malformed lines are dropped. Lines over 512 chars reset the buffer.
 ## Notes
 
 - `phase` is the `Phase` enum ordinal: 0=Idle, 1=Lift, 2=Hold, 3=Lower, 4=Rest,
-  5=SafeLower, 6=Fault.
+  5=SafeLower, 6=Fault, 7=Confirm. Confirm means waiting for a human to confirm
+  the sets; relays off, nothing committed.
 - `done.epoch` is UTC seconds from the controller's DS3231, falling back to the
   SNTP-synced system clock when the RTC is absent or unset, and 0 when neither
   has a time. A datetime on the card is therefore not proof of battery-backed
