@@ -98,6 +98,54 @@ void SessionSM::finish(uint32_t nowMs, Phase to, bool fault) {
   enter(to, nowMs);
 }
 
+void SessionSM::requestStart(uint32_t nowMs) {
+  // [TH] ว่าง -> รอยืนยัน เท่านั้น เพราะสถานะอื่นทั้งหมดหมายความว่ามีบางอย่างเกิดขึ้นอยู่แล้ว
+  if (ph != Phase::Idle) return;
+  pendingTargetReps = cfg.targetReps;
+  enter(Phase::Confirm, nowMs);
+}
+
+void SessionSM::setPendingTarget(uint16_t reps) {
+  // [TH] จำกัดช่วงเหมือนทางเข้าอื่นทุกทาง ค่า 0 ผ่านได้ตามปกติ เพราะเป็นเป้าหมายที่ถูกต้อง
+  //      (แปลว่า "ทำจนกว่าจะกด STOP") ไม่ใช่ค่าที่ต้องกันไว้
+  if (ph != Phase::Confirm) return;
+  pendingTargetReps = reps > 99 ? 99 : reps;
+}
+
+void SessionSM::confirmStart(uint32_t nowMs) {
+  if (ph != Phase::Confirm) return;
+  uint16_t reps = pendingTargetReps;
+  // Called directly, not through a "ph = Phase::Idle" stand-in for the phase
+  // start() expects. running() now excludes Confirm (see session.h), so
+  // start()'s own "if (running()) return" guard already lets this call through
+  // exactly as it would from a real Idle, and the Fault/legPositionUnknown
+  // check right after it does not key off the phase being LEFT — only off
+  // whether the leg's position is actually known — so the fault-recovery
+  // lowering still runs at the real start, Confirm or no Confirm.
+  // [TH] เรียก start() ตรงๆ ไม่ได้ใช้วิธีตั้ง ph = Phase::Idle แทนสถานะที่ start() คาดไว้
+  //      เพราะ running() ตอนนี้ไม่นับสถานะรอยืนยันแล้ว (ดู session.h) เงื่อนไข
+  //      "if (running()) return" ใน start() เองจึงปล่อยให้เรียกจากตรงนี้ผ่านได้อยู่แล้ว
+  //      เหมือนเรียกจากสถานะว่างจริงๆ และเงื่อนไขผิดพลาด/ไม่ทราบตำแหน่งที่ตามมา
+  //      ก็ไม่ได้อิงกับสถานะที่เพิ่งออกมา สนใจแค่ว่าทราบตำแหน่งขาจริงหรือไม่
+  //      การลดขากู้สถานการณ์จึงยังทำงานตอนเริ่มจริงเหมือนเดิม ไม่ว่าจะมาจากรอยืนยันหรือไม่
+  start(nowMs);
+  // Written after start(), not before: start() never reads cfg.targetReps at
+  // all (only tick()'s Rest case does, long after this call returns), and the
+  // stored prescription must stay untouched for as long as this call is still
+  // deciding whether to run. Put back once the session ends — see the restore
+  // in pt-leg-controller.ino where the stopped edge is consumed.
+  // [TH] เขียนหลัง start() ไม่ใช่ก่อน เพราะ start() ไม่อ่าน cfg.targetReps เลย
+  //      (มีแต่ tick() ตอนสถานะพักเท่านั้นที่อ่านค่านี้ ซึ่งอยู่หลังจากนี้ไปอีกไกล)
+  //      และค่าที่แพทย์สั่งต้องไม่ถูกแตะตราบเท่าที่ฟังก์ชันนี้ยังตัดสินใจไม่เสร็จว่าจะเริ่มจริงหรือไม่
+  //      จะถูกคืนกลับเมื่อรอบจบ ดูจุดคืนค่าใน pt-leg-controller.ino ตรงที่อ่านสัญญาณหยุด
+  cfg.targetReps = reps;
+}
+
+void SessionSM::cancelConfirm(uint32_t nowMs) {
+  if (ph != Phase::Confirm) return;
+  enter(Phase::Idle, nowMs);
+}
+
 void SessionSM::start(uint32_t nowMs) {
   if (running()) return;  // ignore while a session is under way — ถ้ากำลังทำงานอยู่ให้ข้าม
   // Out of a latched Fault, lower before lifting. The fault stopped the relays
@@ -139,6 +187,21 @@ void SessionSM::start(uint32_t nowMs) {
 void SessionSM::requestStop(uint32_t nowMs) {
   // [TH] คำขอหยุด: ตอบสนองต่างกันตามสถานะปัจจุบัน เพื่อให้ขาลงถึงพื้นก่อนหยุดเสมอ
   switch (ph) {
+    case Phase::Confirm:
+      // A server-issued stop (the app's stop button, which reaches this
+      // through gSession.requestStop()) while the confirm screen is up. The
+      // panel STOP button is wired to cancelConfirm() separately; this is the
+      // path that button does not cover. requestStart()/setPendingTarget()
+      // never committed anything, so this cancels back to Idle exactly like
+      // cancelConfirm() does, instead of falling through to Idle's below and
+      // clearing a rep count that Confirm never touched.
+      // [TH] คำสั่งหยุดจากเซิร์ฟเวอร์ (ปุ่มหยุดบนแอป ซึ่งมาถึงจุดนี้ผ่าน gSession.requestStop())
+      //      ขณะหน้ายืนยันเปิดอยู่ ปุ่ม STOP บนแผงเดินสายไปยัง cancelConfirm() แยกต่างหาก
+      //      นี่คือเส้นทางที่ปุ่มนั้นไม่ครอบคลุม requestStart()/setPendingTarget() ไม่เคยผูกมัด
+      //      อะไรไว้เลย การกดนี้จึงยกเลิกกลับไปสถานะว่างเหมือนกับ cancelConfirm() ทุกประการ
+      //      แทนที่จะตกไปใช้สาขาสถานะว่างด้านล่างซึ่งจะไปล้างจำนวนครั้งที่รอยืนยันไม่เคยแตะ
+      enter(Phase::Idle, nowMs);
+      return;
     case Phase::Idle:
       // Nothing is moving and nothing is latched, so STOP is the "clear" button:
       // it zeroes the count the panel and the screen are showing. This is what
@@ -220,6 +283,18 @@ void SessionSM::forceFault(uint32_t nowMs) {
 void SessionSM::tick(uint32_t nowMs) {
   uint32_t dt = nowMs - phaseStart;  // เวลาที่อยู่ในสถานะปัจจุบัน
   switch (ph) {
+    case Phase::Confirm:
+      // Nobody answered within the timeout. Nothing was committed while
+      // waiting — requestStart() and setPendingTarget() only ever touch the
+      // pending target, never cfg.targetReps — so this returns to Idle and
+      // never starts on its own; a machine that begins moving with nobody
+      // having confirmed is the wrong default on a therapy device.
+      // [TH] ไม่มีใครตอบภายในเวลาที่กำหนด ระหว่างรอยังไม่มีอะไรถูกผูกมัด
+      //      (requestStart() กับ setPendingTarget() แตะแค่ค่าที่รอยืนยัน ไม่แตะ cfg.targetReps เลย)
+      //      จึงกลับไปสถานะว่าง ไม่เริ่มทำงานเอง เพราะเครื่องที่เริ่มเคลื่อนที่โดยไม่มีใครยืนยัน
+      //      คือค่าเริ่มต้นที่ผิดสำหรับเครื่องกายภาพบำบัด
+      if (dt >= CONFIRM_TIMEOUT_MS) enter(Phase::Idle, nowMs);
+      return;
     case Phase::Idle:
     case Phase::Fault:
       return;
@@ -307,6 +382,19 @@ void SessionSM::tick(uint32_t nowMs) {
 uint32_t SessionSM::elapsedSec(uint32_t nowMs) const {
   // [TH] เวลาที่ผ่านไปของรอบ (วินาที): ว่าง=0, ผิดพลาด=ค่าที่แช่ไว้ตอน fault, อื่นๆ=นับสด
   if (ph == Phase::Idle) return 0;
+  // Confirm has no session of its own either -- entering it commits nothing --
+  // so it must not fall through to the sessionStart math below. sessionStart
+  // still holds whatever the LAST session set it to, or its zero initializer on
+  // a machine that has never run one; running() is already false here, so
+  // without this check the heartbeat and the state message would pair an
+  // "idle" status with a nonzero (even uptime-sized) elapsed time for as long
+  // as the confirm screen is up.
+  // [TH] สถานะรอยืนยันก็ไม่มีรอบของตัวเองเหมือนกัน เพราะการเข้าสถานะนี้ไม่ได้ผูกมัดอะไรเลย
+  //      จึงต้องไม่ตกไปคำนวณจาก sessionStart ด้านล่าง ซึ่งยังเป็นค่าของรอบก่อนหน้า
+  //      (หรือค่าเริ่มต้นศูนย์ ถ้าเครื่องยังไม่เคยทำงานเลย) running() เป็นเท็จอยู่แล้วตรงนี้
+  //      ถ้าไม่ตรวจตรงนี้ สัญญาณชีพและข้อความสถานะจะรายงานว่า "ว่าง" คู่กับเวลาที่ผ่านไปไม่เป็นศูนย์
+  //      (อาจมากเท่าเวลาที่เครื่องเปิดมาเลยด้วยซ้ำ) ตลอดเวลาที่หน้ายืนยันเปิดอยู่
+  if (ph == Phase::Confirm) return 0;
   // A recovery lowering has no session of its own, so it has no elapsed time
   // either. Measuring from sessionStart would report the age of whatever ran
   // before it — after a power-cut reboot that is the uptime — and running() is

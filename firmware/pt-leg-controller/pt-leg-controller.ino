@@ -252,6 +252,7 @@ static const char* phaseName(Phase p) {
     case Phase::Rest: return "REST";
     case Phase::SafeLower: return "SAFE-LOWER";
     case Phase::Fault: return "FAULT";
+    case Phase::Confirm: return "CONFIRM";
   }
   return "?";
 }
@@ -619,6 +620,28 @@ void loop() {
     }
     LinkDone d{gSession.finalElapsedSec(), gSession.finalReps(), epoch, gSession.finalFaulted()};
     gLink.sendDone(d);
+    // The session just ended may have run a confirm-screen target, which lives in
+    // cfg.targetReps because that is what tick() counts against. Put the stored
+    // prescription back, or one patient's one-off becomes the next patient's
+    // default — the exact thing the confirmation screen exists to prevent. Runs
+    // for every stopped edge regardless of how the session ended (a clean finish,
+    // a mid-session STOP, or a fault): all three reach here through finish(),
+    // which is the only thing that raises this edge. A confirmation cancelled
+    // before it ever started (30 s expiry or a STOP taken in Confirm) needs no
+    // matching restore here — it never reaches finish() at all, and neither
+    // requestStart() nor setPendingTarget() ever touches cfg.targetReps, so
+    // there is nothing for a session that never ran to have disturbed.
+    // [TH] รอบที่เพิ่งจบอาจใช้ค่าเป้าหมายจากหน้ายืนยัน ซึ่งเก็บอยู่ใน cfg.targetReps
+    //      เพราะเป็นค่าที่ tick() ใช้นับ ต้องคืนค่าที่แพทย์สั่งกลับไป
+    //      ไม่งั้นค่าครั้งเดียวของคนไข้คนหนึ่งจะกลายเป็นค่าตั้งต้นของคนถัดไป
+    //      ซึ่งเป็นสิ่งที่หน้ายืนยันมีไว้เพื่อป้องกันโดยตรง ทำงานทุกครั้งที่มีสัญญาณหยุด
+    //      ไม่ว่ารอบจะจบแบบไหน (จบตามปกติ, ถูกกด STOP กลางรอบ, หรือผิดพลาด)
+    //      ทั้งสามเส้นทางมาถึงจุดนี้ผ่าน finish() ซึ่งเป็นจุดเดียวที่ยกสัญญาณนี้
+    //      ส่วนการยืนยันที่ถูกยกเลิกก่อนเริ่มจริง (หมดเวลา 30 วินาที หรือกด STOP ขณะรอยืนยัน)
+    //      ไม่ต้องมีการคืนค่าคู่กันตรงนี้ เพราะไม่เคยไปถึง finish() เลย
+    //      และทั้ง requestStart() กับ setPendingTarget() ก็ไม่เคยแตะ cfg.targetReps
+    //      จึงไม่มีอะไรให้คืนค่าสำหรับรอบที่ไม่เคยเริ่มทำงานจริง
+    gSession.setTarget(gSettings.targetReps);
   }
   // [TH] ส่งเหตุการณ์ "เพิ่งเริ่ม" (ตรวจจับขอบสัญญาณครั้งเดียว)
   if (gSession.takeStartedEdge()) netQueueEvent("started", gSession.elapsedSec(now), gSession.reps());

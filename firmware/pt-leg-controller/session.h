@@ -18,7 +18,7 @@
 //      (มีแค่ Phase) ที่ต้องมีลำดับตรงกันทุกตัวอักษรกับไฟล์นี้ ไฟล์นี้คือไฟล์ที่คนจะแก้จริง
 //      เพราะเป็นที่เก็บเครื่องสถานะจริง การสลับลำดับเพื่อความเรียบร้อยจะทำให้จอแสดงผลแสดงชื่อ
 //      สถานะผิดโดยไม่มี error ตอนคอมไพล์ เพิ่มค่าใหม่ได้อย่างปลอดภัยเฉพาะท้าย enum เท่านั้น
-// [TH] สถานะของรอบ: ว่าง / ยกขึ้น / ค้าง / ลดลง / พัก / กำลังลงเพื่อหยุด / ผิดพลาด
+// [TH] สถานะของรอบ: ว่าง / ยกขึ้น / ค้าง / ลดลง / พัก / กำลังลงเพื่อหยุด / ผิดพลาด / รอยืนยัน
 enum class Phase { Idle, Lift, Hold, Lower, Rest, SafeLower, Fault, Confirm };
 
 struct CycleCfg {
@@ -30,9 +30,49 @@ struct CycleCfg {
   uint16_t targetReps;   // stop after this many reps; 0 = until STOP — 0 = ไม่จำกัด
 };
 
+// How long a confirmation waits for a human before giving up. Nothing is
+// committed while it waits, so expiry is always safe — it returns to Idle
+// rather than starting.
+// [TH] เวลาที่หน้ายืนยันจะรอคนกดก่อนเลิกรอ ระหว่างรอยังไม่มีอะไรถูกยืนยัน
+//      การหมดเวลาจึงปลอดภัยเสมอ คือกลับไปสถานะว่าง ไม่ใช่เริ่มทำงาน
+static const uint32_t CONFIRM_TIMEOUT_MS = 30000;
+
 class SessionSM {
  public:
   CycleCfg cfg{7000, 7000, 10000, 10000, 8000, 10};
+
+  // Idle -> Confirm. Commits the machine to nothing: the actuator is untouched
+  // and both relays stay off. The pending target seeds from the stored default,
+  // which is the prescription; editing it on the confirm screen changes only
+  // this session.
+  // [TH] ว่าง -> รอยืนยัน ยังไม่ผูกมัดอะไรทั้งสิ้น ไม่แตะชุดขับเคลื่อนและรีเลย์ดับทั้งคู่
+  //      ค่าเป้าหมายที่รอยืนยันเริ่มจากค่าตั้งต้นที่บันทึกไว้ ซึ่งเป็นค่าที่แพทย์สั่ง
+  //      การแก้ที่หน้ายืนยันมีผลเฉพาะรอบนี้เท่านั้น
+  void requestStart(uint32_t nowMs);
+
+  // Mirrors what the operator is looking at on the display. Ignored outside
+  // Confirm, so a late or stray message can never retarget a running session.
+  // [TH] สะท้อนตัวเลขที่ผู้ใช้กำลังดูอยู่บนจอ จะถูกละเว้นถ้าไม่ได้อยู่สถานะรอยืนยัน
+  //      ข้อความที่มาช้าหรือหลงมาจึงเปลี่ยนเป้าหมายของรอบที่กำลังทำงานอยู่ไม่ได้
+  void setPendingTarget(uint16_t reps);
+
+  // Confirm -> Lift, running the pending target for this session only. The
+  // stored prescription (cfg.targetReps, as loaded from settings) is left
+  // untouched until this call, and is put back once the session ends — see the
+  // restore in pt-leg-controller.ino where the stopped edge is consumed.
+  // [TH] รอยืนยัน -> ยกขึ้น ใช้ค่าเป้าหมายที่รอยืนยันเฉพาะรอบนี้เท่านั้น
+  //      ค่าที่แพทย์สั่ง (cfg.targetReps ที่โหลดจากค่าตั้งค่า) จะไม่ถูกแตะจนกว่าจะเรียกฟังก์ชันนี้
+  //      และจะถูกคืนกลับเมื่อรอบจบ ดูจุดคืนค่าใน pt-leg-controller.ino ตรงที่อ่านสัญญาณหยุด
+  void confirmStart(uint32_t nowMs);
+
+  // Confirm -> Idle, discarding the pending target. requestStart() and
+  // setPendingTarget() never committed anything, so there is nothing else to
+  // undo.
+  // [TH] รอยืนยัน -> ว่าง ทิ้งค่าเป้าหมายที่รอยืนยัน เพราะ requestStart() กับ setPendingTarget()
+  //      ไม่เคยผูกมัดอะไรไว้เลย จึงไม่มีอะไรอื่นต้องย้อนคืน
+  void cancelConfirm(uint32_t nowMs);
+  uint16_t pendingTarget() const { return pendingTargetReps; }
+  bool confirming() const { return ph == Phase::Confirm; }
 
   // Idle/Fault -> Lift. From Fault the latch is cleared and the leg is lowered
   // first: with no limit switches there is no way to know where it is, and
@@ -97,7 +137,18 @@ class SessionSM {
   uint16_t target() const { return cfg.targetReps; }
 
   void tick(uint32_t nowMs);
-  bool running() const { return ph != Phase::Idle && ph != Phase::Fault; }
+  // Confirm does not count as a session: the actuator is untouched and nothing
+  // is committed until confirmStart(). This answer is load-bearing well beyond
+  // the lamps — it also gates the heartbeat interval, the mid-session settings
+  // deferral, and the display's gear button and logo screen, and every one of
+  // those wants "nothing is moving" for as long as the confirm screen is up.
+  // [TH] สถานะรอยืนยันไม่นับเป็นรอบทำงาน ไม่แตะชุดขับเคลื่อนและยังไม่มีอะไรถูกผูกมัด
+  //      จนกว่าจะเรียก confirmStart() คำตอบนี้ถูกใช้กว้างกว่าแค่ไฟสัญญาณมาก
+  //      ยังคุมช่วงเวลาสัญญาณชีพ การเลื่อนค่าตั้งค่าระหว่างรอบทำงาน และปุ่มเฟือง/หน้าโลโก้บนจอด้วย
+  //      ทุกจุดเหล่านั้นต้องการคำตอบว่า "ไม่มีอะไรเคลื่อนที่" ตลอดเวลาที่หน้ายืนยันเปิดอยู่
+  bool running() const {
+    return ph != Phase::Idle && ph != Phase::Fault && ph != Phase::Confirm;
+  }
   bool faulted() const { return ph == Phase::Fault; }
   Phase phase() const { return ph; }
   uint32_t elapsedSec(uint32_t nowMs) const;
@@ -136,6 +187,14 @@ class SessionSM {
   //      ถ้าใช้ค่า lowerMs เต็มทุกครั้ง ส่วนที่เหลือของการเคลื่อนที่คือการดันค้างชนกลไกด้านล่าง
   uint32_t strokeCapMs = 0;
   uint16_t repCount = 0;
+  // The target the confirm screen is showing and may still be edited. Seeded
+  // from cfg.targetReps by requestStart() and copied into cfg.targetReps by
+  // confirmStart() only once the operator actually confirms — see
+  // setPendingTarget().
+  // [TH] เป้าหมายที่หน้ายืนยันกำลังแสดงและยังแก้ไขได้ เริ่มจากค่า cfg.targetReps โดย requestStart()
+  //      และถูกคัดลอกไปยัง cfg.targetReps โดย confirmStart() ก็ต่อเมื่อผู้ใช้กดยืนยันจริงเท่านั้น
+  //      ดู setPendingTarget()
+  uint16_t pendingTargetReps = 0;
   uint32_t finalElapsed = 0;
   uint16_t finalRepCount = 0;
   bool finalFault = false;
