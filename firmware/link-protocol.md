@@ -35,6 +35,19 @@ ArduinoJson. Malformed lines are dropped. Lines over 512 chars reset the buffer.
   Applied immediately, including mid-session; the NVS write is deferred to the
   end of the session. Unlike `settings` it is never held, because that path
   commits NVS and restarts Wi-Fi.
+- `{"t":"sets","reps":n}` — pending rep target from the Confirm screen.
+  Effective only while the controller is in `Phase::Confirm` (silently ignored
+  otherwise, so a late or stray message can never retarget a running session);
+  applies to the pending session only and never writes the stored
+  prescription — confirming or cancelling leaves it exactly as it was. `reps`
+  is always present on a real send, since this message has no legacy sender
+  that might omit it. An absent field is therefore read as a malformed line
+  and decodes as plain `0` ("unlimited"), not `LINK_TARGET_ABSENT` — that
+  sentinel solves a different problem, see `settings` above.
+- `{"t":"confirm","ok":bool}` — from the Confirm screen: `ok:true` commits
+  the pending target and starts the session; `ok:false` cancels back to Idle.
+  Carries no `reps` — both boards already agree on the pending value by the
+  time either sends this, so nothing new needs to travel with the decision.
 - `{"t":"hello"}` — CYD boot; asks the controller for current settings + state.
 - `{"t":"ping"}` — 1 Hz keepalive that feeds the controller's UART watchdog.
 

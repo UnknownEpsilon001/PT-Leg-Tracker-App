@@ -74,6 +74,29 @@ void Link::dispatch(const String& line) {
   } else if (!strcmp(t, "target")) {
     if (onTarget) onTarget((uint16_t)(d["reps"] | 0));
     return;
+  } else if (!strcmp(t, "sets")) {
+    // sets always carries reps: it is a brand-new message type with no older
+    // sender that might omit it, and it only ever describes a pending value
+    // still on screen in Phase::Confirm, not yet committed anywhere. So an
+    // absent field can only mean a malformed line, and 0 ("unlimited") is a
+    // safe fallback here — unlike settings.target, where an absent field has
+    // to mean "keep the stored prescription" and silently defaulting to 0
+    // would turn a machine set to stop after N reps into one that doesn't.
+    // See LINK_TARGET_ABSENT above.
+    // [TH] sets มีฟิลด์ reps มาด้วยเสมอ เพราะเป็นข้อความชนิดใหม่ ไม่มีผู้ส่งรุ่นเก่าที่จะขาดฟิลด์นี้ได้
+    //      และใช้บอกแค่ค่าที่ยังรอยืนยันค้างอยู่บนจอในสถานะ Phase::Confirm เท่านั้น ยังไม่ถูกบันทึกที่ไหน
+    //      ฟิลด์นี้หายไปได้แค่กรณีข้อความเสียหาย การถอดรหัสเป็น 0 ("ไม่จำกัด") จึงปลอดภัย ต่างจาก
+    //      settings.target ที่ฟิลด์หายไปต้องหมายถึง "คงค่าที่บันทึกไว้เดิม" การถอดรหัสเป็น 0 เงียบๆ
+    //      จะเปลี่ยนเครื่องที่ตั้งให้หยุดหลังครบ N ครั้งให้กลายเป็นทำไม่จำกัดแบบเงียบๆ ดู LINK_TARGET_ABSENT ด้านบน
+    if (onSets) onSets((uint16_t)(d["reps"] | 0));
+    return;
+  } else if (!strcmp(t, "confirm")) {
+    // Absent/malformed "ok" defaults to false (cancel), never to a start —
+    // a corrupt frame must never be misread as consent to move the leg.
+    // [TH] ฟิลด์ "ok" ที่หายไปหรือข้อความเสียหายถือเป็น false (ยกเลิก) เสมอ ไม่ใช่เริ่มทำงาน
+    //      เพราะข้อความที่เสียหายต้องไม่ถูกตีความว่าเป็นการยินยอมให้ขาเริ่มเคลื่อนไหว
+    if (onConfirm) onConfirm(d["ok"] | false);
+    return;
   }
   // "ping": no handler; _lastRx already stamped in poll()
   // [TH] ชนิด "ping" ไม่มีตัวจัดการ เพราะ _lastRx ถูกจับเวลาไว้แล้วใน poll()
@@ -109,4 +132,10 @@ void Link::sendSettings(const LinkSettings& s) {
 }
 void Link::sendTarget(uint16_t reps) {
   JsonDocument d; d["t"] = "target"; d["reps"] = reps; emit(_io, d);
+}
+void Link::sendSets(uint16_t reps) {
+  JsonDocument d; d["t"] = "sets"; d["reps"] = reps; emit(_io, d);
+}
+void Link::sendConfirm(bool ok) {
+  JsonDocument d; d["t"] = "confirm"; d["ok"] = ok; emit(_io, d);
 }

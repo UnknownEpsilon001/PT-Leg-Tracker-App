@@ -56,6 +56,8 @@ class Link {
   void sendDone(const LinkDone& d);
   void sendPing();
   void sendTarget(uint16_t reps);
+  void sendSets(uint16_t reps);   // display -> controller, pending target
+  void sendConfirm(bool ok);      // display -> controller, commit or cancel
   uint32_t lastRxMs() const { return _lastRx; }
 
   // [TH] คอลแบ็กแยกตามฝั่ง: บางตัวใช้ฝั่งคอนโทรลเลอร์ บางตัวใช้ฝั่งจอ
@@ -71,6 +73,8 @@ class Link {
   //      เพราะเส้นทางนั้นบันทึก NVS และรีสตาร์ต WiFi จึงถูกเลื่อนไปจนกว่ารอบจะจบ
   //      แต่เป้าหมายจำนวนครั้งที่ผู้ใช้กำลังหมุนอยู่รอแบบนั้นไม่ได้
   void (*onTarget)(uint16_t) = nullptr;  // controller side
+  void (*onSets)(uint16_t) = nullptr;    // controller side
+  void (*onConfirm)(bool) = nullptr;     // controller side
 
  private:
   void dispatch(const String& line);
