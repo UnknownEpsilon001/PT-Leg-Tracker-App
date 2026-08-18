@@ -183,19 +183,33 @@ class SessionSM {
 
   // What a running (or just-faulted) session actually counts toward, which
   // may be a confirm-screen one-off and so may differ from the stored
-  // prescription; the stored prescription itself the rest of the time (Idle,
-  // or Confirm before it is committed), since nothing has a target of its own
-  // yet. Feeds the "target" field of the heartbeat and the link state message
-  // -- see firmware/link-protocol.md's "a session ends by itself when reps
-  // reaches target", which is only true on the wire if this reports the same
-  // number tick() is actually comparing against.
+  // prescription; the stored prescription itself at Idle, since nothing has a
+  // target of its own yet. Confirm is neither of those: it reports
+  // pendingTargetReps, the value the operator is actively editing on the
+  // confirm screen, NOT cfg.targetReps. The "sets" message that carries an
+  // edit down to this board is a bare emit() with no id, ack or CRC on this
+  // branch (see link.cpp) -- the display's only way to know an edit actually
+  // arrived is to watch this field echo the same number back over the state
+  // message, and to resend while it does not. Reporting cfg.targetReps here
+  // instead, the way Idle does, would make every confirm-screen edit look
+  // silently dropped forever, since it could never match. Feeds the "target"
+  // field of the heartbeat and the link state message -- see
+  // firmware/link-protocol.md's "a session ends by itself when reps reaches
+  // target", which is only true on the wire if this reports the same number
+  // tick() is actually comparing against, for the phases that run tick() at all.
   // [TH] เป้าหมายที่รอบที่กำลังทำงาน (หรือเพิ่งผิดพลาด) กำลังนับจริง ซึ่งอาจเป็นค่าครั้งเดียวจากหน้ายืนยัน
-  //      จึงอาจไม่ตรงกับค่าที่แพทย์สั่ง ส่วนเวลาอื่น (ว่าง หรือรอยืนยันที่ยังไม่กดยืนยัน) จะเป็นค่าที่แพทย์สั่งเอง
-  //      เพราะยังไม่มีรอบที่มีเป้าหมายเป็นของตัวเอง ค่านี้ใช้ป้อนฟิลด์ "target" ในสัญญาณชีพและข้อความสถานะ
+  //      จึงอาจไม่ตรงกับค่าที่แพทย์สั่ง ส่วนตอนว่างจะเป็นค่าที่แพทย์สั่งเอง เพราะยังไม่มีรอบที่มีเป้าหมายเป็นของตัวเอง
+  //      ส่วนสถานะรอยืนยันไม่ใช่ทั้งสองอย่างนั้น จะรายงาน pendingTargetReps ซึ่งเป็นค่าที่ผู้ใช้กำลังแก้อยู่บนหน้าจอ
+  //      ไม่ใช่ cfg.targetReps ข้อความ "sets" ที่ส่งค่าที่แก้ลงมาที่บอร์ดนี้เป็นแค่ emit() เปล่าๆ ไม่มี id
+  //      ไม่มี ack ไม่มี CRC บนสายนี้ (ดู link.cpp) ทางเดียวที่จอจะรู้ว่าค่าที่แก้ไปถึงจริงหรือไม่
+  //      คือดูฟิลด์นี้ว่าสะท้อนตัวเลขเดียวกันกลับมาทางข้อความสถานะหรือไม่ แล้วส่งซ้ำถ้ายังไม่ตรง
+  //      ถ้ารายงาน cfg.targetReps แทนเหมือนตอนว่าง การแก้ทุกครั้งบนหน้ายืนยันจะดูเหมือนหลุดหายตลอดไป
+  //      เพราะไม่มีทางตรงกันได้เลย ค่านี้ใช้ป้อนฟิลด์ "target" ในสัญญาณชีพและข้อความสถานะ
   //      ดู firmware/link-protocol.md ที่ว่า "รอบจบเองเมื่อ reps ถึง target" ซึ่งจะเป็นจริงบนสายจริง
-  //      ก็ต่อเมื่อค่านี้รายงานตัวเลขเดียวกับที่ tick() กำลังเทียบอยู่จริงเท่านั้น
+  //      ก็ต่อเมื่อค่านี้รายงานตัวเลขเดียวกับที่ tick() กำลังเทียบอยู่จริงเท่านั้น สำหรับสถานะที่ tick() ทำงานด้วย
   uint16_t target() const {
-    return (ph == Phase::Idle || ph == Phase::Confirm) ? cfg.targetReps : sessionTargetReps;
+    if (ph == Phase::Confirm) return pendingTargetReps;
+    return ph == Phase::Idle ? cfg.targetReps : sessionTargetReps;
   }
 
   void tick(uint32_t nowMs);

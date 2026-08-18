@@ -106,6 +106,17 @@ static bool gPendingSettings = false;
 static DeviceSettings gPending;
 static bool gTargetDirty = false;
 
+// Set when a confirmation opened from a latched Fault (requestStart() accepting
+// Fault, see session.h) is still owed the recovery lowering it was opened for --
+// i.e. Confirm was entered with faulted() true, and running() has not been true
+// since. Read and cleared only by the panel-lamp call in loop(); see there for
+// what it changes and why.
+// [TH] ตั้งเป็นจริงเมื่อการยืนยันที่เปิดมาจากสถานะผิดพลาดที่ค้างอยู่ (requestStart() ที่ยอมรับสถานะผิดพลาด
+//      ดู session.h) ยังค้างหนี้การลดขากู้สถานการณ์ที่มันถูกเปิดมาเพื่อสิ่งนั้นอยู่ คือเข้าสถานะรอยืนยันตอนที่
+//      faulted() เป็นจริง และยังไม่เคยเป็นจริง (running()) เลยตั้งแต่นั้น อ่านและล้างเฉพาะที่จุดเรียกไฟหน้าปัดใน
+//      loop() ดูที่นั่นว่าเปลี่ยนอะไรและทำไม
+static bool gFaultRecoveryPending = false;
+
 static void onLinkSettings(const LinkSettings& s) {
   DeviceSettings d;
   d.wifiSsid = s.ssid; d.wifiPass = s.pass; d.serverUrl = s.server;
@@ -242,6 +253,33 @@ static void onLinkTarget(uint16_t reps) {
   gTargetDirty = true;
 }
 
+// Pending target from the confirm screen. Session-scoped by construction:
+// SessionSM ignores it outside Confirm and never writes it to gSettings or
+// cfg.targetReps -- unlike onLinkTarget above, a confirm-screen edit must never
+// move the stored prescription. nowMs is real time, not 0: setPendingTarget()
+// also extends the 30 s confirm window on every edit (see session.h), so
+// stepping the value with repeated taps must not burn down the window it
+// started.
+// [TH] ค่าเป้าหมายที่รอยืนยันจากหน้าจอ ผูกกับรอบนี้โดยตัวมันเอง
+//      เครื่องสถานะจะละเว้นถ้าไม่ได้อยู่สถานะรอยืนยัน และไม่เขียนลง gSettings หรือ cfg.targetReps เลย
+//      ต่างจาก onLinkTarget ด้านบน การแก้ที่หน้ายืนยันต้องไม่ไปขยับค่าที่แพทย์สั่งเด็ดขาด ใช้เวลาจริง ไม่ใช่ 0
+//      เพราะ setPendingTarget() ยังต่อเวลาหมดอายุ 30 วินาทีของหน้ายืนยันด้วยทุกครั้งที่แก้ (ดู session.h)
+//      การกดปรับค่าซ้ำๆ จึงต้องไม่กินเวลาจากหน้าต่างเดิมตั้งแต่ตอนเข้าสถานะ
+static void onLinkSets(uint16_t reps) { gSession.setPendingTarget(millis(), reps); }
+
+// ok=true commits the pending target and starts the session; ok=false (also the
+// decode default for an absent or malformed field -- see link.cpp) cancels back
+// to Idle. Both are no-ops outside Confirm, so a stray or late confirm message
+// can never retarget or restart a session already under way.
+// [TH] ok=true ยืนยันค่าที่รอไว้แล้วเริ่มรอบ ok=false (ซึ่งเป็นค่าตั้งต้นตอนถอดรหัสฟิลด์ที่หายไปหรือผิดรูปด้วย
+//      ดู link.cpp) ยกเลิกกลับสถานะว่าง ทั้งสองกรณีไม่มีผลเลยถ้าไม่ได้อยู่สถานะรอยืนยัน
+//      ข้อความยืนยันที่หลงมาหรือมาช้าจึงไม่มีทางเปลี่ยนเป้าหมายหรือเริ่มรอบที่กำลังทำงานอยู่ได้
+static void onLinkConfirm(bool ok) {
+  uint32_t now = millis();
+  if (ok) gSession.confirmStart(now);
+  else gSession.cancelConfirm(now);
+}
+
 #if BENCH_DEBUG
 static const char* phaseName(Phase p) {
   switch (p) {
@@ -347,6 +385,8 @@ void setup() {
   gLink.onSettings = onLinkSettings;
   gLink.onHello = onLinkHello;
   gLink.onTarget = onLinkTarget;
+  gLink.onSets = onLinkSets;
+  gLink.onConfirm = onLinkConfirm;
   Serial.printf("pt-leg-controller %s ssid=%s server=%s code=%s cycle lift/hold/lower/rest=%u/%u/%u/%u target=%u\n",
                 FW_VERSION, gSettings.wifiSsid.c_str(), gSettings.serverUrl.c_str(),
                 gSettings.deviceCode.c_str(), gSettings.liftSec, gSettings.holdSec,
@@ -402,6 +442,22 @@ void loop() {
     else gSession.cancelQueuedStart();
   }
 
+  // Whether a display has been heard from recently enough to trust it is there
+  // to show a confirmation on. lastRx is captured once here and reused as-is by
+  // the UART-loss safe-stop further down, instead of each calling
+  // gLink.lastRxMs() separately -- gLink.poll() runs in between the two and
+  // would otherwise let the safe-stop see a fresher value than this dispatch
+  // just acted on, in the same iteration. A board that has never heard a line
+  // from a display (lastRx == 0) reads link-down too, matching the documented
+  // standalone bench setup.
+  // [TH] ว่ามีจอที่เพิ่งได้ยินเสียงเมื่อไม่นานพอจะเชื่อว่ายังอยู่แสดงหน้ายืนยันได้หรือไม่
+  //      จับค่า lastRx ครั้งเดียวตรงนี้แล้วใช้ค่าเดิมซ้ำที่ตัวสั่งหยุดปลอดภัยตอนลิงก์หลุดด้านล่าง
+  //      แทนที่จะเรียก gLink.lastRxMs() แยกอีกครั้ง เพราะ gLink.poll() ทำงานคั่นอยู่ระหว่างสองจุดนี้
+  //      ถ้าไม่ทำแบบนี้ตัวสั่งหยุดปลอดภัยจะเห็นค่าที่สดกว่าที่จุดจ่ายงานนี้เพิ่งใช้ไปในลูปรอบเดียวกัน
+  //      บอร์ดที่ไม่เคยได้ยินสายจากจอเลย (lastRx == 0) ก็อ่านว่าลิงก์หลุดเหมือนกัน ตรงกับชุดทดสอบบนโต๊ะแบบเดี่ยวที่บันทึกไว้
+  uint32_t lastRx = gLink.lastRxMs();
+  bool linkUp = lastRx != 0 && (int32_t)(now - lastRx) <= 2000;
+
   // panel buttons: START begins a session, STOP ends one — and when the machine is
   // already idle, STOP clears the rep count. Read both first: each accessor clears
   // its edge, so the debug build has to see the same values this loop acts on.
@@ -414,10 +470,55 @@ void loop() {
   // refused by anything.
   // [TH] ไม่ให้เริ่มรอบถ้าสาย START ดูเหมือนลัดวงจร เพราะจะทำให้เครื่องเริ่มใหม่ทุกครั้งที่รอบจบ
   //      โดยไม่มีใครอยู่ที่หน้าปัด ส่วนการสั่งหยุดไม่เคยถูกปฏิเสธด้วยอะไรทั้งสิ้น
+  //
+  // START from idle opens the confirmation instead of running, but only when a
+  // display is actually there to show it. With the link down there is nothing to
+  // confirm on, and a machine that cannot be started is worse than one that
+  // starts the way it always has. A second START press while the screen is
+  // already up commits through confirmStart() -- never falls through to a bare
+  // start(), which would run cfg.targetReps (the stored prescription) instead of
+  // whatever the operator just edited on screen. All three branches sit behind
+  // the same stuck-line guard as the old direct start() did: a START line
+  // reading pressed since power-up (or held far longer than a real press) must
+  // not be able to put the machine on the confirm screen either, where the next
+  // press would commit it.
+  // [TH] ปุ่มเริ่มจากสถานะว่างจะเปิดหน้ายืนยันแทนการเริ่มทำงาน แต่เฉพาะตอนที่มีจอเชื่อมอยู่จริง
+  //      ถ้าลิงก์หลุดก็ไม่มีที่ให้ยืนยัน และเครื่องที่เริ่มไม่ได้เลยแย่กว่าเครื่องที่เริ่มแบบเดิม
+  //      การกด START ครั้งที่สองระหว่างที่หน้ายืนยันเปิดอยู่จะยืนยันผ่าน confirmStart() เสมอ
+  //      ไม่มีทางหล่นไปเรียก start() เปล่าๆ ซึ่งจะใช้ cfg.targetReps ค่าที่แพทย์สั่ง แทนที่จะเป็นค่าที่ผู้ใช้เพิ่งแก้บนจอ
+  //      ทั้งสามสาขาอยู่หลังตัวป้องกันสายค้างเดียวกับที่ start() ทางตรงเคยใช้
+  //      สาย START ที่อ่านได้ว่ากดตั้งแต่เปิดเครื่อง (หรือค้างนานเกินกว่าการกดจริง) ต้องพาเครื่องไปหน้ายืนยันไม่ได้เช่นกัน
+  //      เพราะการกดครั้งถัดไปจะยืนยันมันทันที
   if (pressStart && buttonStartStuck())
     Serial.println("start refused: START reads pressed, check its wiring");
-  else if (pressStart) gSession.start(now);
-  if (pressStop) gSession.requestStop(now);
+  else if (pressStart && gSession.confirming()) gSession.confirmStart(now);
+  else if (pressStart && linkUp) {
+    // See gFaultRecoveryPending's declaration and the panel-lamp call below: a
+    // Confirm opened from Fault may be cancelled or expire without ever running
+    // the recovery it was opened for, and this is the one place that origin is
+    // still visible (faulted() is about to read false the instant
+    // requestStart() below moves ph off Fault).
+    // [TH] ดูจุดประกาศ gFaultRecoveryPending และจุดเรียกไฟหน้าปัดด้านล่าง สถานะรอยืนยันที่เปิดมาจากสถานะผิดพลาด
+    //      อาจถูกยกเลิกหรือหมดเวลาโดยไม่เคยลดขากู้สถานการณ์ตามที่เปิดมาเพื่อสิ่งนั้นเลย และนี่คือจุดเดียวที่ยังเห็น
+    //      ที่มานั้นได้ (faulted() กำลังจะอ่านได้เท็จทันทีที่ requestStart() ด้านล่างย้าย ph ออกจากสถานะผิดพลาด)
+    if (gSession.faulted()) {
+      gFaultRecoveryPending = true;
+      Serial.println("confirm: opened from FAULT, leg position stays unverified until this is confirmed");
+    }
+    gSession.requestStart(now);
+  } else if (pressStart) gSession.start(now);
+  // STOP while the confirm screen is up cancels it without touching the rep
+  // count Confirm never moved -- see requestStop()'s own Phase::Confirm case in
+  // session.cpp for the server-issued equivalent, and why letting this fall
+  // through to requestStop() on the now-Idle phase would clear repCount as a
+  // side effect of merely backing out of Confirm, which cancelling one was never
+  // meant to do.
+  // [TH] ปุ่ม STOP ระหว่างที่หน้ายืนยันเปิดอยู่ยกเลิกหน้านั้นโดยไม่แตะจำนวนครั้งที่หน้ายืนยันไม่เคยแตะอยู่แล้ว
+  //      ดู case Phase::Confirm ของ requestStop() เองใน session.cpp สำหรับคำสั่งหยุดจากเซิร์ฟเวอร์ที่ทำแบบเดียวกัน
+  //      และทำไมถ้าปล่อยให้ตกไปเรียก requestStop() ต่อตอนสถานะเพิ่งเปลี่ยนเป็นว่างจะไปล้างจำนวนครั้งไปด้วย
+  //      ทั้งที่การยกเลิกหน้ายืนยันไม่เคยตั้งใจให้ล้างค่าตั้งแต่แรก
+  if (pressStop && gSession.confirming()) gSession.cancelConfirm(now);
+  else if (pressStop) gSession.requestStop(now);
   applyActuator();
   actuatorTick(now);
   // Right after the relays, and before the network work: the lamp then agrees
@@ -435,7 +536,34 @@ void loop() {
   //      เป็นจริงตอนยกขึ้น/ค้าง/ลดลง/พัก และตอนลดขาเพื่อหยุด เป็นเท็จตอนว่างและตอนค้างสถานะผิดพลาด
   //      ส่วน faulted() ถูกส่งเข้าไปด้วยเพื่อให้สถานะผิดพลาดที่ค้างอยู่ติดไฟทั้งสองดวง
   //      แทนที่จะดูเหมือนสถานะว่างตามปกติ ซึ่งสำคัญบนเครื่องที่มีแค่หน้าปัดโดยไม่มีจอ CYD บอกว่าเป็นสถานะไหน
-  panelLampsSet(gSession.running(), gSession.faulted());
+  //
+  // A latched Fault is not the only time the leg's position is unverified. START
+  // pressed while faulted opens Confirm rather than recovering immediately (see
+  // requestStart() in session.h), and if that confirmation is cancelled or left
+  // to expire, ph reaches Idle having never run the recovery lowering it was
+  // opened for -- the button dispatch above set gFaultRecoveryPending for
+  // exactly that case. legPositionUnknown still forces the lowering at the next
+  // real start regardless, so nothing here is a movement hazard either way; this
+  // is only about what the two lamps claim in the meantime. Folded into the
+  // fault argument rather than spent on a fourth lamp pattern: this panel has
+  // exactly three reachable states (panel_lamps.h) and no blink, and "both lit"
+  // already means precisely this -- session.h's own words are "the leg may be
+  // raised" -- whether the phase saying so is literally Fault or an
+  // escaped-Confirm Idle that has not yet proven otherwise. Cleared the line
+  // above the moment running() is next observed true, which given
+  // legPositionUnknown can only be the owed recovery itself starting.
+  // [TH] ไม่ใช่แค่สถานะผิดพลาดที่ค้างอยู่เท่านั้นที่ทำให้ไม่ทราบตำแหน่งขาแน่ชัด ปุ่ม START ที่กดตอนอยู่ในสถานะผิดพลาด
+  //      จะเปิดหน้ายืนยันแทนการกู้สถานการณ์ทันที (ดู requestStart() ใน session.h) ถ้าการยืนยันนั้นถูกยกเลิก
+  //      หรือปล่อยให้หมดเวลา สถานะจะกลับไปว่างโดยไม่เคยลดขากู้สถานการณ์ตามที่เปิดมาเพื่อสิ่งนั้นเลย
+  //      จุดจ่ายงานปุ่มด้านบนตั้ง gFaultRecoveryPending ไว้สำหรับกรณีนั้นโดยเฉพาะ legPositionUnknown
+  //      ยังคงบังคับให้ลดขาก่อนตอนเริ่มจริงครั้งถัดไปอยู่ดี จึงไม่ใช่อันตรายด้านการเคลื่อนที่ไม่ว่าทางใด
+  //      เรื่องนี้เกี่ยวกับสิ่งที่ไฟทั้งสองดวงอ้างระหว่างนั้นเท่านั้น รวมเข้ากับเงื่อนไขผิดพลาดแทนการเสียไฟรูปแบบที่สี่
+  //      เพราะหน้าปัดนี้มีสถานะที่เป็นไปได้แค่สามแบบ (panel_lamps.h) และไม่กะพริบ และ "ติดทั้งคู่" ก็มีความหมาย
+  //      ตรงนี้อยู่แล้ว คำพูดของ session.h เองคือ "ขาอาจยังยกอยู่" ไม่ว่าสถานะที่บอกแบบนั้นจะเป็นสถานะผิดพลาดจริงๆ
+  //      หรือสถานะว่างที่หนีออกจากหน้ายืนยันมาโดยยังไม่ได้พิสูจน์ว่าไม่ใช่ ล้างค่าที่บรรทัดด้านบนทันทีที่ running()
+  //      เป็นจริงครั้งถัดไป ซึ่งเมื่อมี legPositionUnknown อยู่แล้วจะเป็นได้แค่การกู้สถานการณ์ที่ค้างอยู่นั้นเริ่มทำงานเท่านั้น
+  if (gSession.running()) gFaultRecoveryPending = false;
+  panelLampsSet(gSession.running(), gSession.faulted() || gFaultRecoveryPending);
   // The trip raised by actuatorTick's own software check is consumed at the top of
   // the NEXT iteration, alongside the hardware timer's. Both go through the one
   // place above, so a trip can never be charged to a session that started after
@@ -480,20 +608,26 @@ void loop() {
   //      คำสั่งเริ่มและคำสั่งหยุดจะตกอยู่ในลูปรอบเดียวกัน และจะไม่มีรอบใดเดินได้เลย
   //      ดูหัวข้อการใช้คอนโทรลเลอร์โดยไม่มีจอใน firmware/README.md
   //
-  // Signed, for the same reason the actuator cap is: `now` was captured at the
-  // top of this iteration, but gLink.poll() above stamps lastRx with a FRESH
-  // millis(), and netLoop() before it can block for the full 400 ms connect
-  // timeout against an unreachable server. A ping that lands inside that block is
-  // timestamped later than `now`, and unsigned that subtraction is ~4.29e9 — past
-  // 2000 — so a perfectly healthy link safe-stopped the session about a second
-  // after it started, over and over.
-  // [TH] ใช้การเทียบแบบมีเครื่องหมายด้วยเหตุผลเดียวกับเพดานเวลาของชุดขับเคลื่อน
-  //      ค่า now อ่านไว้ตั้งแต่ต้นรอบ แต่ gLink.poll() ด้านบนบันทึกเวลารับล่าสุดด้วย millis() ค่าใหม่
-  //      และ netLoop() ก่อนหน้านั้นค้างได้นานถึง 400 มิลลิวินาทีเมื่อติดต่อเซิร์ฟเวอร์ไม่ได้
-  //      ข้อความ ping ที่มาถึงระหว่างที่ค้างอยู่จะมีเวลาช้ากว่าค่า now
-  //      ถ้าลบแบบไม่มีเครื่องหมายจะได้ราวสี่พันล้าน ซึ่งเกิน 2000
-  //      สายที่ปกติดีจึงสั่งหยุดรอบการทำงานราวหนึ่งวินาทีหลังกดเริ่ม ซ้ำแล้วซ้ำอีก
-  uint32_t lastRx = gLink.lastRxMs();
+  // Signed, for the same reason the actuator cap is. lastRx here is the shared
+  // snapshot captured above, before this iteration's netLoop() and gLink.poll()
+  // ran -- so it cannot be stamped later than `now` the way re-reading
+  // gLink.lastRxMs() at this point on its own used to risk: netLoop() can block
+  // for the full 400 ms connect timeout against an unreachable server, and a
+  // ping landing inside that block would have been timestamped by THIS
+  // iteration's poll() with a value later than the `now` captured at the top of
+  // it. Kept signed anyway rather than dropped now that sharing the snapshot
+  // closes that path: a later change that moves either capture point should not
+  // silently reopen it, and unsigned wraparound on a genuine miss (~4.29e9,
+  // past 2000, a perfectly healthy link safe-stopping about a second after
+  // every start) is not a failure mode worth risking again for one cast.
+  // [TH] ใช้การเทียบแบบมีเครื่องหมายด้วยเหตุผลเดียวกับเพดานเวลาของชุดขับเคลื่อน lastRx ตรงนี้คือค่าที่ใช้ร่วมกัน
+  //      ซึ่งจับไว้ด้านบนก่อนที่ netLoop() และ gLink.poll() ของลูปรอบนี้จะทำงาน จึงไม่มีทางมีเวลาช้ากว่า now
+  //      แบบที่การอ่าน gLink.lastRxMs() ใหม่เดี่ยวๆ ตรงจุดนี้เคยเสี่ยง netLoop() ค้างได้นานถึง 400 มิลลิวินาที
+  //      เมื่อติดต่อเซิร์ฟเวอร์ไม่ได้ และข้อความ ping ที่มาถึงระหว่างนั้นจะถูก poll() ของลูปรอบนี้ประทับเวลาช้ากว่า
+  //      ค่า now ที่จับไว้ตั้งแต่ต้นลูป ยังคงใช้แบบมีเครื่องหมายไว้แม้จะปิดช่องนี้ไปแล้วด้วยการใช้ค่าร่วมกัน
+  //      เพื่อไม่ให้การเปลี่ยนแปลงในอนาคตที่ย้ายจุดจับค่าใดจุดหนึ่งกลับไปเปิดช่องนี้อีกโดยไม่มีใครรู้ตัว
+  //      และการวนซ้ำแบบไม่มีเครื่องหมายเมื่อพลาดจริง (ราวสี่พันล้าน เกิน 2000 สายที่ปกติดีจะสั่งหยุดรอบการทำงาน
+  //      ราวหนึ่งวินาทีหลังเริ่มทุกครั้ง) ก็ไม่ใช่รูปแบบความล้มเหลวที่ควรเสี่ยงแลกกับเครื่องหมายเพียงตัวเดียว
   if (gSession.running() && lastRx != 0 && (int32_t)(now - lastRx) > 2000)
     gSession.requestStop(now);
 
