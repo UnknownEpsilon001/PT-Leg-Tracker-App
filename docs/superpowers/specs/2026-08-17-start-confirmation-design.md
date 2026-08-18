@@ -128,7 +128,14 @@ Two new display → controller messages:
 `sets` mirrors the number the operator is currently looking at. It is valid only
 while the controller is in Confirm, applies to the pending session, and never
 touches `gSettings.targetReps`. `confirm` commits (`ok:false` is ยกเลิก).
-Ordinary `link.h` id/ack/CRC handling applies, unchanged.
+
+**Correction, 2026-08-17.** An earlier draft of this section said "ordinary
+`link.h` id/ack/CRC handling applies, unchanged". That was wrong. No id, ack,
+retransmit or CRC exists on this branch — every `Link::send*` is a bare
+`emit()`. That transport hardening lives on `feature/link-crc-ack`, which
+branches from the same commit and has not merged. These two messages are
+therefore fire-and-forget, exactly like the `target` message that preceded
+them. See the ack rule below.
 
 No new controller → display message: the display already receives `phase` and
 `target` in the state message, which is everything the confirm screen needs to
@@ -155,8 +162,29 @@ So the controller stays authoritative for what actually runs, and the display
 stays instant for what the operator sees. `confirm` carries no `reps`: by the
 time it is sent, both boards already agree.
 
-If a `sets` message is lost, the ack/retransmit in `link.h` covers it; if the
-link fails outright the confirmation expires to Idle and nothing runs.
+### The mirror carries its own ack
+
+A lost or corrupted `sets` frame would leave the controller holding a different
+number than the screen is showing, and a physical START press would then commit
+the controller's number — the silent wrong-programme failure this mirror exists
+to prevent. With no transport-level ack on this branch, and with the CRC
+branch's own notes reporting that a checksum rejects roughly half of all frames
+on this bench wiring (meaning this branch silently *accepts* those corrupted
+frames), that is not a rare case.
+
+So the mirror acks itself, at the application level:
+
+- `SessionSM::target()` returns the pending target while the phase is Confirm,
+  so the state message on the wire always carries what would actually run.
+- The display keeps sending `sets` while the confirm screen is up until the
+  echoed target matches what it is showing. It renders the local value
+  immediately — the screen must never feel dead — but a persistent mismatch is
+  shown as unconfirmed rather than silently accepted.
+
+If the link fails outright, the confirmation expires to Idle and nothing runs.
+
+Should `feature/link-crc-ack` merge later, this becomes harmless redundancy
+rather than something to unpick.
 
 ## CYD confirm screen
 
