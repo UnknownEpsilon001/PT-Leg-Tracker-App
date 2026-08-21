@@ -74,3 +74,13 @@ Task 4 implementer claims to verify (its report is gone; these are from its comp
   - session.h target() returns pendingTargetReps in Confirm
   - gFaultRecoveryPending (.ino-local) OR'd into the lamp fault argument so 'both lit' persists through a cancelled/expired Fault-Confirm
   - controller +512 B (more than Tasks 1-3 combined); display byte-identical; button-bench -DryRun 7/7 (that transcript does NOT exercise Confirm)
+
+## ANSWERED 2026-08-19 — feature/link-crc-ack WILL merge before ship
+
+Ruling J REVISED: keep the target() pending-echo (one line, and it is how the display shows what the machine will actually commit); DROP the timer-driven resend loop from Task 7 — dead complexity once retransmit exists beneath it, and the echo already makes a lost frame visible instead of silent. Cost if wrong: if this branch is bench-tested before the CRC branch lands, a dropped sets frame is visible as a mismatch rather than auto-corrected.
+
+MERGE REQUIREMENT (highest-value item in this file — do not lose):
+  sendSets and sendConfirm are bare emit() calls, matching every sender on this branch today. When feature/link-crc-ack merges, emit() gains id/ack/retransmit and every sibling sender gains loss protection. These two MUST be converted to that branch's tracked sender at merge time.
+  A textual merge will NOT flag this: the new senders and the hardened ones are the same shape, so the result compiles and runs while sets and confirm alone stay fire-and-forget. confirm is the message that starts the machine moving; sets is the number it moves toward.
+
+Task 7 carry updated: no resend timer. Render the local value immediately, show a persistent echo mismatch as unconfirmed.

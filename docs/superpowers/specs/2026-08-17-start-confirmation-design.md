@@ -172,19 +172,33 @@ branch's own notes reporting that a checksum rejects roughly half of all frames
 on this bench wiring (meaning this branch silently *accepts* those corrupted
 frames), that is not a rare case.
 
-So the mirror acks itself, at the application level:
+**Resolved 2026-08-19: `feature/link-crc-ack` will merge before ship.** So the
+transport does get id/ack/retransmit — just not on this branch, and not yet.
+Two consequences:
 
 - `SessionSM::target()` returns the pending target while the phase is Confirm,
-  so the state message on the wire always carries what would actually run.
-- The display keeps sending `sets` while the confirm screen is up until the
-  echoed target matches what it is showing. It renders the local value
-  immediately — the screen must never feel dead — but a persistent mismatch is
-  shown as unconfirmed rather than silently accepted.
+  so the state message always carries what would actually run. **Kept.** It is
+  one line, and it is how the display shows the number the machine will commit
+  rather than only the number it locally believes. The display renders its own
+  value immediately — the screen must never feel dead — and shows a mismatch
+  against the echo as unconfirmed.
+- A timer-driven resend loop on the display is **dropped**. It would be dead
+  complexity once retransmit exists underneath it, and the echo above already
+  makes a lost frame visible rather than silent.
 
 If the link fails outright, the confirmation expires to Idle and nothing runs.
 
-Should `feature/link-crc-ack` merge later, this becomes harmless redundancy
-rather than something to unpick.
+### Merge requirement — do not lose this
+
+`sendSets` and `sendConfirm` are written as bare `emit()` calls because that is
+what every sender on this branch does today. When `feature/link-crc-ack` merges,
+`emit()` gains id/ack/retransmit and every sibling sender gains loss protection.
+**These two must be converted to that branch's tracked sender at merge time.**
+
+A textual merge will not flag this: the two new senders and the hardened ones
+are the same shape, so the result compiles and runs while `sets` and `confirm`
+alone stay fire-and-forget. `confirm` is the message that starts the machine
+moving, and `sets` is the number it moves toward.
 
 ## CYD confirm screen
 
