@@ -697,17 +697,37 @@ void loop() {
     //      ซึ่งผู้ใช้พิมพ์เอง จึงบังคับช่วงค่าที่จุดที่ใช้งานจริง ไม่ใช่เชื่อค่าที่ส่งมา
     //      แบบเดียวกับที่ onLinkTarget ทำกับเส้นทาง UART
     if (wantTarget > 99) wantTarget = 99;
-    if (wantTarget >= 0 && (uint16_t)wantTarget != gSettings.targetReps) {
+    // A target arriving WITH a start is the app's confirmation sheet: this run
+    // only, applied after start() so it overrides the prescription start()
+    // seeded. A target arriving alone is the app's /target route — an explicit
+    // prescription change, which persists exactly as it did before.
+    // [TH] ค่าเป้าหมายที่มาพร้อมคำสั่งเริ่ม คือค่าที่ผู้ใช้ยืนยันในแอป ใช้เฉพาะรอบนี้
+    //      ใส่หลัง start() เพื่อทับค่าที่แพทย์สั่งซึ่ง start() ตั้งไว้
+    //      ส่วนค่าที่มาลำพัง คือการเปลี่ยนค่าที่แพทย์สั่งผ่านเส้นทาง /target จึงบันทึกเหมือนเดิม
+    if (wantTarget >= 0 && cmd != "start" && (uint16_t)wantTarget != gSettings.targetReps) {
       gSettings.targetReps = (uint16_t)wantTarget;
       gSession.setTarget((uint16_t)wantTarget);
       gTargetDirty = true;
       gLink.sendSettings(currentAsLink());  // keep the CYD's spinbox honest
                                             // [TH] ให้ช่องปรับค่าบนจอตรงกับของจริง
     }
-    if (cmd == "start" && buttonStartStuck())
+    if (cmd == "start" && buttonStartStuck()) {
       Serial.println("server start refused: START reads pressed, check its wiring");
-    else if (cmd == "start") gSession.start(now);
-    else if (cmd == "stop") gSession.requestStop(now);
+    } else if (cmd == "start") {
+      // A confirmation on screen is superseded, not raced: cancel it first so
+      // the pending edit is discarded deliberately and the display leaves
+      // Confirm, then start on the app's own terms. Without this the start
+      // runs while the CYD still shows a confirm screen for a session that is
+      // already moving.
+      // [TH] ถ้ามีหน้ายืนยันค้างอยู่ ให้ยกเลิกก่อน ไม่ใช่แย่งกัน เพื่อให้ค่าที่ค้างถูกทิ้งอย่างตั้งใจ
+      //      และจอออกจากสถานะรอยืนยัน แล้วค่อยเริ่มตามคำสั่งของแอป
+      //      ถ้าไม่ทำแบบนี้ เครื่องจะเริ่มเดินทั้งที่จอยังแสดงหน้ายืนยันของรอบที่กำลังทำงานอยู่แล้ว
+      if (gSession.confirming()) gSession.cancelConfirm(now);
+      gSession.start(now);
+      if (wantTarget >= 0) gSession.setSessionTarget((uint16_t)wantTarget);
+    } else if (cmd == "stop") {
+      gSession.requestStop(now);
+    }
   }
   // [TH] ส่งสัญญาณชีพถี่ขึ้นตอนทำงาน (ทุก 1 วิ) และห่างตอนว่าง (ทุก 5 วิ)
   uint32_t hbInterval = gSession.running() ? 1000 : 5000;

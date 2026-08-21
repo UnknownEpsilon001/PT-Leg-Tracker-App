@@ -181,6 +181,14 @@ class SessionSM {
     sessionTargetReps = reps;
   }
 
+  // A target for this session only, leaving the stored prescription alone —
+  // the app's confirmation sheet, the remote twin of what confirmStart() does
+  // for the CYD's confirm screen. Call it after start(), which seeds
+  // sessionTargetReps from the prescription.
+  // [TH] เป้าหมายเฉพาะรอบนี้ ไม่แตะค่าที่แพทย์สั่ง คือฝั่งแอปของสิ่งที่ confirmStart()
+  //      ทำให้หน้ายืนยันบนจอ ต้องเรียกหลัง start() เพราะ start() จะตั้งค่าเริ่มต้นจากค่าที่แพทย์สั่ง
+  void setSessionTarget(uint16_t reps) { sessionTargetReps = reps > 99 ? 99 : reps; }
+
   // What a running (or just-faulted) session actually counts toward, which
   // may be a confirm-screen one-off and so may differ from the stored
   // prescription; the stored prescription itself at Idle, since nothing has a
