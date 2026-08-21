@@ -446,28 +446,80 @@ git commit -m "feat(firmware): panel START opens the confirmation when a display
 - Consumes: `gSession.setTarget` (existing).
 - Produces: nothing for later tasks.
 
-- [ ] **Step 1: Split the two meanings of an incoming target**
+**Rewritten 2026-08-19.** Ruling F removed the `cfg.targetReps` overloading this
+task was originally written against, and Task 4's review found the server start
+path bypasses the confirmation. Both land in this same block, so both are here.
 
-The current block writes `gSettings.targetReps` and sets `gTargetDirty` for any target from the server. Change it so the persistence depends on whether a start rode along in the same poll response:
+- [ ] **Step 1: Add a session-only target setter**
+
+`setTarget()` now writes *both* `cfg.targetReps` (the prescription) and
+`sessionTargetReps` (what the running session counts toward), so it is the wrong
+tool for a one-off. Add to `session.h`, beside `setTarget()`:
+
+```c++
+  // A target for this session only, leaving the stored prescription alone —
+  // the app's confirmation sheet, the remote twin of what confirmStart() does
+  // for the CYD's confirm screen. Call it after start(), which seeds
+  // sessionTargetReps from the prescription.
+  // [TH] เป้าหมายเฉพาะรอบนี้ ไม่แตะค่าที่แพทย์สั่ง คือฝั่งแอปของสิ่งที่ confirmStart()
+  //      ทำให้หน้ายืนยันบนจอ ต้องเรียกหลัง start() เพราะ start() จะตั้งค่าเริ่มต้นจากค่าที่แพทย์สั่ง
+  void setSessionTarget(uint16_t reps) { sessionTargetReps = reps > 99 ? 99 : reps; }
+```
+
+- [ ] **Step 2: Split the two meanings of an incoming target**
 
 ```c++
     if (wantTarget > 99) wantTarget = 99;
-    if (wantTarget >= 0) {
-      // A target arriving WITH a start is the app's confirmation sheet: it
-      // applies to this run only. A target arriving alone is the app's /target
-      // route, which is an explicit prescription change and persists as before.
-      // [TH] ค่าเป้าหมายที่มาพร้อมคำสั่งเริ่ม คือค่าที่ผู้ใช้ยืนยันในแอป ใช้เฉพาะรอบนี้
-      //      ส่วนค่าที่มาลำพัง คือการเปลี่ยนค่าที่แพทย์สั่งผ่านเส้นทาง /target จึงบันทึกเหมือนเดิม
-      if (cmd == "start") {
-        gSession.setTarget((uint16_t)wantTarget);
-      } else if ((uint16_t)wantTarget != gSettings.targetReps) {
-        gSettings.targetReps = (uint16_t)wantTarget;
-        gSession.setTarget((uint16_t)wantTarget);
-        gTargetDirty = true;
-        gLink.sendSettings(currentAsLink());
-      }
+    // A target arriving WITH a start is the app's confirmation sheet: this run
+    // only, applied after start() so it overrides the prescription start()
+    // seeded. A target arriving alone is the app's /target route — an explicit
+    // prescription change, which persists exactly as it did before.
+    // [TH] ค่าเป้าหมายที่มาพร้อมคำสั่งเริ่ม คือค่าที่ผู้ใช้ยืนยันในแอป ใช้เฉพาะรอบนี้
+    //      ใส่หลัง start() เพื่อทับค่าที่แพทย์สั่งซึ่ง start() ตั้งไว้
+    //      ส่วนค่าที่มาลำพัง คือการเปลี่ยนค่าที่แพทย์สั่งผ่านเส้นทาง /target จึงบันทึกเหมือนเดิม
+    if (wantTarget >= 0 && cmd != "start" && (uint16_t)wantTarget != gSettings.targetReps) {
+      gSettings.targetReps = (uint16_t)wantTarget;
+      gSession.setTarget((uint16_t)wantTarget);
+      gTargetDirty = true;
+      gLink.sendSettings(currentAsLink());
     }
 ```
+
+- [ ] **Step 3: Stop the server start from bypassing the confirmation**
+
+Task 4's review found this, and no other task covers it. `start()`'s only guard
+is `if (running()) return;`, and `running()` excludes `Confirm` — so an app start
+arriving on the 1 s poll while the confirm screen is up runs immediately and
+silently discards the operator's pending edit.
+
+The spec's decision table is deliberate that an app start does **not** need CYD
+confirmation — the app asks its own question. But that is about a start from
+*Idle*. Arriving mid-confirmation, the remote intent supersedes what is on
+screen, and it must do so explicitly rather than by racing it:
+
+```c++
+    if (cmd == "start" && buttonStartStuck()) {
+      Serial.println("server start refused: START reads pressed, check its wiring");
+    } else if (cmd == "start") {
+      // A confirmation on screen is superseded, not raced: cancel it first so
+      // the pending edit is discarded deliberately and the display leaves
+      // Confirm, then start on the app's own terms. Without this the start
+      // runs while the CYD still shows a confirm screen for a session that is
+      // already moving.
+      // [TH] ถ้ามีหน้ายืนยันค้างอยู่ ให้ยกเลิกก่อน ไม่ใช่แย่งกัน เพื่อให้ค่าที่ค้างถูกทิ้งอย่างตั้งใจ
+      //      และจอออกจากสถานะรอยืนยัน แล้วค่อยเริ่มตามคำสั่งของแอป
+      //      ถ้าไม่ทำแบบนี้ เครื่องจะเริ่มเดินทั้งที่จอยังแสดงหน้ายืนยันของรอบที่กำลังทำงานอยู่แล้ว
+      if (gSession.confirming()) gSession.cancelConfirm(now);
+      gSession.start(now);
+      if (wantTarget >= 0) gSession.setSessionTarget((uint16_t)wantTarget);
+    } else if (cmd == "stop") {
+      gSession.requestStop(now);
+    }
+```
+
+Note the ordering: `setSessionTarget()` must come **after** `start()`, because
+`start()` seeds `sessionTargetReps` from the prescription and would otherwise
+overwrite the app's number.
 
 - [ ] **Step 2: Compile**
 
