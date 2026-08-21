@@ -84,3 +84,17 @@ MERGE REQUIREMENT (highest-value item in this file — do not lose):
   A textual merge will NOT flag this: the new senders and the hardened ones are the same shape, so the result compiles and runs while sets and confirm alone stay fire-and-forget. confirm is the message that starts the machine moving; sets is the number it moves toward.
 
 Task 7 carry updated: no resend timer. Render the local value immediately, show a persistent echo mismatch as unconfirmed.
+
+## PAUSED 2026-08-19 (third pause) — resume here
+
+Tree clean at 540aa4a. No agent running. Task 4's review has now been dispatched and killed TWICE without producing a verdict — both times it was stopped just as it began the gLink.poll() ordering check. Task 4 (dc084f9) remains IMPLEMENTED BUT UNREVIEWED.
+
+RESUME, exactly:
+  1. If the worktree is gone: git worktree add .claude/worktrees/start-confirmation feature/start-confirmation, then restore the ledger with
+     cp docs/superpowers/plans/2026-08-17-start-confirmation-decisions.md .superpowers/sdd/2026-08-17-start-confirmation/progress.md
+  2. task-brief <plan> 4 ; review-package <plan> 5e12487 dc084f9
+  3. Dispatch the task reviewer (opus). Its FIRST check is the gLink.poll() ordering lead below. Task 4's implementer report is gone — pass its claims inline from the list above.
+  4. Then Tasks 5-12. Task 5 needs rewording first: Ruling F removed the cfg.targetReps overloading it was written against.
+
+UNRESOLVED PRIORITY LEAD (two reviewers were killed before reporting on it):
+  gLink.poll() is at line 592; the new linkUp snapshot is at 458. If the snapshot precedes the poll that refreshes lastRx, linkUp is evaluated one loop iteration stale. On the first iteration after a link comes up, START would take the link-down branch and start immediately instead of opening the confirmation — 'sometimes skips the confirm screen', visible only on hardware. button-bench -DryRun cannot catch it: its canned transcript never exercises Confirm.
