@@ -704,7 +704,36 @@ void loop() {
     // [TH] ค่าเป้าหมายที่มาพร้อมคำสั่งเริ่ม คือค่าที่ผู้ใช้ยืนยันในแอป ใช้เฉพาะรอบนี้
     //      ใส่หลัง start() เพื่อทับค่าที่แพทย์สั่งซึ่ง start() ตั้งไว้
     //      ส่วนค่าที่มาลำพัง คือการเปลี่ยนค่าที่แพทย์สั่งผ่านเส้นทาง /target จึงบันทึกเหมือนเดิม
-    if (wantTarget >= 0 && cmd != "start" && (uint16_t)wantTarget != gSettings.targetReps) {
+    //
+    // cmd != "start" alone is only a valid signal on the ONE poll a start
+    // actually carries a target — the server re-serves that same number on
+    // every later poll (queue_start/fetch_desired_target in
+    // server/app/state.py) until a heartbeat echoes it or COMMAND_TTL_SEC
+    // passes, by which point cmd has already gone back to "". Trusting cmd
+    // alone lets that repeat persist the session-only confirmation-sheet
+    // number into cfg.targetReps/gSettings.targetReps — exactly the
+    // prescription corruption this task exists to prevent — and it still
+    // happens when buttonStartStuck() refuses the start outright, since the
+    // machine then never runs to produce a heartbeat echo that would clear
+    // it. Latching the value a start carried and excluding it while the
+    // server could still be repeating it closes that without touching the
+    // /target path for any value the app did not just start with.
+    // [TH] cmd != "start" เพียงอย่างเดียวใช้แยกได้แค่โพลเดียวที่คำสั่งเริ่มแนบเป้าหมายมาจริง
+    //      เซิร์ฟเวอร์จะส่งเลขเดิมซ้ำทุกโพลถัดไป (queue_start/fetch_desired_target ใน
+    //      server/app/state.py) จนกว่าสัญญาณชีพจะยืนยันกลับหรือหมดอายุตาม COMMAND_TTL_SEC
+    //      ซึ่งตอนนั้น cmd กลับเป็นค่าว่างไปแล้ว ถ้าเชื่อ cmd อย่างเดียว ค่าที่ส่งซ้ำนั้นจะถูกบันทึกลง
+    //      cfg.targetReps/gSettings.targetReps กลายเป็นค่าที่แพทย์สั่งไปเงียบๆ ทั้งที่ควรมีผลแค่รอบนี้
+    //      ซึ่งขัดกับจุดประสงค์ของงานนี้โดยตรง และยังเกิดได้แม้ buttonStartStuck() ปฏิเสธคำสั่งเริ่มไปแล้ว
+    //      เพราะเครื่องไม่ขยับไปส่งสัญญาณชีพยืนยันกลับที่จะล้างค่านี้เลย การจดจำค่าที่มาพร้อมคำสั่งเริ่มไว้
+    //      แล้วกันออกตราบเท่าที่เซิร์ฟเวอร์อาจยังส่งซ้ำอยู่ จึงปิดช่องนี้ได้โดยไม่กระทบเส้นทาง /target
+    //      สำหรับค่าอื่นใดที่ไม่ได้เพิ่งมากับคำสั่งเริ่ม
+    static int16_t startCarried = -1;  // value a start brought in, still unacked
+    static uint32_t startCarriedAt = 0;
+    if (wantTarget < 0) startCarried = -1;  // server stopped serving it
+    if (cmd == "start" && wantTarget >= 0) { startCarried = wantTarget; startCarriedAt = now; }
+    bool echoOfStart = startCarried >= 0 && wantTarget == startCarried &&
+                       (uint32_t)(now - startCarriedAt) <= 31000;  // COMMAND_TTL_SEC + margin
+    if (wantTarget >= 0 && cmd != "start" && !echoOfStart && (uint16_t)wantTarget != gSettings.targetReps) {
       gSettings.targetReps = (uint16_t)wantTarget;
       gSession.setTarget((uint16_t)wantTarget);
       gTargetDirty = true;
@@ -723,8 +752,21 @@ void loop() {
       //      และจอออกจากสถานะรอยืนยัน แล้วค่อยเริ่มตามคำสั่งของแอป
       //      ถ้าไม่ทำแบบนี้ เครื่องจะเริ่มเดินทั้งที่จอยังแสดงหน้ายืนยันของรอบที่กำลังทำงานอยู่แล้ว
       if (gSession.confirming()) gSession.cancelConfirm(now);
+      // start() itself no-ops when a session is already under way (its own
+      // "if (running()) return;"), e.g. a redundant start arriving after an
+      // earlier one already took effect. Captured before calling it, since
+      // running() reads true after a successful start too and can no longer
+      // tell the two cases apart — mirroring the same guard here stops a
+      // start that changed nothing from still retargeting a session that was
+      // already running when it arrived.
+      // [TH] start() เองไม่ทำอะไรถ้ามีรอบทำงานอยู่แล้ว (จาก "if (running()) return;" ของตัวมันเอง)
+      //      เช่นคำสั่งเริ่มที่ซ้ำเข้ามาหลังจากคำสั่งก่อนหน้ามีผลไปแล้ว ต้องอ่านค่าไว้ก่อนเรียก start()
+      //      เพราะหลัง start() สำเร็จ running() ก็เป็นจริงเหมือนกัน จึงแยกสองกรณีนี้ไม่ออกอีกต่อไป
+      //      ตรวจเงื่อนไขเดียวกันซ้ำตรงนี้ เพื่อไม่ให้คำสั่งเริ่มที่ไม่ได้ทำอะไรเลยไปเปลี่ยนเป้าหมาย
+      //      ของรอบที่กำลังทำงานอยู่ก่อนแล้ว
+      bool startEligible = !gSession.running();
       gSession.start(now);
-      if (wantTarget >= 0) gSession.setSessionTarget((uint16_t)wantTarget);
+      if (startEligible && wantTarget >= 0) gSession.setSessionTarget((uint16_t)wantTarget);
     } else if (cmd == "stop") {
       gSession.requestStop(now);
     }
