@@ -637,16 +637,6 @@ void loop() {
     int16_t wantTarget = -1;
     NetTimings wantTimings{0, 0, 0, 0, 0};
     String cmd = netPollCommand(&wantTarget, &wantTimings);
-    // Captured right here, this poll's own outcome — netServerUp() reflects
-    // whichever HTTP call last touched it, so reading it any later risks a
-    // future call sneaking in between and answering for the wrong poll. Used
-    // below to tell "the server has nothing more to say" from "we didn't
-    // hear back", which read the same on wantTarget alone.
-    // [TH] จับค่าตรงนี้ทันที เป็นผลของโพลนี้เอง เพราะ netServerUp() สะท้อนคำขอ HTTP
-    //      ล่าสุดที่แตะค่านี้ ถ้าอ่านทีหลังเสี่ยงมีคำขออื่นแทรกมาตอบแทนโพลผิดรอบ
-    //      ใช้ด้านล่างเพื่อแยก "เซิร์ฟเวอร์ไม่มีอะไรจะบอกแล้ว" ออกจาก "แค่ไม่ได้รับคำตอบ"
-    //      ซึ่งดูเหมือนกันถ้าดูแค่ wantTarget
-    bool pollOk = netServerUp();
     // Timings go through applySettings, which clamps them, persists them and — if
     // a session is running — holds the whole change until it ends. That deferral
     // is the point: the NVS commit and the Wi-Fi restart it performs must not
@@ -739,21 +729,35 @@ void loop() {
     //      สำหรับค่าอื่นใดที่ไม่ได้เพิ่งมากับคำสั่งเริ่ม
     static int16_t startCarried = -1;  // value a start brought in, still unacked
     static uint32_t startCarriedAt = 0;
-    // Gated on pollOk, not on wantTarget alone: netPollCommand() also returns
-    // wantTarget < 0 for a WiFi drop, a connect/read timeout, a non-200, or a
-    // parse failure -- none of which say the server is done serving this
-    // value. A single failed poll inside the window would otherwise clear the
-    // latch, and the very next successful poll -- seeing the same number the
-    // server is still repeating, with cmd already back to "" -- would read it
-    // as a /target edit and persist it, reopening the leak this latch exists
-    // to close.
-    // [TH] ผูกกับ pollOk ไม่ใช่ wantTarget เพียงอย่างเดียว เพราะ netPollCommand()
-    //      คืนค่า wantTarget < 0 ได้ทั้งจาก WiFi หลุด, หมดเวลาเชื่อมต่อ/รับข้อมูล, รหัสตอบไม่ใช่ 200,
-    //      หรือแปลง JSON ไม่สำเร็จ ไม่มีกรณีไหนบอกว่าเซิร์ฟเวอร์เลิกส่งค่านี้แล้วจริงๆ
-    //      ถ้าโพลเดียวล้มเหลวระหว่างที่ยังอยู่ในหน้าต่างเวลา จะไปล้างค่าที่จำไว้ทิ้ง
-    //      แล้วโพลที่สำเร็จครั้งถัดไปซึ่งเห็นเลขเดิมที่เซิร์ฟเวอร์ยังส่งซ้ำอยู่ โดย cmd กลับเป็นค่าว่างไปแล้ว
-    //      จะถูกอ่านเป็นการแก้ไขผ่าน /target แล้วบันทึกค่านั้นไป เปิดช่องรั่วที่ตัวจำนี้มีไว้ปิดขึ้นมาใหม่
-    if (pollOk && wantTarget < 0) startCarried = -1;  // server stopped serving it
+    // Deliberately no early-clear on wantTarget < 0 (tried and reverted twice:
+    // first gated on nothing, then on netServerUp()). No poll-level signal
+    // reliably tells "the server stopped serving this target" apart from
+    // "this response didn't parse" -- a dropped connection, a timeout, a
+    // non-200, and a 200 whose body was oversized or failed
+    // deserializeJson() (net.cpp) ALL read back as wantTarget < 0 with no way
+    // to tell them apart from here, and net.cpp's own comment names exactly
+    // that response shape as expected (a captive portal, a body cut off on a
+    // marginal link) -- even netServerUp(), which only reflects HTTP status,
+    // stays true for a 200 that failed to parse. Getting that distinction
+    // wrong clears the latch on a poll that told us nothing, and the very
+    // next normal poll then reads the server's still-unacked repeat as a
+    // /target edit and persists it -- the defect this comment replaces two
+    // earlier attempts at fixing with a narrower predicate. The bounded
+    // window below is the only thing this relies on to expire: it needs no
+    // signal from any one poll, only that the server's own COMMAND_TTL_SEC
+    // is shorter than it.
+    // [TH] ตั้งใจไม่ล้างค่าล่วงหน้าตอน wantTarget < 0 (เคยลองมาสองแบบแล้วถอนออกทั้งคู่:
+    //      แบบแรกไม่มีเงื่อนไขเลย แบบที่สองผูกกับ netServerUp()) เพราะไม่มีสัญญาณระดับโพลใด
+    //      บอกได้แน่ชัดว่า "เซิร์ฟเวอร์เลิกส่งค่าเป้าหมายนี้แล้ว" ต่างจาก "คำตอบรอบนี้แปลงไม่สำเร็จ"
+    //      ทั้งการเชื่อมต่อหลุด หมดเวลา รหัสตอบไม่ใช่ 200 และแม้แต่ 200 ที่เนื้อหาใหญ่เกินหรือ
+    //      deserializeJson() ล้มเหลว (ดู net.cpp) ล้วนอ่านได้เป็น wantTarget < 0 เหมือนกันหมด
+    //      แยกจากตรงนี้ไม่ออก แม้แต่ netServerUp() ที่สะท้อนแค่สถานะ HTTP ก็ยังเป็นจริงสำหรับ 200
+    //      ที่แปลงไม่สำเร็จ คอมเมนต์ของ net.cpp เองก็ระบุรูปแบบคำตอบแบบนั้นไว้ว่าเป็นไปได้อยู่แล้ว
+    //      (หน้าล็อกอินไวไฟ หรือเนื้อหาที่ถูกตัดกลางทางบนลิงก์ที่ไม่มั่นคง) ถ้าตัดสินผิด จะไปล้างค่าที่จำไว้
+    //      ทั้งที่โพลนั้นไม่ได้บอกอะไรเลย แล้วโพลปกติครั้งถัดไปจะอ่านค่าที่เซิร์ฟเวอร์ยังส่งซ้ำอยู่เป็นการแก้ไข
+    //      ผ่าน /target แล้วบันทึกไป ซึ่งเป็นข้อบกพร่องที่คอมเมนต์นี้มาแทนความพยายามแก้ด้วยเงื่อนไข
+    //      ที่แคบลงสองรอบก่อนหน้า สิ่งเดียวที่ใช้ให้หมดอายุคือหน้าต่างเวลาด้านล่าง ไม่ต้องพึ่งสัญญาณ
+    //      จากโพลใดโพลหนึ่งเลย ขอแค่ COMMAND_TTL_SEC ของเซิร์ฟเวอร์สั้นกว่าหน้าต่างนี้ก็พอ
     if (cmd == "start" && wantTarget >= 0) { startCarried = wantTarget; startCarriedAt = now; }
     bool echoOfStart = startCarried >= 0 && wantTarget == startCarried &&
                        (uint32_t)(now - startCarriedAt) <= 31000;  // COMMAND_TTL_SEC + margin
