@@ -387,7 +387,7 @@ static const char* phaseName(Phase p) {
     case Phase::Lower: return "กำลังลง";
     case Phase::Rest: return "พัก";
     case Phase::SafeLower: return "กำลังหยุด";
-    case Phase::Confirm: return "ยืนยัน";
+    case Phase::Confirm: return "รอยืนยัน";
     // Not a switch fault: the branch has none to name any more. FAULT now
     // comes only from the actuator's own energize cap or the UART watchdog.
     // [TH] ไม่ใช่สวิตช์ผิดพลาดอีกต่อไป สาขานี้ไม่มีสวิตช์ให้เอ่ยชื่อแล้ว
