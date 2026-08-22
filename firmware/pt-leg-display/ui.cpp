@@ -33,6 +33,7 @@ static void initThaiFonts();         // defined with the main screen below
 static void leaveSubScreenForRun();  // defined with the settings screen below
 static void hideAddKeyboard();       // defined with the add-patient form below
 static bool settingsScreenOpen();    // defined with the settings screen below
+static bool confirmScreenActive();   // defined with the confirm screen below
 
 static void flushCb(lv_disp_drv_t* disp, const lv_area_t* area, lv_color_t* pixels) {
   // [TH] LVGL เรียกฟังก์ชันนี้เพื่อผลักพิกเซลลงหน้าจอจริงตามพื้นที่ที่เปลี่ยน
@@ -454,6 +455,23 @@ void uiUpdateMain(bool running, Phase phase, uint32_t elapsedSec, uint16_t reps,
   // That screen has no STOP control, so force back to the main screen where STOP
   // is one tap away. Pending edits are discarded on purpose: STOP beats editing.
   if (uiRunning) leaveSubScreenForRun();
+
+  // The other half of leaving the confirm screen. Confirm -> a running phase
+  // (a genuine confirmStart()) is already caught by the running branch just
+  // above; Confirm -> Idle (a cancel or the 30 s expiry) is not, because
+  // Phase::Confirm is deliberately excluded from `running` on the controller
+  // (session.h there) and stays excluded all the way to Idle. Checked every
+  // call rather than only on the edge into/out of Confirm -- this function
+  // already returns early above when nothing has changed, so this only ever
+  // runs on an actual transition, and it is a no-op once the confirm screen is
+  // not the active one.
+  // [TH] อีกครึ่งหนึ่งของการออกจากหน้ายืนยัน รอยืนยัน -> สถานะที่กำลังทำงาน (ยืนยันจริงผ่าน
+  //      confirmStart()) ถูกจับโดยเงื่อนไข running ด้านบนอยู่แล้ว ส่วนรอยืนยัน -> ว่าง (ยกเลิกหรือหมดเวลา
+  //      30 วินาที) ไม่ถูกจับ เพราะสถานะรอยืนยันถูกกันออกจาก running ของคอนโทรลเลอร์โดยตั้งใจ
+  //      (ดู session.h ที่นั่น) และยังคงถูกกันแม้กลับไปว่างแล้วก็ตาม ตรวจทุกครั้งที่เรียก ไม่ใช่แค่ตอนขอบเขต
+  //      เข้า/ออกจากสถานะรอยืนยัน เพราะฟังก์ชันนี้คืนค่าไปแล้วตั้งแต่ต้นถ้าไม่มีอะไรเปลี่ยน จึงทำงานจริง
+  //      เฉพาะตอนเปลี่ยนสถานะจริงเท่านั้น และไม่ทำอะไรเลยถ้าหน้ายืนยันไม่ใช่หน้าที่กำลังแสดงอยู่
+  if (phase != Phase::Confirm && confirmScreenActive()) lv_scr_load(scrMain);
 
   lv_label_set_text_fmt(lblClock, "%02lu:%02lu", (unsigned long)(elapsedSec / 60),
                         (unsigned long)(elapsedSec % 60));
@@ -1431,6 +1449,236 @@ void uiShowFinish(const char* patientName, uint32_t durationSec, uint16_t reps,
   lv_scr_load(scrFinish);
 }
 
+// ----------------------------------------------------------- confirm screen
+
+// Reflects session.h's target() contract on the controller: 0 is a legal
+// target meaning "run until STOP," not "unset," so it must render as this
+// word rather than a bare 0 -- see drawConfirmReps() and confirmStep() below.
+// [TH] สะท้อนสัญญาของ target() ฝั่งคอนโทรลเลอร์: 0 เป็นค่าที่ใช้ได้จริง หมายถึง "ทำจนกว่าจะกด STOP"
+//      ไม่ใช่ "ยังไม่ได้ตั้งค่า" จึงต้องแสดงเป็นคำนี้ ไม่ใช่เลข 0 เปล่าๆ ดู drawConfirmReps() กับ
+//      confirmStep() ด้านล่าง
+#define CONFIRM_UNLIMITED "ไม่จำกัด"
+
+// Mirrors CONFIRM_TIMEOUT_MS in pt-leg-controller/session.h (30 s). Not shared
+// code -- this task is display-side only, and the state message carries no
+// seconds-left field at all -- so this is a display-side approximation of the
+// controller's real deadline, clocked locally the same way the in-phase HOLD
+// / REST timer above is (see phaseTimerStartMs in uiUpdateMain), and the same
+// way pt-leg-display.ino's own 2.5 s link-down check mirrors the controller's
+// UART watchdog without sharing its constant. The controller's own phase
+// transition back to Idle remains the actual authority: if this clock and the
+// controller's ever disagree, the next state message corrects the screen
+// (uiUpdateMain leaves it) within one refresh either way.
+// [TH] สะท้อนค่า CONFIRM_TIMEOUT_MS (30 วินาที) ในไฟล์ pt-leg-controller/session.h ไม่ได้ใช้โค้ดร่วมกัน
+//      เพราะงานนี้แก้เฉพาะฝั่งจอ และข้อความสถานะไม่มีฟิลด์เวลาที่เหลืออยู่เลย จึงเป็นการประมาณเวลาหมดอายุ
+//      จริงของคอนโทรลเลอร์ฝั่งจอเอง จับเวลาเองแบบเดียวกับตัวจับเวลาในสถานะค้าง/พักด้านบน
+//      (ดู phaseTimerStartMs ใน uiUpdateMain) และแบบเดียวกับที่ตัวตรวจสายหลุด 2.5 วินาทีใน
+//      pt-leg-display.ino สะท้อนตัวเฝ้าระวัง UART ของคอนโทรลเลอร์โดยไม่ได้ใช้ค่าคงที่ร่วมกัน
+//      การเปลี่ยนสถานะกลับไปว่างของคอนโทรลเลอร์เองยังคงเป็นผู้ตัดสินตัวจริงเสมอ ถ้านาฬิกานี้กับของ
+//      คอนโทรลเลอร์ไม่ตรงกัน ข้อความสถานะครั้งถัดไปจะแก้หน้าจอให้ตรง (uiUpdateMain เป็นคนออกจากหน้านี้)
+//      ภายในหนึ่งรอบรีเฟรชไม่ว่าจะทางไหน
+static const uint32_t CONFIRM_WINDOW_SEC = 30;
+
+static lv_obj_t *scrConfirm, *lblConfirmReps, *lblConfirmMismatch;
+static lv_obj_t *lblConfirmProgramme, *lblConfirmTimer;
+static void (*cbConfirmSets)(uint16_t) = nullptr;
+static void (*cbConfirmOk)(bool) = nullptr;
+
+// The number this screen shows and edits. Deliberately separate from the
+// controller's echoed target (the `controllerTarget` argument to
+// uiShowConfirm): this is redrawn the instant a tap lands, the echo arrives up
+// to 250 ms plus a UART round trip later. See confirmStep() and
+// uiShowConfirm().
+// [TH] ตัวเลขที่หน้าจอนี้แสดงและแก้ไข แยกออกจากค่าที่คอนโทรลเลอร์สะท้อนกลับมาโดยตั้งใจ
+//      (อาร์กิวเมนต์ controllerTarget ของ uiShowConfirm) ตัวเลขนี้ถูกวาดใหม่ทันทีที่แตะ
+//      ส่วนค่าที่สะท้อนกลับมาช้ากว่าได้ถึง 250 มิลลิวินาทีบวกเวลาไปกลับของสาย UART
+//      ดู confirmStep() และ uiShowConfirm()
+static uint16_t confirmReps = 0;
+static uint32_t confirmWindowStartMs = 0;  // this screen's own millis() clock — นาฬิกาของหน้าจอนี้เอง
+
+static bool confirmScreenActive() { return scrConfirm && lv_scr_act() == scrConfirm; }
+
+static void drawConfirmReps() {
+  if (confirmReps == 0) lv_label_set_text(lblConfirmReps, CONFIRM_UNLIMITED);
+  else lv_label_set_text_fmt(lblConfirmReps, "%u", confirmReps);
+}
+
+// Steps update the local value and redraw immediately, then tell the
+// controller -- redraw first, send second. The label must never wait on a
+// round trip: that is exactly what makes the main screen's own target stepper
+// feel dead when the link is down (see targetStep() above). The controller
+// still gets told, so a panel START commits the same number this screen is
+// showing. Also restarts this screen's own 30 s clock, mirroring
+// setPendingTarget() extending the controller's real window on every edit
+// (session.h) -- without it, stepping the value a few times would count down
+// a window this very screen keeps re-opening on the controller side.
+// [TH] การกดปรับค่าจะอัปเดตค่าในตัวจอเองและวาดใหม่ทันที แล้วค่อยบอกคอนโทรลเลอร์ วาดก่อนส่งทีหลัง
+//      เพราะป้ายต้องไม่รอการตอบกลับ นี่คือสิ่งที่ทำให้ปุ่มปรับค่าเป้าหมายที่หน้าหลักรู้สึกเหมือนกดไม่ติด
+//      ตอนลิงก์หลุด (ดู targetStep() ด้านบน) แต่ยังต้องบอกคอนโทรลเลอร์ด้วย เพื่อให้การกดปุ่มเริ่มที่หน้าปัด
+//      ยืนยันตัวเลขเดียวกับที่จอแสดง ยังตั้งนาฬิกา 30 วินาทีของหน้าจอนี้เองใหม่ด้วย สะท้อนการที่
+//      setPendingTarget() ต่อเวลาหน้าต่างจริงของคอนโทรลเลอร์ทุกครั้งที่แก้ค่า (session.h) ถ้าไม่ทำแบบนี้
+//      การกดปรับค่าไม่กี่ครั้งจะนับถอยหลังหน้าต่างที่หน้าจอนี้เองเป็นคนต่ออายุอยู่ฝั่งคอนโทรลเลอร์
+static void confirmStep(int delta) {
+  int next = (int)confirmReps + delta;
+  if (next < 0) next = 0;
+  if (next > 99) next = 99;
+  if ((uint16_t)next == confirmReps) return;
+  confirmReps = (uint16_t)next;
+  confirmWindowStartMs = millis();
+  drawConfirmReps();
+  if (cbConfirmSets) cbConfirmSets(confirmReps);
+}
+static void confirmMinusClicked(lv_event_t*) { confirmStep(-1); }
+static void confirmPlusClicked(lv_event_t*) { confirmStep(1); }
+static void confirmOkClicked(lv_event_t*) { if (cbConfirmOk) cbConfirmOk(true); }
+static void confirmCancelClicked(lv_event_t*) { if (cbConfirmOk) cbConfirmOk(false); }
+
+// Built once and reused, like every other screen in this file (see buildData(),
+// buildSettings()): rebuilding per open leaks the LVGL pool.
+// [TH] สร้างครั้งเดียวแล้วใช้ซ้ำ เหมือนหน้าจออื่นทุกหน้าในไฟล์นี้ (ดู buildData(), buildSettings())
+//      สร้างใหม่ทุกครั้งที่เปิดจะทำให้หน่วยความจำของ LVGL รั่ว
+static void buildConfirm() {
+  scrConfirm = lv_obj_create(nullptr);
+  styleScreen(scrConfirm);
+
+  lv_obj_t* col = lv_obj_create(scrConfirm);
+  lv_obj_set_size(col, lv_pct(100), lv_pct(100));
+  lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_flex_align(col, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_style_bg_opa(col, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(col, 0, 0);
+  lv_obj_set_style_pad_row(col, 4, 0);
+  lv_obj_clear_flag(col, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_style_text_color(col, lv_color_hex(COL_TEXT), 0);
+
+  lv_obj_t* title = lv_label_create(col);
+  lv_obj_set_style_text_font(title, &thai20, 0);
+  lv_label_set_text(title, "รอยืนยัน");
+
+  lv_obj_t* row = lv_obj_create(col);
+  lv_obj_set_size(row, 220, 56);
+  lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_style_pad_column(row, 14, 0);
+  lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(row, 0, 0);
+  lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+
+  lv_obj_t* minus = makeBtn(row, "-", COL_SURFACE, &lv_font_montserrat_20, confirmMinusClicked);
+  lv_obj_set_size(minus, 44, 44);
+
+  lblConfirmReps = lv_label_create(row);
+  lv_obj_set_style_text_font(lblConfirmReps, &thai28, 0);
+  lv_label_set_text(lblConfirmReps, "0");
+
+  lv_obj_t* plus = makeBtn(row, "+", COL_SURFACE, &lv_font_montserrat_20, confirmPlusClicked);
+  lv_obj_set_size(plus, 44, 44);
+
+  // Blank whenever the controller's echo agrees with confirmReps; hidden
+  // rather than merely empty so it costs no layout space on the normal path,
+  // where every edit is confirmed well inside a refresh or two. See
+  // uiShowConfirm().
+  // [TH] ว่างเปล่าเมื่อค่าสะท้อนกลับจากคอนโทรลเลอร์ตรงกับ confirmReps ซ่อนไว้แทนการปล่อยว่างเฉยๆ
+  //      เพื่อไม่ให้กินพื้นที่จัดวางในเส้นทางปกติ ที่การแก้ไขทุกครั้งได้รับการยืนยันภายในหนึ่งหรือสองรอบรีเฟรช
+  //      ดู uiShowConfirm()
+  lblConfirmMismatch = lv_label_create(col);
+  lv_obj_set_style_text_font(lblConfirmMismatch, &thai14, 0);
+  lv_obj_set_style_text_color(lblConfirmMismatch, lv_color_hex(COL_FAULT), 0);
+  lv_label_set_text(lblConfirmMismatch, "ยังไม่ยืนยัน");
+  lv_obj_add_flag(lblConfirmMismatch, LV_OBJ_FLAG_HIDDEN);
+
+  lv_obj_t* btnRow = lv_obj_create(col);
+  lv_obj_set_size(btnRow, 260, 46);
+  lv_obj_set_flex_flow(btnRow, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(btnRow, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_style_pad_column(btnRow, 16, 0);
+  lv_obj_set_style_bg_opa(btnRow, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(btnRow, 0, 0);
+  lv_obj_clear_flag(btnRow, LV_OBJ_FLAG_SCROLLABLE);
+
+  lv_obj_t* cancel = makeBtn(btnRow, "ยกเลิก", COL_SURFACE, &thai20, confirmCancelClicked);
+  lv_obj_set_size(cancel, 110, 42);
+
+  lv_obj_t* ok = makeBtn(btnRow, "ตกลง", COL_SURFACE, &thai20, confirmOkClicked);
+  lv_obj_set_size(ok, 110, 42);
+
+  lblConfirmProgramme = lv_label_create(col);
+  lv_obj_set_style_text_font(lblConfirmProgramme, &thai14, 0);
+  lv_obj_set_style_text_color(lblConfirmProgramme, lv_color_hex(COL_MUTED), 0);
+  lv_obj_set_style_text_align(lblConfirmProgramme, LV_TEXT_ALIGN_CENTER, 0);
+  lv_label_set_text(lblConfirmProgramme, "");
+
+  lblConfirmTimer = lv_label_create(col);
+  lv_obj_set_style_text_font(lblConfirmTimer, &thai14, 0);
+  lv_obj_set_style_text_color(lblConfirmTimer, lv_color_hex(COL_MUTED), 0);
+  lv_label_set_text(lblConfirmTimer, "");
+}
+
+void uiSetConfirmCallbacks(void (*onSets)(uint16_t), void (*onConfirm)(bool)) {
+  cbConfirmSets = onSets;
+  cbConfirmOk = onConfirm;
+}
+
+void uiShowConfirm(uint16_t controllerTarget, const DeviceSettings& s) {
+  if (!scrConfirm) buildConfirm();
+
+  if (!confirmScreenActive()) {
+    // The transition into Confirm: seed the on-screen number from what the
+    // controller is reporting right now, then open the screen. requestStart()
+    // seeds its own pendingTargetReps from the stored prescription (session.h),
+    // so on entry this equals the medically-prescribed target. See this
+    // function's declaration in ui.h for why every later call, while the
+    // screen stays active, treats the same argument as an echo to compare
+    // instead of a value to seed with.
+    // [TH] จังหวะเพิ่งเข้าสถานะรอยืนยัน: ตั้งต้นตัวเลขบนจอจากค่าที่คอนโทรลเลอร์กำลังรายงานอยู่ตอนนี้
+    //      แล้วเปิดหน้าจอ requestStart() ตั้งต้น pendingTargetReps ของตัวเองจากค่าที่แพทย์สั่งไว้
+    //      (session.h) ตอนเพิ่งเข้าสถานะนี้ค่าจึงเท่ากับค่าที่แพทย์สั่ง ดูคำอธิบายที่ประกาศฟังก์ชันนี้ใน ui.h
+    //      ว่าทำไมการเรียกครั้งถัดไป ขณะที่หน้าจอยังแสดงอยู่ จึงถือว่าอาร์กิวเมนต์เดียวกันนี้เป็นค่าสะท้อนกลับ
+    //      สำหรับเทียบแทนการตั้งต้น
+    confirmReps = controllerTarget;
+    confirmWindowStartMs = millis();
+    drawConfirmReps();
+    lv_obj_add_flag(lblConfirmMismatch, LV_OBJ_FLAG_HIDDEN);
+    lv_scr_load(scrConfirm);
+  } else {
+    // Still open: the argument is now an echo of whatever this screen last
+    // sent, not a value to seed with. A disagreement means the "sets" message
+    // never arrived -- it is a bare emit() with no ack on this branch
+    // (link.cpp), so this comparison is the only way to know. No resend timer
+    // here on purpose: feature/link-crc-ack, merging before this feature
+    // ships, adds retransmit under every sender including this one, and a
+    // resend loop stacked on top of that would be dead complexity. Until it
+    // lands, a lost frame shows as a lasting mismatch instead of being
+    // silently left applied wrong.
+    // [TH] หน้าจอยังเปิดอยู่: อาร์กิวเมนต์ตอนนี้คือค่าสะท้อนกลับของสิ่งที่หน้าจอนี้เพิ่งส่งไปล่าสุด ไม่ใช่ค่า
+    //      ที่ต้องตั้งต้นอีกแล้ว ความไม่ตรงกันหมายความว่าข้อความ "sets" ไม่เคยไปถึง เพราะเป็นแค่ emit() เปล่าๆ
+    //      ไม่มีการยืนยันรับบนสายนี้ (link.cpp) การเทียบนี้จึงเป็นทางเดียวที่จะรู้ จงใจไม่ตั้งตัวจับเวลาส่งซ้ำ
+    //      เพราะ feature/link-crc-ack ที่จะรวมเข้ามาก่อนขึ้นเครื่องจริงจะเพิ่มการส่งซ้ำให้ผู้ส่งทุกตัวอยู่แล้ว
+    //      รวมถึงตัวนี้ด้วย ถ้าตั้งตัวส่งซ้ำซ้อนทับไปอีกชั้นจะกลายเป็นความซับซ้อนที่ไม่มีประโยชน์ ก่อนหน้านั้น
+    //      เฟรมที่หายไปจะแสดงเป็นค่าที่ไม่ตรงกันค้างอยู่ แทนที่จะถูกปล่อยให้ใช้ค่าที่ผิดไปแบบเงียบๆ
+    bool mismatch = controllerTarget != confirmReps;
+    if (mismatch) lv_obj_clear_flag(lblConfirmMismatch, LV_OBJ_FLAG_HIDDEN);
+    else lv_obj_add_flag(lblConfirmMismatch, LV_OBJ_FLAG_HIDDEN);
+  }
+
+  // Read-only programme summary, from the settings the machine will actually
+  // run with -- reuses the exact wording of the settings screen's own rows
+  // (ยกขึ้น/ค้าง/ลดลง/พัก, see buildSettings()) so the two screens agree.
+  // [TH] สรุปโปรแกรมแบบอ่านอย่างเดียว จากค่าตั้งค่าที่เครื่องจะใช้จริง ใช้คำเดียวกับแถวของหน้าตั้งค่า
+  //      (ยกขึ้น/ค้าง/ลดลง/พัก ดู buildSettings()) ให้สองหน้าจอนี้ใช้คำตรงกัน
+  lv_label_set_text_fmt(lblConfirmProgramme, "ยกขึ้น %u ค้าง %u วิ\nลดลง %u พัก %u วิ", s.liftSec,
+                        s.holdSec, s.lowerSec, s.restSec);
+
+  // A screen that can vanish on its own has to say so. See CONFIRM_WINDOW_SEC
+  // above for why this clock is local and only an approximation of the
+  // controller's real one.
+  // [TH] หน้าจอที่หายไปเองได้ต้องบอกผู้ใช้ล่วงหน้า ดู CONFIRM_WINDOW_SEC ด้านบนว่าทำไมนาฬิกานี้จับเวลา
+  //      เองฝั่งจอ และเป็นแค่การประมาณเวลาจริงของคอนโทรลเลอร์เท่านั้น
+  uint32_t inWindowSec = (millis() - confirmWindowStartMs) / 1000;
+  uint32_t secsLeft = inWindowSec >= CONFIRM_WINDOW_SEC ? 0 : CONFIRM_WINDOW_SEC - inWindowSec;
+  lv_label_set_text_fmt(lblConfirmTimer, "เหลือ %lu วิ", (unsigned long)secsLeft);
+}
+
 void uiLoop() { lv_timer_handler(); }
 
 #if UI_TEST_HOOK
@@ -1454,6 +1702,7 @@ const char* uiTestScreenName() {
   if (s == scrAdd) return "add";
   if (s == scrFinish) return "finish";
   if (s == scrConfirmReset) return "confirm";
+  if (s == scrConfirm) return "confirmStart";  // Phase::Confirm's screen, distinct from scrConfirmReset above
   return "unknown";
 }
 #endif

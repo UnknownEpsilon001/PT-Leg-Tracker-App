@@ -37,7 +37,7 @@ void uitestPoll();   // read one command line, release a finished tap — อ่
 // Implemented in ui.cpp, which owns the screen and keyboard pointers.
 // [TH] สองฟังก์ชันนี้อยู่ใน ui.cpp เพราะไฟล์นั้นเป็นเจ้าของตัวแปรหน้าจอและแป้นพิมพ์
 lv_obj_t* uiTestTextarea();      // textarea of whichever keyboard is showing, or null
-const char* uiTestScreenName();  // "main" / "settings" / "data" / "add" / "finish" / "confirm"
+const char* uiTestScreenName();  // "main" / "settings" / "data" / "add" / "finish" / "confirm" / "confirmStart"
 
 // Called from the display flush callback with every strip LVGL draws. Does
 // nothing unless a screenshot is in progress.

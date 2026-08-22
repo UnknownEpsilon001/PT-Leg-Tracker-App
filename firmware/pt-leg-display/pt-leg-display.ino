@@ -260,6 +260,14 @@ static void onLinkState(const LinkState& s) {
 // [TH] การกดปุ่ม -/+ ที่หน้าหลักส่งตรงไปคอนโทรลเลอร์ทันที ไม่ผ่านเส้นทางค่าตั้งค่าที่รอจนจบรอบ
 static void onTargetChanged(uint16_t reps) { gLink.sendTarget(reps); }
 
+// The confirm screen's own -/+ taps, mirrored to the controller the same
+// immediate way as onTargetChanged just above — see ui.cpp's confirmStep().
+// [TH] ปุ่มปรับค่าบนหน้ายืนยัน ส่งตรงไปคอนโทรลเลอร์ทันทีแบบเดียวกับ onTargetChanged ด้านบน
+//      ดู confirmStep() ใน ui.cpp
+static void onConfirmSets(uint16_t reps) { gLink.sendSets(reps); }
+// ตกลง/ยกเลิก บนหน้ายืนยัน — true คือกดตกลง (เริ่มรอบ), false คือยกเลิก (กลับไปว่าง)
+static void onConfirmDecision(bool ok) { gLink.sendConfirm(ok); }
+
 void setup() {
   // [TH] เริ่มพอร์ตดีบัก, ตั้งลิงก์ UART ไปคอนโทรลเลอร์, เริ่ม UI แล้วทักทายขอค่าตั้งค่า/สถานะ
 #if UI_TEST_HOOK
@@ -302,6 +310,7 @@ void setup() {
   uiSetDataCallbacks(dataCount, dataGet, dataAdd, dataSetActive);
   uiSetSettingsSaved(onSaveFromUi);
   uiSetTargetChanged(onTargetChanged);
+  uiSetConfirmCallbacks(onConfirmSets, onConfirmDecision);
   Serial.printf("controller link on %s\n", LINK_OVER_USB ? "USB (bench)" : "Serial2");
 #if LINK_OVER_USB
   gLink.begin(&Serial);
@@ -340,6 +349,21 @@ void loop() {
   if (now - lastUi >= 250) {  // [TH] รีเฟรชหน้าจอ ~4 ครั้ง/วินาที
     lastUi = now;
     uiUpdateMain(uiRunning, uiPhase, uiElapsed, uiReps, uiTarget, uiWifi, uiServer, gLinkUp);
+    // Phase::Confirm is deliberately excluded from `running` on the
+    // controller (session.h there), so uiUpdateMain's own running-based
+    // screen switch above never shows this one — it has to be driven off the
+    // phase directly, called here for as long as phase says Confirm and
+    // simply not called once it does not (ui.cpp notices and leaves the
+    // screen on its own; see uiUpdateMain). uiTarget already carries the
+    // controller's pendingTargetReps while phase == Confirm (session.h's
+    // target()), which is exactly what uiShowConfirm treats as the seed/echo.
+    // [TH] สถานะรอยืนยันถูกกันออกจาก running โดยตั้งใจฝั่งคอนโทรลเลอร์ (session.h ที่นั่น) ตรรกะสลับ
+    //      หน้าจอที่อิงกับ running ของ uiUpdateMain ด้านบนจึงไม่มีวันแสดงหน้านี้ ต้องขับด้วยสถานะโดยตรง
+    //      เรียกตรงนี้ตราบใดที่ phase ยังเป็นรอยืนยัน แล้วแค่เลิกเรียกทันทีที่ไม่ใช่ (ui.cpp จะสังเกตเห็นเอง
+    //      และออกจากหน้าจอนี้ให้ ดู uiUpdateMain) uiTarget มีค่า pendingTargetReps ของคอนโทรลเลอร์อยู่แล้ว
+    //      ตอน phase == รอยืนยัน (ดู target() ใน session.h) ซึ่งตรงกับสิ่งที่ uiShowConfirm ใช้เป็น
+    //      ค่าตั้งต้น/ค่าสะท้อนกลับพอดี
+    if (uiPhase == Phase::Confirm) uiShowConfirm(uiTarget, gLast);
   }
   if (now - lastPing >= 1000) {  // keep the controller's UART watchdog fed — ส่ง ping เลี้ยงตัวเฝ้าระวังของคอนโทรลเลอร์
     lastPing = now;
