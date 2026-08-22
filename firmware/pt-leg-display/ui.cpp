@@ -423,30 +423,46 @@ void uiUpdateMain(bool running, Phase phase, uint32_t elapsedSec, uint16_t reps,
   pRunning = running; pPhase = phase; pElapsed = elapsedSec; pReps = reps; pTarget = target;
   pWifi = wifiUp; pServer = serverUp; pLink = linkUp;
 
-  uiTargetShown = target;
-  // The settings screen's target spinbox is bound to the live target, not only to
-  // a settings reply. The controller lets an outstanding live {"t":"target"} win
-  // over the target field carried in a settings save; that rule only holds if this
-  // spinbox can never be stale. Without this, an operator who dials the target on
-  // the main screen and then saves the settings screen would send the spinbox's
-  // old value, which the controller silently discards, looking like a broken save.
-  // Guarded on spinTarget existing: the settings screen is built lazily on first
-  // open, and this runs from boot, long before that. Also skipped while the
-  // settings screen itself is on screen — that spinbox is the only place an
-  // operator edits the target there, so "open" and "focused on it" are the same
-  // thing on this UI. Stomping it mid-edit would undo a tap the operator just
-  // made in favour of a value that arrived on the wire a moment later; the sync
-  // resumes the instant the screen is left, so the field can never come back
-  // stale either.
-  // [TH] ผูกช่องปรับจำนวนครั้งเป้าหมายของหน้าตั้งค่าเข้ากับค่าเป้าหมายที่ใช้งานจริง ไม่ใช่แค่ตอนตอบกลับค่าตั้งค่า
-  //      คอนโทรลเลอร์ให้ค่า {"t":"target"} ที่เพิ่งส่งชนะค่า target ในการบันทึกตั้งค่า
-  //      กฎนี้จะปลอดภัยก็ต่อเมื่อช่องนี้ไม่มีทางเก่าค้าง ถ้าไม่ผูกไว้ ผู้ใช้ที่หมุนเป้าหมายจากหน้าหลัก
-  //      แล้วไปกดบันทึกหน้าตั้งค่า จะส่งค่าเก่าของช่องนี้ไป ซึ่งคอนโทรลเลอร์จะทิ้งเงียบๆ ดูเหมือนบันทึกไม่สำเร็จ
-  //      กันด้วยเงื่อนไข spinTarget มีอยู่จริง เพราะหน้าตั้งค่าถูกสร้างตอนเปิดครั้งแรกเท่านั้น ทำงานตรงนี้ตั้งแต่ตอนบูตแล้ว
-  //      และข้ามการผูกค่าขณะที่หน้าตั้งค่ากำลังเปิดอยู่ด้วย เพราะช่องนี้เป็นจุดเดียวที่ผู้ใช้แก้ค่าเป้าหมายบนหน้านั้น
-  //      "เปิดอยู่" กับ "กำลังโฟกัสอยู่ที่ช่องนี้" จึงเป็นเรื่องเดียวกันในหน้าจอนี้ ถ้าไม่กันไว้จะทับค่าที่เพิ่งแตะไป
-  //      ด้วยค่าที่เพิ่งมาทางสาย และจะกลับมาผูกค่าให้ทันทีที่ออกจากหน้านี้ ช่องจึงไม่มีทางค้างเก่าเช่นกัน
-  if (spinTarget && !settingsScreenOpen()) lv_spinbox_set_value(spinTarget, target);
+  // Both skipped during Confirm: target() reports pendingTargetReps there
+  // (session.h), not the stored prescription, and it is stale everywhere
+  // outside that phase by the same rule this screen enforces for its own
+  // reads (see uiShowConfirm) -- letting either line run here would leak the
+  // confirm screen's in-progress edit into uiTargetShown and the settings
+  // spinbox. Not observable today (there is no path back to scrMain or
+  // scrSettings while scrConfirm is the active screen), but it is the one
+  // place that rule was left unenforced.
+  // [TH] ข้ามทั้งสองบรรทัดระหว่างสถานะรอยืนยัน เพราะ target() จะรายงาน pendingTargetReps ตอนนั้น
+  //      (session.h) ไม่ใช่ค่าที่แพทย์สั่ง และเป็นค่าที่ค้างนอกสถานะนั้นตามกฎเดียวกับที่หน้าจอนี้บังคับใช้
+  //      กับการอ่านของตัวเอง (ดู uiShowConfirm) ถ้าปล่อยให้สองบรรทัดนี้ทำงาน จะรั่วค่าที่กำลังแก้อยู่บน
+  //      หน้ายืนยันเข้าไปใน uiTargetShown และช่องปรับค่าของหน้าตั้งค่า ยังไม่เห็นผลจริงวันนี้ (ไม่มีเส้นทาง
+  //      กลับไป scrMain หรือ scrSettings ระหว่างที่ scrConfirm เป็นหน้าที่กำลังแสดงอยู่) แต่เป็นจุดเดียวที่
+  //      กฎนี้ยังไม่ถูกบังคับใช้
+  if (phase != Phase::Confirm) {
+    uiTargetShown = target;
+    // The settings screen's target spinbox is bound to the live target, not only to
+    // a settings reply. The controller lets an outstanding live {"t":"target"} win
+    // over the target field carried in a settings save; that rule only holds if this
+    // spinbox can never be stale. Without this, an operator who dials the target on
+    // the main screen and then saves the settings screen would send the spinbox's
+    // old value, which the controller silently discards, looking like a broken save.
+    // Guarded on spinTarget existing: the settings screen is built lazily on first
+    // open, and this runs from boot, long before that. Also skipped while the
+    // settings screen itself is on screen — that spinbox is the only place an
+    // operator edits the target there, so "open" and "focused on it" are the same
+    // thing on this UI. Stomping it mid-edit would undo a tap the operator just
+    // made in favour of a value that arrived on the wire a moment later; the sync
+    // resumes the instant the screen is left, so the field can never come back
+    // stale either.
+    // [TH] ผูกช่องปรับจำนวนครั้งเป้าหมายของหน้าตั้งค่าเข้ากับค่าเป้าหมายที่ใช้งานจริง ไม่ใช่แค่ตอนตอบกลับค่าตั้งค่า
+    //      คอนโทรลเลอร์ให้ค่า {"t":"target"} ที่เพิ่งส่งชนะค่า target ในการบันทึกตั้งค่า
+    //      กฎนี้จะปลอดภัยก็ต่อเมื่อช่องนี้ไม่มีทางเก่าค้าง ถ้าไม่ผูกไว้ ผู้ใช้ที่หมุนเป้าหมายจากหน้าหลัก
+    //      แล้วไปกดบันทึกหน้าตั้งค่า จะส่งค่าเก่าของช่องนี้ไป ซึ่งคอนโทรลเลอร์จะทิ้งเงียบๆ ดูเหมือนบันทึกไม่สำเร็จ
+    //      กันด้วยเงื่อนไข spinTarget มีอยู่จริง เพราะหน้าตั้งค่าถูกสร้างตอนเปิดครั้งแรกเท่านั้น ทำงานตรงนี้ตั้งแต่ตอนบูตแล้ว
+    //      และข้ามการผูกค่าขณะที่หน้าตั้งค่ากำลังเปิดอยู่ด้วย เพราะช่องนี้เป็นจุดเดียวที่ผู้ใช้แก้ค่าเป้าหมายบนหน้านั้น
+    //      "เปิดอยู่" กับ "กำลังโฟกัสอยู่ที่ช่องนี้" จึงเป็นเรื่องเดียวกันในหน้าจอนี้ ถ้าไม่กันไว้จะทับค่าที่เพิ่งแตะไป
+    //      ด้วยค่าที่เพิ่งมาทางสาย และจะกลับมาผูกค่าให้ทันทีที่ออกจากหน้านี้ ช่องจึงไม่มีทางค้างเก่าเช่นกัน
+    if (spinTarget && !settingsScreenOpen()) lv_spinbox_set_value(spinTarget, target);
+  }
 
   uiRunning = running && linkUp;
 
@@ -460,18 +476,30 @@ void uiUpdateMain(bool running, Phase phase, uint32_t elapsedSec, uint16_t reps,
   // (a genuine confirmStart()) is already caught by the running branch just
   // above; Confirm -> Idle (a cancel or the 30 s expiry) is not, because
   // Phase::Confirm is deliberately excluded from `running` on the controller
-  // (session.h there) and stays excluded all the way to Idle. Checked every
-  // call rather than only on the edge into/out of Confirm -- this function
-  // already returns early above when nothing has changed, so this only ever
-  // runs on an actual transition, and it is a no-op once the confirm screen is
-  // not the active one.
+  // (session.h there) and stays excluded all the way to Idle. `!linkUp` is
+  // ORed in for the same reason ui.h documents on uiShowConfirm: nothing else
+  // ever tells this screen the link went down mid-confirmation -- the
+  // controller's own 30 s expiry cannot reach a display that cannot hear it
+  // -- so without this, a dead link would strand the operator on a frozen
+  // confirm screen with a ตกลง that can never reach the controller. Checked
+  // every call rather than only on the edge into/out of Confirm -- this
+  // function already returns early above when nothing has changed, so this
+  // only ever runs on an actual transition, and it is a no-op once the
+  // confirm screen is not the active one. leaveSubScreenForRun() rather than
+  // a bare lv_scr_load(scrMain): same helper the running branch above already
+  // uses, and it no-ops safely if that branch already left.
   // [TH] อีกครึ่งหนึ่งของการออกจากหน้ายืนยัน รอยืนยัน -> สถานะที่กำลังทำงาน (ยืนยันจริงผ่าน
   //      confirmStart()) ถูกจับโดยเงื่อนไข running ด้านบนอยู่แล้ว ส่วนรอยืนยัน -> ว่าง (ยกเลิกหรือหมดเวลา
   //      30 วินาที) ไม่ถูกจับ เพราะสถานะรอยืนยันถูกกันออกจาก running ของคอนโทรลเลอร์โดยตั้งใจ
-  //      (ดู session.h ที่นั่น) และยังคงถูกกันแม้กลับไปว่างแล้วก็ตาม ตรวจทุกครั้งที่เรียก ไม่ใช่แค่ตอนขอบเขต
-  //      เข้า/ออกจากสถานะรอยืนยัน เพราะฟังก์ชันนี้คืนค่าไปแล้วตั้งแต่ต้นถ้าไม่มีอะไรเปลี่ยน จึงทำงานจริง
-  //      เฉพาะตอนเปลี่ยนสถานะจริงเท่านั้น และไม่ทำอะไรเลยถ้าหน้ายืนยันไม่ใช่หน้าที่กำลังแสดงอยู่
-  if (phase != Phase::Confirm && confirmScreenActive()) lv_scr_load(scrMain);
+  //      (ดู session.h ที่นั่น) และยังคงถูกกันแม้กลับไปว่างแล้วก็ตาม เพิ่มเงื่อนไข !linkUp ด้วยเหตุผลเดียวกับ
+  //      ที่ ui.h อธิบายไว้ที่ uiShowConfirm: ไม่มีอะไรอื่นบอกหน้าจอนี้ว่าลิงก์หลุดกลางการยืนยัน
+  //      การหมดเวลา 30 วินาทีของคอนโทรลเลอร์เองไปไม่ถึงจอที่ไม่ได้ยินมันอยู่แล้ว ถ้าไม่มีเงื่อนไขนี้
+  //      สายที่หลุดจะขังผู้ใช้ไว้บนหน้ายืนยันที่ค้างนิ่ง พร้อมปุ่มตกลงที่ไปไม่ถึงคอนโทรลเลอร์ ตรวจทุกครั้งที่เรียก
+  //      ไม่ใช่แค่ตอนขอบเขตเข้า/ออกจากสถานะรอยืนยัน เพราะฟังก์ชันนี้คืนค่าไปแล้วตั้งแต่ต้นถ้าไม่มีอะไรเปลี่ยน
+  //      จึงทำงานจริงเฉพาะตอนเปลี่ยนสถานะจริงเท่านั้น และไม่ทำอะไรเลยถ้าหน้ายืนยันไม่ใช่หน้าที่กำลังแสดงอยู่
+  //      ใช้ leaveSubScreenForRun() แทน lv_scr_load(scrMain) ตรงๆ เพราะเป็นฟังก์ชันเดียวกับที่เงื่อนไข running
+  //      ด้านบนใช้อยู่แล้ว และไม่ทำอะไรซ้ำถ้าเงื่อนไขนั้นออกจากหน้าไปแล้ว
+  if ((phase != Phase::Confirm || !linkUp) && confirmScreenActive()) leaveSubScreenForRun();
 
   lv_label_set_text_fmt(lblClock, "%02lu:%02lu", (unsigned long)(elapsedSec / 60),
                         (unsigned long)(elapsedSec % 60));
@@ -1454,9 +1482,15 @@ void uiShowFinish(const char* patientName, uint32_t durationSec, uint16_t reps,
 // Reflects session.h's target() contract on the controller: 0 is a legal
 // target meaning "run until STOP," not "unset," so it must render as this
 // word rather than a bare 0 -- see drawConfirmReps() and confirmStep() below.
+// Also used to seed the label's build-time placeholder (see buildConfirm()):
+// a bare "0" there would be exactly the rendering this rule forbids, on the
+// one frame before the first real draw, if some future caller ever skipped
+// straight to lv_scr_load() without going through uiShowConfirm() first.
 // [TH] สะท้อนสัญญาของ target() ฝั่งคอนโทรลเลอร์: 0 เป็นค่าที่ใช้ได้จริง หมายถึง "ทำจนกว่าจะกด STOP"
 //      ไม่ใช่ "ยังไม่ได้ตั้งค่า" จึงต้องแสดงเป็นคำนี้ ไม่ใช่เลข 0 เปล่าๆ ดู drawConfirmReps() กับ
-//      confirmStep() ด้านล่าง
+//      confirmStep() ด้านล่าง ใช้ตั้งต้นข้อความของป้ายตอนสร้างด้วย (ดู buildConfirm()) เพราะเลข "0" เปล่าๆ
+//      ตรงนั้นจะเป็นการแสดงผลแบบที่กฎนี้ห้ามพอดี ในเฟรมเดียวก่อนการวาดจริงครั้งแรก ถ้าวันหน้ามีจุดเรียกอื่น
+//      ที่ข้ามไป lv_scr_load() ตรงๆ โดยไม่ผ่าน uiShowConfirm() ก่อน
 #define CONFIRM_UNLIMITED "ไม่จำกัด"
 
 // Mirrors CONFIRM_TIMEOUT_MS in pt-leg-controller/session.h (30 s). Not shared
@@ -1479,6 +1513,26 @@ void uiShowFinish(const char* patientName, uint32_t durationSec, uint16_t reps,
 //      ภายในหนึ่งรอบรีเฟรชไม่ว่าจะทางไหน
 static const uint32_t CONFIRM_WINDOW_SEC = 30;
 
+// How long a disagreement between confirmReps and the controller's echo has
+// to persist before it is shown as unconfirmed. The controller emits state on
+// its own fixed ~250 ms cadence (pt-leg-controller.ino), not on receipt of a
+// "sets" message -- onLinkSets() there only applies the value, it does not
+// trigger an extra state emission -- so after a tap the echo and this
+// screen's own next redraw race independently, and disagree for up to one
+// whole tick on essentially every edit even with a healthy link. Flagging
+// that as "unconfirmed" would fire on roughly half of all normal taps and
+// train the operator to ignore the one signal that means a "sets" frame was
+// actually lost. ~3x a refresh tick comfortably covers that race without
+// meaningfully delaying the real signal.
+// [TH] ความไม่ตรงกันระหว่าง confirmReps กับค่าที่คอนโทรลเลอร์สะท้อนกลับต้องค้างอยู่นานแค่ไหนก่อนจะถือว่า
+//      ยังไม่ยืนยัน คอนโทรลเลอร์ส่งข้อความสถานะตามจังหวะคงที่ราว 250 มิลลิวินาทีของตัวเอง
+//      (pt-leg-controller.ino) ไม่ใช่ตอนได้รับ "sets" -- onLinkSets() ที่นั่นแค่นำค่าไปใช้ ไม่ได้สั่งส่งสถานะ
+//      เพิ่ม -- ค่าที่สะท้อนกลับมากับการวาดใหม่ครั้งถัดไปของหน้าจอนี้จึงแข่งกันเป็นอิสระ และไม่ตรงกันได้นานถึง
+//      หนึ่งรอบเต็มแทบทุกครั้งที่แก้ค่า แม้ลิงก์จะปกติดีก็ตาม ถ้าติดป้ายว่ายังไม่ยืนยันตรงนั้นจะขึ้นในเกือบ
+//      ครึ่งหนึ่งของการแตะปกติ และสอนให้ผู้ใช้เพิกเฉยต่อสัญญาณเดียวที่บอกว่าเฟรม "sets" หายไปจริงๆ
+//      สามเท่าของหนึ่งรอบรีเฟรชครอบคลุมการแข่งกันนี้ได้สบายๆ โดยไม่หน่วงสัญญาณจริงมากเกินไป
+static const uint32_t CONFIRM_MISMATCH_GRACE_MS = 750;
+
 static lv_obj_t *scrConfirm, *lblConfirmReps, *lblConfirmMismatch;
 static lv_obj_t *lblConfirmProgramme, *lblConfirmTimer;
 static void (*cbConfirmSets)(uint16_t) = nullptr;
@@ -1495,6 +1549,21 @@ static void (*cbConfirmOk)(bool) = nullptr;
 //      ดู confirmStep() และ uiShowConfirm()
 static uint16_t confirmReps = 0;
 static uint32_t confirmWindowStartMs = 0;  // this screen's own millis() clock — นาฬิกาของหน้าจอนี้เอง
+// millis() of the last local edit, i.e. the last time confirmReps changed from
+// a tap here. Used only to grace-period the mismatch warning in uiShowConfirm
+// -- see CONFIRM_MISMATCH_GRACE_MS.
+// [TH] millis() ของการแก้ไขจากจอนี้ครั้งล่าสุด คือครั้งล่าสุดที่ confirmReps เปลี่ยนจากการแตะที่นี่
+//      ใช้แค่กำหนดช่วงผ่อนผันของคำเตือนยังไม่ยืนยันใน uiShowConfirm ดู CONFIRM_MISMATCH_GRACE_MS
+static uint32_t confirmLastEditMs = 0;
+// The last secsLeft actually drawn into lblConfirmTimer, so uiShowConfirm can
+// skip the redraw on every tick where the second hasn't actually ticked over
+// -- see uiUpdateMain's own change-detection just above for the same idea
+// applied to the whole main screen. An impossible value (CONFIRM_WINDOW_SEC
+// can never be exceeded once running) forces the first real draw.
+// [TH] เลขวินาทีที่เหลือครั้งล่าสุดที่วาดลง lblConfirmTimer จริง เพื่อให้ uiShowConfirm ข้ามการวาดซ้ำ
+//      ในทุกรอบที่วินาทียังไม่ขยับจริง แนวคิดเดียวกับตัวตรวจการเปลี่ยนแปลงของทั้งหน้าหลักด้านบน
+//      ใช้ค่าที่เป็นไปไม่ได้ (CONFIRM_WINDOW_SEC ไม่มีทางถูกเกินตอนกำลังนับ) เพื่อบังคับให้วาดจริงครั้งแรกเสมอ
+static uint32_t confirmLastSecsShown = CONFIRM_WINDOW_SEC + 1;
 
 static bool confirmScreenActive() { return scrConfirm && lv_scr_act() == scrConfirm; }
 
@@ -1511,13 +1580,16 @@ static void drawConfirmReps() {
 // showing. Also restarts this screen's own 30 s clock, mirroring
 // setPendingTarget() extending the controller's real window on every edit
 // (session.h) -- without it, stepping the value a few times would count down
-// a window this very screen keeps re-opening on the controller side.
+// a window this very screen keeps re-opening on the controller side. And
+// stamps confirmLastEditMs, which is what gates the mismatch warning's grace
+// window in uiShowConfirm.
 // [TH] การกดปรับค่าจะอัปเดตค่าในตัวจอเองและวาดใหม่ทันที แล้วค่อยบอกคอนโทรลเลอร์ วาดก่อนส่งทีหลัง
 //      เพราะป้ายต้องไม่รอการตอบกลับ นี่คือสิ่งที่ทำให้ปุ่มปรับค่าเป้าหมายที่หน้าหลักรู้สึกเหมือนกดไม่ติด
 //      ตอนลิงก์หลุด (ดู targetStep() ด้านบน) แต่ยังต้องบอกคอนโทรลเลอร์ด้วย เพื่อให้การกดปุ่มเริ่มที่หน้าปัด
 //      ยืนยันตัวเลขเดียวกับที่จอแสดง ยังตั้งนาฬิกา 30 วินาทีของหน้าจอนี้เองใหม่ด้วย สะท้อนการที่
 //      setPendingTarget() ต่อเวลาหน้าต่างจริงของคอนโทรลเลอร์ทุกครั้งที่แก้ค่า (session.h) ถ้าไม่ทำแบบนี้
-//      การกดปรับค่าไม่กี่ครั้งจะนับถอยหลังหน้าต่างที่หน้าจอนี้เองเป็นคนต่ออายุอยู่ฝั่งคอนโทรลเลอร์
+//      การกดปรับค่าไม่กี่ครั้งจะนับถอยหลังหน้าต่างที่หน้าจอนี้เองเป็นคนต่ออายุอยู่ฝั่งคอนโทรลเลอร์ และบันทึก
+//      confirmLastEditMs ซึ่งเป็นตัวกำหนดช่วงผ่อนผันของคำเตือนยังไม่ยืนยันใน uiShowConfirm
 static void confirmStep(int delta) {
   int next = (int)confirmReps + delta;
   if (next < 0) next = 0;
@@ -1525,6 +1597,7 @@ static void confirmStep(int delta) {
   if ((uint16_t)next == confirmReps) return;
   confirmReps = (uint16_t)next;
   confirmWindowStartMs = millis();
+  confirmLastEditMs = millis();
   drawConfirmReps();
   if (cbConfirmSets) cbConfirmSets(confirmReps);
 }
@@ -1547,7 +1620,7 @@ static void buildConfirm() {
   lv_obj_set_flex_align(col, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
   lv_obj_set_style_bg_opa(col, LV_OPA_TRANSP, 0);
   lv_obj_set_style_border_width(col, 0, 0);
-  lv_obj_set_style_pad_row(col, 4, 0);
+  lv_obj_set_style_pad_row(col, 3, 0);
   lv_obj_clear_flag(col, LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_set_style_text_color(col, lv_color_hex(COL_TEXT), 0);
 
@@ -1556,51 +1629,63 @@ static void buildConfirm() {
   lv_label_set_text(title, "รอยืนยัน");
 
   lv_obj_t* row = lv_obj_create(col);
-  lv_obj_set_size(row, 220, 56);
+  lv_obj_set_size(row, 200, 46);
   lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
   lv_obj_set_flex_align(row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-  lv_obj_set_style_pad_column(row, 14, 0);
+  lv_obj_set_style_pad_column(row, 12, 0);
   lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
   lv_obj_set_style_border_width(row, 0, 0);
   lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
 
   lv_obj_t* minus = makeBtn(row, "-", COL_SURFACE, &lv_font_montserrat_20, confirmMinusClicked);
-  lv_obj_set_size(minus, 44, 44);
+  lv_obj_set_size(minus, 40, 40);
 
   lblConfirmReps = lv_label_create(row);
   lv_obj_set_style_text_font(lblConfirmReps, &thai28, 0);
-  lv_label_set_text(lblConfirmReps, "0");
+  // Not a bare "0": that is exactly what the ไม่จำกัด rule forbids (see
+  // CONFIRM_UNLIMITED above). This text is only ever visible for one frame
+  // before uiShowConfirm's first real draw, but a build-time placeholder that
+  // violates the screen's own display rule is a trap worth not leaving lying
+  // around.
+  // [TH] ไม่ใช่เลข "0" เปล่าๆ ซึ่งเป็นสิ่งที่กฎ ไม่จำกัด ห้ามพอดี (ดู CONFIRM_UNLIMITED ด้านบน)
+  //      ข้อความนี้จะเห็นได้แค่เฟรมเดียวก่อนการวาดจริงครั้งแรกของ uiShowConfirm แต่ค่าตั้งต้นตอนสร้าง
+  //      ที่ขัดกับกฎการแสดงผลของหน้าจอเองก็ไม่ควรปล่อยทิ้งไว้
+  lv_label_set_text(lblConfirmReps, CONFIRM_UNLIMITED);
 
   lv_obj_t* plus = makeBtn(row, "+", COL_SURFACE, &lv_font_montserrat_20, confirmPlusClicked);
-  lv_obj_set_size(plus, 44, 44);
+  lv_obj_set_size(plus, 40, 40);
 
-  // Blank whenever the controller's echo agrees with confirmReps; hidden
-  // rather than merely empty so it costs no layout space on the normal path,
-  // where every edit is confirmed well inside a refresh or two. See
-  // uiShowConfirm().
-  // [TH] ว่างเปล่าเมื่อค่าสะท้อนกลับจากคอนโทรลเลอร์ตรงกับ confirmReps ซ่อนไว้แทนการปล่อยว่างเฉยๆ
-  //      เพื่อไม่ให้กินพื้นที่จัดวางในเส้นทางปกติ ที่การแก้ไขทุกครั้งได้รับการยืนยันภายในหนึ่งหรือสองรอบรีเฟรช
-  //      ดู uiShowConfirm()
+  // Always present, never LV_OBJ_FLAG_HIDDEN -- toggling that flag on a flex
+  // child excludes both it and its row gap from layout, so the ตกลง/ยกเลิก row
+  // right below it would jump by the label's height every time a mismatch
+  // appeared or cleared, moving the commit buttons under the operator's
+  // finger. Reserving the space with an empty string instead costs a little
+  // vertical room permanently, in exchange for a layout that never moves.
+  // See uiShowConfirm() for when this actually gets text.
+  // [TH] แสดงอยู่เสมอ ไม่ใช้ LV_OBJ_FLAG_HIDDEN เพราะการสลับแฟล็กนี้บนลูกของ flex จะตัดทั้งตัวมันเองและ
+  //      ช่องว่างระหว่างแถวออกจากการจัดวาง แถวปุ่มตกลง/ยกเลิกที่อยู่ใต้มันทันทีจะกระโดดตามความสูงของป้าย
+  //      ทุกครั้งที่ความไม่ตรงกันปรากฏหรือหายไป ทำให้ปุ่มยืนยันขยับหนีนิ้วผู้ใช้ การจองพื้นที่ไว้ด้วยข้อความ
+  //      ว่างเปล่าแทนเสียพื้นที่แนวตั้งเล็กน้อยถาวร แลกกับการจัดวางที่ไม่ขยับเลย ดู uiShowConfirm() ว่าเมื่อไร
+  //      ป้ายนี้ถึงจะมีข้อความจริง
   lblConfirmMismatch = lv_label_create(col);
   lv_obj_set_style_text_font(lblConfirmMismatch, &thai14, 0);
   lv_obj_set_style_text_color(lblConfirmMismatch, lv_color_hex(COL_FAULT), 0);
-  lv_label_set_text(lblConfirmMismatch, "ยังไม่ยืนยัน");
-  lv_obj_add_flag(lblConfirmMismatch, LV_OBJ_FLAG_HIDDEN);
+  lv_label_set_text(lblConfirmMismatch, "");
 
   lv_obj_t* btnRow = lv_obj_create(col);
-  lv_obj_set_size(btnRow, 260, 46);
+  lv_obj_set_size(btnRow, 230, 40);
   lv_obj_set_flex_flow(btnRow, LV_FLEX_FLOW_ROW);
   lv_obj_set_flex_align(btnRow, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-  lv_obj_set_style_pad_column(btnRow, 16, 0);
+  lv_obj_set_style_pad_column(btnRow, 14, 0);
   lv_obj_set_style_bg_opa(btnRow, LV_OPA_TRANSP, 0);
   lv_obj_set_style_border_width(btnRow, 0, 0);
   lv_obj_clear_flag(btnRow, LV_OBJ_FLAG_SCROLLABLE);
 
   lv_obj_t* cancel = makeBtn(btnRow, "ยกเลิก", COL_SURFACE, &thai20, confirmCancelClicked);
-  lv_obj_set_size(cancel, 110, 42);
+  lv_obj_set_size(cancel, 100, 36);
 
   lv_obj_t* ok = makeBtn(btnRow, "ตกลง", COL_SURFACE, &thai20, confirmOkClicked);
-  lv_obj_set_size(ok, 110, 42);
+  lv_obj_set_size(ok, 100, 36);
 
   lblConfirmProgramme = lv_label_create(col);
   lv_obj_set_style_text_font(lblConfirmProgramme, &thai14, 0);
@@ -1619,64 +1704,121 @@ void uiSetConfirmCallbacks(void (*onSets)(uint16_t), void (*onConfirm)(bool)) {
   cbConfirmOk = onConfirm;
 }
 
-void uiShowConfirm(uint16_t controllerTarget, const DeviceSettings& s) {
+void uiShowConfirm(uint16_t controllerTarget, const DeviceSettings& s, bool linkUp) {
   if (!scrConfirm) buildConfirm();
 
-  if (!confirmScreenActive()) {
+  // Belt and braces (see this function's declaration in ui.h): the sketch is
+  // expected to stop calling this once the link drops and let uiUpdateMain's
+  // own linkUp-gated check take the screen back to scrMain. If it is ever
+  // called anyway, do nothing rather than seed, compare, or redraw off a
+  // controllerTarget that is not actually fresh.
+  // [TH] กันพลาดสองชั้น (ดูคำอธิบายที่ประกาศฟังก์ชันนี้ใน ui.h): ตามปกติสเก็ตช์จะเลิกเรียกฟังก์ชันนี้ทันที
+  //      ที่ลิงก์หลุด แล้วปล่อยให้เงื่อนไขที่กันด้วย linkUp ของ uiUpdateMain พาไปหน้าหลักเอง
+  //      ถ้าถูกเรียกอยู่ดี ให้ไม่ทำอะไรเลย ดีกว่าไปตั้งต้น เทียบ หรือวาดใหม่จาก controllerTarget ที่ไม่สดจริง
+  if (!linkUp) return;
+
+  bool justEntered = !confirmScreenActive();
+  if (justEntered) {
     // The transition into Confirm: seed the on-screen number from what the
     // controller is reporting right now, then open the screen. requestStart()
     // seeds its own pendingTargetReps from the stored prescription (session.h),
-    // so on entry this equals the medically-prescribed target. See this
-    // function's declaration in ui.h for why every later call, while the
-    // screen stays active, treats the same argument as an echo to compare
-    // instead of a value to seed with.
+    // so on entry this equals the medically-prescribed target -- clamped here
+    // regardless, defence in depth against a controllerTarget this display has
+    // no other reason to distrust. See this function's declaration in ui.h for
+    // why every later call, while the screen stays active, treats the same
+    // argument as an echo to compare instead of a value to seed with.
+    // leaveSubScreenForRun() first: Confirm can be entered while the operator
+    // is on the settings or add-patient screen with its keyboard up (a panel
+    // START is independent of what the display happens to be showing), and
+    // jumping straight to scrConfirm would leave that keyboard state -- a
+    // shrunk field column -- dangling for whenever that screen is reopened.
     // [TH] จังหวะเพิ่งเข้าสถานะรอยืนยัน: ตั้งต้นตัวเลขบนจอจากค่าที่คอนโทรลเลอร์กำลังรายงานอยู่ตอนนี้
     //      แล้วเปิดหน้าจอ requestStart() ตั้งต้น pendingTargetReps ของตัวเองจากค่าที่แพทย์สั่งไว้
-    //      (session.h) ตอนเพิ่งเข้าสถานะนี้ค่าจึงเท่ากับค่าที่แพทย์สั่ง ดูคำอธิบายที่ประกาศฟังก์ชันนี้ใน ui.h
-    //      ว่าทำไมการเรียกครั้งถัดไป ขณะที่หน้าจอยังแสดงอยู่ จึงถือว่าอาร์กิวเมนต์เดียวกันนี้เป็นค่าสะท้อนกลับ
-    //      สำหรับเทียบแทนการตั้งต้น
-    confirmReps = controllerTarget;
+    //      (session.h) ตอนเพิ่งเข้าสถานะนี้ค่าจึงเท่ากับค่าที่แพทย์สั่ง จำกัดช่วงตรงนี้ไว้ด้วยไม่ว่ากรณีใด
+    //      กันพลาดสองชั้นเผื่อ controllerTarget ที่ไม่มีเหตุผลอื่นให้ไม่เชื่อ ดูคำอธิบายที่ประกาศฟังก์ชันนี้
+    //      ใน ui.h ว่าทำไมการเรียกครั้งถัดไป ขณะที่หน้าจอยังแสดงอยู่ จึงถือว่าอาร์กิวเมนต์เดียวกันนี้เป็นค่า
+    //      สะท้อนกลับสำหรับเทียบแทนการตั้งต้น เรียก leaveSubScreenForRun() ก่อน เพราะสถานะรอยืนยันเข้าได้
+    //      แม้ผู้ใช้อยู่หน้าตั้งค่าหรือฟอร์มลงทะเบียนโดยเปิดแป้นพิมพ์ค้างไว้ (ปุ่ม START บนแผงเป็นอิสระจาก
+    //      สิ่งที่จอกำลังแสดง) การกระโดดไป scrConfirm ตรงๆ จะทิ้งสถานะแป้นพิมพ์นั้นค้างไว้ กล่องช่องกรอกที่ถูก
+    //      ย่อไว้จะยังย่ออยู่เมื่อกลับไปเปิดหน้านั้นอีกครั้ง
+    confirmReps = controllerTarget > 99 ? 99 : controllerTarget;
     confirmWindowStartMs = millis();
+    confirmLastEditMs = millis();
+    confirmLastSecsShown = CONFIRM_WINDOW_SEC + 1;  // force the first timer draw below
     drawConfirmReps();
-    lv_obj_add_flag(lblConfirmMismatch, LV_OBJ_FLAG_HIDDEN);
+    lv_label_set_text(lblConfirmMismatch, "");
+    // Read-only programme summary, from the settings the machine will
+    // actually run with -- set once here, not every call, since nothing on
+    // this screen can change gLast while it is open (there is no navigation
+    // path back to the settings screen from here). Reuses the exact wording
+    // of the settings screen's own rows (ยกขึ้น/ค้าง/ลดลง/พัก, see
+    // buildSettings()) so the two screens agree. Gated on settingsKnown, the
+    // same flag SAVE already gates on (ui.h): gLast is seeded at boot with
+    // superseded placeholder stroke times (pt-leg-display.ino), not merely
+    // arbitrary defaults, so showing it before the controller's real values
+    // are known would state a wrong programme on the one screen whose job is
+    // saying what will actually run.
+    // [TH] สรุปโปรแกรมแบบอ่านอย่างเดียว จากค่าตั้งค่าที่เครื่องจะใช้จริง ตั้งค่าครั้งเดียวตรงนี้ ไม่ใช่ทุกครั้ง
+    //      ที่เรียก เพราะไม่มีอะไรบนหน้าจอนี้ที่จะเปลี่ยน gLast ได้ขณะเปิดอยู่ (ไม่มีเส้นทางกลับไปหน้าตั้งค่า
+    //      จากตรงนี้) ใช้คำเดียวกับแถวของหน้าตั้งค่า (ยกขึ้น/ค้าง/ลดลง/พัก ดู buildSettings())
+    //      ให้สองหน้าจอนี้ใช้คำตรงกัน กั้นด้วย settingsKnown ตัวเดียวกับที่ปุ่มบันทึกกั้นอยู่แล้ว (ui.h):
+    //      gLast ถูกตั้งต้นตอนบูตด้วยเวลาจังหวะเคลื่อนที่ที่เลิกใช้แล้ว (pt-leg-display.ino) ไม่ใช่แค่
+    //      ค่าเริ่มต้นทั่วไป การแสดงก่อนรู้ค่าจริงจากคอนโทรลเลอร์จะบอกโปรแกรมผิดบนหน้าจอเดียวที่มีหน้าที่
+    //      บอกว่าจะเกิดอะไรขึ้นจริง
+    if (settingsKnown) {
+      lv_label_set_text_fmt(lblConfirmProgramme, "ยกขึ้น %u ค้าง %u วิ\nลดลง %u พัก %u วิ", s.liftSec,
+                            s.holdSec, s.lowerSec, s.restSec);
+    } else {
+      lv_label_set_text(lblConfirmProgramme, "");
+    }
+    leaveSubScreenForRun();
     lv_scr_load(scrConfirm);
   } else {
     // Still open: the argument is now an echo of whatever this screen last
-    // sent, not a value to seed with. A disagreement means the "sets" message
-    // never arrived -- it is a bare emit() with no ack on this branch
-    // (link.cpp), so this comparison is the only way to know. No resend timer
-    // here on purpose: feature/link-crc-ack, merging before this feature
-    // ships, adds retransmit under every sender including this one, and a
-    // resend loop stacked on top of that would be dead complexity. Until it
-    // lands, a lost frame shows as a lasting mismatch instead of being
-    // silently left applied wrong.
+    // sent, not a value to seed with. A disagreement that outlives
+    // CONFIRM_MISMATCH_GRACE_MS means the "sets" message never arrived -- it
+    // is a bare emit() with no ack on this branch (link.cpp), so this
+    // comparison is the only way to know. A disagreement that clears within
+    // the grace window is not shown at all: the controller's state cadence
+    // and this function's own call cadence race independently (see
+    // CONFIRM_MISMATCH_GRACE_MS above), so a one-tick disagreement is the
+    // normal shape of a healthy edit settling in, not a lost frame. No resend
+    // timer here on purpose: feature/link-crc-ack, merging before this
+    // feature ships, adds retransmit under every sender including this one,
+    // and a resend loop stacked on top of that would be dead complexity.
+    // Until it lands, a lost frame that outlives the grace window shows as a
+    // lasting mismatch instead of being silently left applied wrong.
     // [TH] หน้าจอยังเปิดอยู่: อาร์กิวเมนต์ตอนนี้คือค่าสะท้อนกลับของสิ่งที่หน้าจอนี้เพิ่งส่งไปล่าสุด ไม่ใช่ค่า
-    //      ที่ต้องตั้งต้นอีกแล้ว ความไม่ตรงกันหมายความว่าข้อความ "sets" ไม่เคยไปถึง เพราะเป็นแค่ emit() เปล่าๆ
-    //      ไม่มีการยืนยันรับบนสายนี้ (link.cpp) การเทียบนี้จึงเป็นทางเดียวที่จะรู้ จงใจไม่ตั้งตัวจับเวลาส่งซ้ำ
-    //      เพราะ feature/link-crc-ack ที่จะรวมเข้ามาก่อนขึ้นเครื่องจริงจะเพิ่มการส่งซ้ำให้ผู้ส่งทุกตัวอยู่แล้ว
-    //      รวมถึงตัวนี้ด้วย ถ้าตั้งตัวส่งซ้ำซ้อนทับไปอีกชั้นจะกลายเป็นความซับซ้อนที่ไม่มีประโยชน์ ก่อนหน้านั้น
-    //      เฟรมที่หายไปจะแสดงเป็นค่าที่ไม่ตรงกันค้างอยู่ แทนที่จะถูกปล่อยให้ใช้ค่าที่ผิดไปแบบเงียบๆ
-    bool mismatch = controllerTarget != confirmReps;
-    if (mismatch) lv_obj_clear_flag(lblConfirmMismatch, LV_OBJ_FLAG_HIDDEN);
-    else lv_obj_add_flag(lblConfirmMismatch, LV_OBJ_FLAG_HIDDEN);
+    //      ที่ต้องตั้งต้นอีกแล้ว ความไม่ตรงกันที่ค้างนานเกิน CONFIRM_MISMATCH_GRACE_MS หมายความว่าข้อความ
+    //      "sets" ไม่เคยไปถึง เพราะเป็นแค่ emit() เปล่าๆ ไม่มีการยืนยันรับบนสายนี้ (link.cpp) การเทียบนี้จึง
+    //      เป็นทางเดียวที่จะรู้ ความไม่ตรงกันที่หายไปเองภายในช่วงผ่อนผันจะไม่ถูกแสดงเลย เพราะจังหวะส่งสถานะ
+    //      ของคอนโทรลเลอร์กับจังหวะเรียกของฟังก์ชันนี้เองแข่งกันเป็นอิสระ (ดู CONFIRM_MISMATCH_GRACE_MS
+    //      ด้านบน) ความไม่ตรงกันแค่หนึ่งรอบจึงเป็นรูปแบบปกติของการแก้ไขที่กำลังจะนิ่ง ไม่ใช่เฟรมที่หายไป
+    //      จงใจไม่ตั้งตัวจับเวลาส่งซ้ำ เพราะ feature/link-crc-ack ที่จะรวมเข้ามาก่อนขึ้นเครื่องจริงจะเพิ่มการ
+    //      ส่งซ้ำให้ผู้ส่งทุกตัวอยู่แล้วรวมถึงตัวนี้ด้วย ถ้าตั้งตัวส่งซ้ำซ้อนทับไปอีกชั้นจะกลายเป็นความซับซ้อน
+    //      ที่ไม่มีประโยชน์ ก่อนหน้านั้นเฟรมที่หายไปและค้างเกินช่วงผ่อนผันจะแสดงเป็นค่าที่ไม่ตรงกันค้างอยู่
+    //      แทนที่จะถูกปล่อยให้ใช้ค่าที่ผิดไปแบบเงียบๆ
+    bool disagreeNow = controllerTarget != confirmReps;
+    bool graceElapsed = (millis() - confirmLastEditMs) >= CONFIRM_MISMATCH_GRACE_MS;
+    lv_label_set_text(lblConfirmMismatch, (disagreeNow && graceElapsed) ? "ยังไม่ยืนยัน" : "");
   }
-
-  // Read-only programme summary, from the settings the machine will actually
-  // run with -- reuses the exact wording of the settings screen's own rows
-  // (ยกขึ้น/ค้าง/ลดลง/พัก, see buildSettings()) so the two screens agree.
-  // [TH] สรุปโปรแกรมแบบอ่านอย่างเดียว จากค่าตั้งค่าที่เครื่องจะใช้จริง ใช้คำเดียวกับแถวของหน้าตั้งค่า
-  //      (ยกขึ้น/ค้าง/ลดลง/พัก ดู buildSettings()) ให้สองหน้าจอนี้ใช้คำตรงกัน
-  lv_label_set_text_fmt(lblConfirmProgramme, "ยกขึ้น %u ค้าง %u วิ\nลดลง %u พัก %u วิ", s.liftSec,
-                        s.holdSec, s.lowerSec, s.restSec);
 
   // A screen that can vanish on its own has to say so. See CONFIRM_WINDOW_SEC
   // above for why this clock is local and only an approximation of the
-  // controller's real one.
+  // controller's real one. Only rewritten when the shown second actually
+  // changes -- matching uiUpdateMain's own change-detection above -- since
+  // this function, unlike uiUpdateMain, has no early-return for an unchanged
+  // call and would otherwise repaint an identical string every 250 ms tick.
   // [TH] หน้าจอที่หายไปเองได้ต้องบอกผู้ใช้ล่วงหน้า ดู CONFIRM_WINDOW_SEC ด้านบนว่าทำไมนาฬิกานี้จับเวลา
-  //      เองฝั่งจอ และเป็นแค่การประมาณเวลาจริงของคอนโทรลเลอร์เท่านั้น
+  //      เองฝั่งจอ และเป็นแค่การประมาณเวลาจริงของคอนโทรลเลอร์เท่านั้น วาดใหม่เฉพาะตอนวินาทีที่แสดงเปลี่ยน
+  //      จริงเท่านั้น เหมือนตัวตรวจการเปลี่ยนแปลงของ uiUpdateMain ด้านบน เพราะฟังก์ชันนี้ไม่มีทางคืนค่าก่อน
+  //      กำหนดแบบนั้นเมื่อไม่มีอะไรเปลี่ยน ไม่งั้นจะวาดข้อความเดิมซ้ำทุกรอบ 250 มิลลิวินาทีโดยเปล่าประโยชน์
   uint32_t inWindowSec = (millis() - confirmWindowStartMs) / 1000;
   uint32_t secsLeft = inWindowSec >= CONFIRM_WINDOW_SEC ? 0 : CONFIRM_WINDOW_SEC - inWindowSec;
-  lv_label_set_text_fmt(lblConfirmTimer, "เหลือ %lu วิ", (unsigned long)secsLeft);
+  if (secsLeft != confirmLastSecsShown) {
+    confirmLastSecsShown = secsLeft;
+    lv_label_set_text_fmt(lblConfirmTimer, "เหลือ %lu วิ", (unsigned long)secsLeft);
+  }
 }
 
 void uiLoop() { lv_timer_handler(); }

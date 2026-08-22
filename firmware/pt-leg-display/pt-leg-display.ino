@@ -352,18 +352,31 @@ void loop() {
     // Phase::Confirm is deliberately excluded from `running` on the
     // controller (session.h there), so uiUpdateMain's own running-based
     // screen switch above never shows this one — it has to be driven off the
-    // phase directly, called here for as long as phase says Confirm and
-    // simply not called once it does not (ui.cpp notices and leaves the
-    // screen on its own; see uiUpdateMain). uiTarget already carries the
+    // phase directly, called here for as long as phase says Confirm AND the
+    // link is up, and simply not called the moment either stops being true
+    // (ui.cpp notices and leaves the screen on its own; see uiUpdateMain).
+    // The gLinkUp half of the gate matters on its own: uiPhase only ever
+    // changes inside onLinkState(), so a dead link freezes it at Confirm
+    // forever, and without this check that would mean calling uiShowConfirm
+    // every tick regardless — uiUpdateMain's own leave check, a few lines up,
+    // would fire on the very same tick gLinkUp goes false and load scrMain,
+    // only for this line to immediately reopen scrConfirm right after it,
+    // since the screen no longer being active is exactly what uiShowConfirm
+    // reads as "just entered Confirm". uiTarget already carries the
     // controller's pendingTargetReps while phase == Confirm (session.h's
     // target()), which is exactly what uiShowConfirm treats as the seed/echo.
     // [TH] สถานะรอยืนยันถูกกันออกจาก running โดยตั้งใจฝั่งคอนโทรลเลอร์ (session.h ที่นั่น) ตรรกะสลับ
     //      หน้าจอที่อิงกับ running ของ uiUpdateMain ด้านบนจึงไม่มีวันแสดงหน้านี้ ต้องขับด้วยสถานะโดยตรง
-    //      เรียกตรงนี้ตราบใดที่ phase ยังเป็นรอยืนยัน แล้วแค่เลิกเรียกทันทีที่ไม่ใช่ (ui.cpp จะสังเกตเห็นเอง
-    //      และออกจากหน้าจอนี้ให้ ดู uiUpdateMain) uiTarget มีค่า pendingTargetReps ของคอนโทรลเลอร์อยู่แล้ว
-    //      ตอน phase == รอยืนยัน (ดู target() ใน session.h) ซึ่งตรงกับสิ่งที่ uiShowConfirm ใช้เป็น
-    //      ค่าตั้งต้น/ค่าสะท้อนกลับพอดี
-    if (uiPhase == Phase::Confirm) uiShowConfirm(uiTarget, gLast);
+    //      เรียกตรงนี้ตราบใดที่ phase ยังเป็นรอยืนยันและลิงก์ยังเชื่อมอยู่ แล้วเลิกเรียกทันทีที่ข้อใดข้อหนึ่ง
+    //      ไม่จริงแล้ว (ui.cpp จะสังเกตเห็นเองและออกจากหน้าจอนี้ให้ ดู uiUpdateMain) ครึ่งหนึ่งของเงื่อนไข
+    //      gLinkUp มีความหมายในตัวเอง: uiPhase เปลี่ยนค่าได้แค่ใน onLinkState() เท่านั้น สายที่หลุดจึงทำให้
+    //      ค่านี้ค้างที่รอยืนยันตลอดไป ถ้าไม่ตรวจตรงนี้ก็จะเรียก uiShowConfirm ทุกรอบต่อไปไม่ว่าลิงก์จะเป็นอย่างไร
+    //      เงื่อนไขออกจากหน้าของ uiUpdateMain เองไม่กี่บรรทัดก่อนหน้านี้จะทำงานในรอบเดียวกับที่ gLinkUp
+    //      เพิ่งเป็นเท็จพอดี แล้วโหลด scrMain แต่บรรทัดนี้จะเปิด scrConfirm กลับทันทีตามหลัง เพราะการที่หน้าจอ
+    //      นี้ไม่ active อีกแล้วคือสิ่งที่ uiShowConfirm อ่านว่า "เพิ่งเข้าสถานะรอยืนยัน" พอดี uiTarget มีค่า
+    //      pendingTargetReps ของคอนโทรลเลอร์อยู่แล้วตอน phase == รอยืนยัน (ดู target() ใน session.h)
+    //      ซึ่งตรงกับสิ่งที่ uiShowConfirm ใช้เป็นค่าตั้งต้น/ค่าสะท้อนกลับพอดี
+    if (uiPhase == Phase::Confirm && gLinkUp) uiShowConfirm(uiTarget, gLast, gLinkUp);
   }
   if (now - lastPing >= 1000) {  // keep the controller's UART watchdog fed — ส่ง ping เลี้ยงตัวเฝ้าระวังของคอนโทรลเลอร์
     lastPing = now;

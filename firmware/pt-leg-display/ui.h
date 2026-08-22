@@ -48,9 +48,22 @@ void uiSetTargetChanged(void (*cb)(uint16_t));
 // off the phase directly, not `running` -- Confirm is deliberately excluded
 // from running() on the controller (session.h there), so uiUpdateMain's own
 // running-based screen switch never reaches this screen on its own. The
-// sketch has to call this instead, every tick where phase == Phase::Confirm,
-// and simply stop calling it once phase leaves Confirm; ui.cpp notices that
-// and returns to the main screen on its own (see uiUpdateMain).
+// sketch has to call this instead, every tick where phase == Phase::Confirm
+// AND the link is up, and simply stop calling it the moment either stops
+// being true; ui.cpp notices that and returns to the main screen on its own
+// (see uiUpdateMain).
+//
+// linkUp follows the same rule this file already states for uiUpdateMain
+// above: false means no recent UART traffic, and this screen must not go on
+// presenting stale state as live. A confirmation cannot silently expire
+// without a message telling the display so -- the controller's own 30 s
+// timeout is invisible here unless a fresh state message reports it -- so a
+// dead link would otherwise strand the operator on a frozen confirm screen
+// with a ตกลง button that looks live but cannot reach the controller. Passed
+// through mainly so this function can defend itself (belt and braces) if it
+// is ever called with the link down; the sketch is expected to stop calling
+// it and let uiUpdateMain's own linkUp-gated leave take the screen back to
+// scrMain, which already renders "ไม่พบตัวควบคุม".
 //
 // controllerTarget is target() as echoed back over the state message -- while
 // Confirm, that is pendingTargetReps, not the stored prescription (session.h's
@@ -60,17 +73,30 @@ void uiSetTargetChanged(void (*cb)(uint16_t));
 // the on-screen number exactly once -- the first call after the screen was
 // not already the active one, i.e. the transition into Confirm -- and every
 // later call while it stays active instead compares the same argument against
-// the number already on screen, showing a persistent disagreement as
-// unconfirmed rather than either silently accepting it or resending. Seeding
-// on every call would stomp an in-flight local edit with an echo of the value
-// from up to 250 ms (plus a UART round trip) earlier -- exactly the round-trip
-// wait that makes the main screen's own target stepper feel dead when the
-// link is down (see targetStep() in ui.cpp). See ui.cpp for the rest.
+// the number already on screen, showing a disagreement that outlives a short
+// grace window as unconfirmed rather than either silently accepting it or
+// resending. A single tick's disagreement is expected, not a defect: the
+// controller emits state on its own fixed cadence, not on receipt of "sets",
+// so an edit's echo and this function's next call race independently and
+// disagree for up to one tick on ordinary, healthy taps -- see ui.cpp for the
+// grace window this reserves for that race before calling it unconfirmed for
+// real. Seeding on every call, rather than once, would separately stomp an
+// in-flight local edit with an echo of the value from up to 250 ms (plus a
+// UART round trip) earlier -- exactly the round-trip wait that makes the main
+// screen's own target stepper feel dead when the link is down (see
+// targetStep() in ui.cpp). See ui.cpp for the rest.
 // [TH] หน้าจอยืนยัน แสดงเมื่อคอนโทรลเลอร์อยู่สถานะรอยืนยัน ขับด้วยสถานะโดยตรง ไม่ใช่ตัวแปร running
 //      เพราะสถานะรอยืนยันถูกกันออกจาก running() โดยตั้งใจฝั่งคอนโทรลเลอร์ (ดู session.h ที่นั่น)
 //      ตรรกะสลับหน้าจอที่อิงกับ running ของ uiUpdateMain จึงไม่มีวันมาถึงหน้านี้เอง สเก็ตช์หลักต้องเรียก
-//      ฟังก์ชันนี้แทน ทุกรอบที่ phase == Phase::Confirm แล้วแค่เลิกเรียกทันทีที่ไม่ใช่ ui.cpp จะสังเกตเห็น
-//      เองและกลับไปหน้าหลักให้ (ดู uiUpdateMain)
+//      ฟังก์ชันนี้แทน ทุกรอบที่ phase == Phase::Confirm และลิงก์ยังเชื่อมอยู่ แล้วเลิกเรียกทันทีที่ข้อใดข้อหนึ่ง
+//      ไม่จริงแล้ว ui.cpp จะสังเกตเห็นเองและกลับไปหน้าหลักให้ (ดู uiUpdateMain)
+//
+//      linkUp ใช้กติกาเดียวกับที่ไฟล์นี้กำหนดไว้ให้ uiUpdateMain ด้านบนแล้ว: false แปลว่าไม่มีข้อมูลจาก UART
+//      เข้ามาเมื่อเร็วๆ นี้ และหน้าจอนี้ต้องไม่แสดงสถานะเก่าต่อไปราวกับว่ายังสด การหมดเวลายืนยันของคอนโทรลเลอร์
+//      เองก็มองไม่เห็นตรงนี้ถ้าไม่มีข้อความสถานะใหม่มารายงาน สายที่หลุดจึงอาจขังผู้ใช้ไว้บนหน้ายืนยันที่ค้างนิ่ง
+//      พร้อมปุ่มตกลงที่ดูใช้งานได้แต่ไปไม่ถึงคอนโทรลเลอร์จริง ส่งค่านี้เข้ามาหลักๆ เพื่อให้ฟังก์ชันนี้ป้องกันตัวเองได้
+//      (กันพลาดสองชั้น) ถ้าถูกเรียกตอนลิงก์หลุดจริงๆ ตามปกติสเก็ตช์จะเลิกเรียกฟังก์ชันนี้ แล้วปล่อยให้เงื่อนไข
+//      ออกจากหน้านี้ของ uiUpdateMain ที่กันด้วย linkUp เช่นกัน พาไปหน้าหลักซึ่งแสดง "ไม่พบตัวควบคุม" อยู่แล้ว
 //
 //      controllerTarget คือค่า target() ที่สะท้อนกลับมาทางข้อความสถานะ ขณะอยู่สถานะรอยืนยันคือ
 //      pendingTargetReps ไม่ใช่ค่าที่แพทย์สั่ง (ดู target() ใน session.h) และเป็นหลักฐานเดียวที่หน้าจอนี้มี
@@ -78,11 +104,14 @@ void uiSetTargetChanged(void (*cb)(uint16_t));
 //      ไม่มีการยืนยันรับบนสายนี้ (link.cpp) ค่านี้จะถูกใช้ตั้งต้นตัวเลขบนจอครั้งเดียวเท่านั้น คือการเรียกครั้งแรก
 //      หลังจากที่หน้าจอนี้ยังไม่ใช่หน้าที่กำลังแสดงอยู่ (นั่นคือจังหวะเพิ่งเข้าสถานะรอยืนยัน) ส่วนการเรียกครั้งถัดไป
 //      ขณะที่ยังแสดงอยู่จะนำอาร์กิวเมนต์เดียวกันนี้ไปเทียบกับตัวเลขที่แสดงอยู่แล้วแทน แสดงความไม่ตรงกันที่ค้างอยู่
-//      เป็นสถานะยังไม่ยืนยัน แทนที่จะยอมรับเงียบๆ หรือส่งซ้ำเอง ถ้าตั้งต้นทุกครั้งที่เรียกแทน จะทับการแก้ไขที่
-//      ยังค้างอยู่ด้วยค่าสะท้อนกลับที่เก่ากว่าได้ถึง 250 มิลลิวินาที (บวกเวลาไปกลับของสาย UART) ซึ่งคือการรอ
-//      รอบเดินทางกลับแบบเดียวกับที่ทำให้ปุ่มปรับค่าเป้าหมายบนหน้าหลักรู้สึกเหมือนกดไม่ติดตอนลิงก์หลุด
+//      เกินช่วงผ่อนผันสั้นๆ เป็นสถานะยังไม่ยืนยัน แทนที่จะยอมรับเงียบๆ หรือส่งซ้ำเอง ความไม่ตรงกันแค่หนึ่งรอบ
+//      ไม่ใช่ข้อผิดพลาด เพราะคอนโทรลเลอร์ส่งสถานะตามจังหวะของตัวเองเสมอ ไม่ใช่ตอนได้รับ "sets" ค่าที่สะท้อนกลับ
+//      ของการแก้ไขกับการเรียกครั้งถัดไปของฟังก์ชันนี้จึงแข่งกันเป็นอิสระ และไม่ตรงกันได้นานถึงหนึ่งรอบแม้ลิงก์ปกติดี
+//      ดู ui.cpp ว่าช่วงผ่อนผันนี้ยาวแค่ไหนก่อนจะถือว่าไม่ยืนยันจริง ถ้าตั้งต้นทุกครั้งที่เรียกแทนการตั้งต้นครั้งเดียว
+//      จะทับการแก้ไขที่ยังค้างอยู่ด้วยค่าสะท้อนกลับที่เก่ากว่าได้ถึง 250 มิลลิวินาที (บวกเวลาไปกลับของสาย UART)
+//      ซึ่งคือการรอรอบเดินทางกลับแบบเดียวกับที่ทำให้ปุ่มปรับค่าเป้าหมายบนหน้าหลักรู้สึกเหมือนกดไม่ติดตอนลิงก์หลุด
 //      (ดู targetStep() ใน ui.cpp) ที่เหลือดูใน ui.cpp
-void uiShowConfirm(uint16_t controllerTarget, const DeviceSettings& s);
+void uiShowConfirm(uint16_t controllerTarget, const DeviceSettings& s, bool linkUp);
 // ปุ่ม -/+ (onSets ส่ง sendSets) และ ตกลง/ยกเลิก (onConfirm ส่ง sendConfirm: true=ตกลง, false=ยกเลิก)
 void uiSetConfirmCallbacks(void (*onSets)(uint16_t), void (*onConfirm)(bool));
 
