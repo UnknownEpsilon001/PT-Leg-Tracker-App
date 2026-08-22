@@ -557,7 +557,20 @@ have missed Task 2's change). If it passes something else, make it use
 
 - [ ] **Step 2: Name the phase on the display**
 
-In `ui.cpp`'s `phaseName()`, add a case returning `"ยืนยัน"` for `Phase::Confirm`. Check the glyphs against the generated font before assuming they render.
+In `ui.cpp`'s `phaseName()`, add a case returning `"รอยืนยัน"` for
+`Phase::Confirm`. Check the glyphs against the generated font before assuming
+they render.
+
+**Corrected 2026-08-19.** This originally said `"ยืนยัน"`, which was a plan
+defect, not an implementation one. Every sibling label in that switch is a
+state — `กำลังยก`, `ค้าง`, `กำลังลง`, `พัก`, `กำลังหยุด`, `ระบบขัดข้อง`, `พร้อม` — so a bare
+imperative "confirm" is the only entry reading as a command, and it sits next
+to the actual confirm and cancel buttons where it can be mistaken for a third
+one. The controller's own code already calls this phase `รอยืนยัน` in 30+
+places across `session.{h,cpp}`, `pt-leg-controller.ino` and both `link.cpp`
+copies — including a comment describing this very label. The `รอ` glyphs are
+already in the font subset (they appear 38 times in `ui.cpp`), so nothing about
+the original wording was forced.
 
 - [ ] **Step 3: Compile both sketches**
 
