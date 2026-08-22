@@ -155,3 +155,28 @@ Task 7: Important 1 — link-down strands the screen. uiPhase holds the last rec
 Task 7: Important 2 — the unconfirmed warning fires on ~half of healthy taps. The controller emits state on a fixed 250 ms cadence, NOT on receipt of sets, so a single-tick disagreement is normal; the spec asked for a PERSISTENT mismatch. Worse, the label toggles via LV_OBJ_FLAG_HIDDEN and LVGL flex drops hidden children and their row gap, reflowing the column ~22 px and moving the ตกลง/ยกเลิก row under the operator's finger on half of all taps. Reviewer also computed the column may clip in the shown state.
 Task 7: Ruling: fix both Importants and fold in Minors 3, 4, 5, 6, 7, 9 — all are in files already open and cheap. PROMOTING Minor 6 to required: gLast initialises to {8,4,4,10,10,10}, which is not just placeholder but the OLD 4/4 stroke defaults, so a START within ~3 s of display boot renders fabricated AND wrong seconds on the one screen whose entire job is stating what will run. Cost if wrong: a slightly larger fix diff on a task already approved on its constraints.
 Task 7 -> carry: Minor 8, session.h:213's Thai comment promises the display resends on a mismatched echo. It deliberately does not (the resend timer was rejected). Controller file, correctly untouched here — reconcile in whichever task next opens session.h, or a reader will hunt for a resend that does not exist.
+
+Task 7: fix round 1/5 (2 Important + 6 Minor addressed, 0 open; commits 549cc20..0b23223). Link-down exit gated on BOTH ui.cpp:502 and .ino:379 with the leave-check ordered before re-entry, plus a self-guard in uiShowConfirm. Mismatch fixed on both halves: label never HIDDEN-toggled (no reflow) and text gated on a 750 ms grace window. Re-reviewer traced the lost-frame case and confirmed the debounce DELAYS a genuine loss rather than suppressing it.
+Task 7: complete (commits 81bf88d..0b23223, 1 fix round, review clean)
+Task 7: deferred minor (report accuracy, not code): the implementer's glyph-width citation for the ไม่จำกัด row swapped ไ and ำ's advance widths and wrongly called ำ a zero-advance combining mark. Re-reviewer decoded font_th_28.c's cmap and glyph_dsc[] directly: ไ adv_w=135 (8.4 px), ำ adv_w=197 (12.3 px). Row still fits — 192.8 px content in a 200 px row — but the true margin is ~7 px, roughly a third of the ~16 px claimed.
+Task 12 CARRY (new, concrete): the ไม่จำกัด stepper row has only ~7 px of horizontal slack. The UI_TEST_HOOK screenshot check must explicitly capture the confirm screen with the target stepped to 0, not just a normal value — that is the widest text the row ever renders and the only state where clipping would show.
+
+## PAUSED 2026-08-19 (fourth pause) — resume here
+
+Stopped at the user's request. Tree clean apart from this file. No agent running. Task 8's implementer was stopped while still READING code — it made no edits, so there is no partial work to inherit; re-dispatch it from scratch.
+
+RESUME, exactly:
+  1. If the worktree is gone (it has vanished three times): git worktree add .claude/worktrees/start-confirmation feature/start-confirmation, then
+     cp docs/superpowers/plans/2026-08-17-start-confirmation-decisions.md .superpowers/sdd/2026-08-17-start-confirmation/progress.md
+  2. task-brief <plan> 8, then dispatch the Task 8 implementer (sonnet).
+  3. Then Tasks 9-12.
+
+Task 8 dispatch must carry (the brief does not know these):
+  - Phase::Confirm is ordinal 7. Full order: 0 Idle, 1 Lift, 2 Hold, 3 Lower, 4 Rest, 5 SafeLower, 6 Fault, 7 Confirm.
+  - Messages: {"t":"sets","reps":N} and {"t":"confirm","ok":true|false}.
+  - The controller reports target as the PENDING value during Confirm; fake-controller.ps1 must echo an inbound sets back as target in later state frames, or the display's mismatch warning fires.
+  - Confirmation expires after 30 s. Panel START opens Confirm only when the link is up; link down starts immediately. STOP cancels; a second START commits. Nothing energizes a relay in Confirm.
+  - Step 1 of the checklist must verify NO RELAY CLICK, not just the phase string — a phase-only match passes on a machine that entered Confirm and started moving anyway.
+  - -DryRun replays a canned transcript: it proves the checklist patterns match the output FORMAT, never that the firmware behaves correctly. Do not let the report claim otherwise (an earlier task's report did).
+  - Do not round-trip these files through PS 5.1 Get-Content/Set-Content: they contain Thai and it double-encodes and adds a BOM.
+  - firmware/tools/ only; no firmware source.
