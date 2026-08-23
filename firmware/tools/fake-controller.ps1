@@ -129,9 +129,24 @@ function Send-Done([bool]$isFault) {
 # 's' key) once phase=7. $via only labels which one it was, for the log line;
 # $script: prefixes are needed here (unlike the rest of this file) because
 # this runs inside a function's own scope, not inline in the main loop.
+# Bench caveat, and it points the wrong way: this simulator keeps ONE target
+# variable where the controller keeps two -- cfg.targetReps, the stored
+# prescription, and sessionTargetReps, this session only -- and a real confirm
+# writes only the second. Committing here assigns $script:target, so the
+# simulator's stored target DOES move on confirm and keeps the confirmed number
+# after the session ends. The session-only scoping therefore cannot be
+# demonstrated against this script; checking it here answers the opposite of the
+# truth. Verify it on real hardware instead: set the default to 10, confirm 12,
+# run, and read the settings screen back.
 # [TH] ใช้ร่วมกันระหว่างสองทางที่ยืนยันหน้ารอยืนยันได้ คือข้อความ confirm ok:true ที่มาทางลิงก์ และการกดปุ่ม
 #      START บนหน้าปัดเอง (ปุ่ม s) เมื่ออยู่ phase=7 $via ใช้แค่บอกที่มาของการยืนยันในบรรทัด log ต้องใส่
 #      $script: นำหน้า (ต่างจากส่วนอื่นของไฟล์นี้) เพราะโค้ดนี้ทำงานในสโคปของฟังก์ชันเอง ไม่ใช่แบบแทรกตรงในลูปหลัก
+# [TH] ข้อควรระวังบนโต๊ะทดสอบ และมันชี้ไปคนละทางกับความจริง สคริปต์จำลองนี้มีตัวแปรเป้าหมายตัวเดียว
+#      ขณะที่คอนโทรลเลอร์จริงมีสองตัว คือ cfg.targetReps ค่าที่แพทย์สั่ง กับ sessionTargetReps
+#      ค่าเฉพาะรอบนี้ และการยืนยันจริงเขียนแค่ตัวหลังเท่านั้น การยืนยันตรงนี้เขียน $script:target
+#      เป้าหมายที่เก็บไว้ของสคริปต์จำลองจึงขยับตามการยืนยันจริงๆ และค้างค่าที่ยืนยันไว้หลังรอบจบด้วย
+#      เรื่องขอบเขตเฉพาะรอบจึงพิสูจน์กับสคริปต์นี้ไม่ได้ ถ้าไปตรวจกับที่นี่จะได้คำตอบตรงข้ามกับความจริง
+#      ให้ตรวจกับฮาร์ดแวร์จริงแทน ตั้งค่าเริ่มต้นเป็น 10 ยืนยัน 12 เดินรอบ แล้วกลับไปอ่านหน้าตั้งค่า
 function Commit-Confirm([string]$via) {
     $script:running = $true; $script:phase = 1; $script:phaseLeft = $LiftSec
     $script:reps = 0; $script:sessionStart = Get-Date; $script:target = $script:pendingReps

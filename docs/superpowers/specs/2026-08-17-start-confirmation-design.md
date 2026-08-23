@@ -248,8 +248,24 @@ which makes the scoping rule fall out with no protocol change:
 
 ## Server
 
-No change. `queue_start(target_reps)` already calls `set_desired_target()` before
-queuing the command, so the device sees both in one poll response.
+No change for this feature. `queue_start(target_reps)` already calls
+`set_desired_target()` before queuing the command, so the device sees both in
+one poll response.
+
+**Follow-up, recorded not implemented.** That shared slot is also the root cause
+of a defect this feature had to defend against on the controller.
+`queue_start()` writes the start-carried target into the same `_desired_target`
+slot the `/target` route uses, and `fetch_desired_target()` is not
+consume-on-read -- it keeps serving that value until the device heartbeat echoes
+it back, or `COMMAND_TTL_SEC` expires. Any command poll landing in that window,
+and every poll after a start the controller refused, delivers a session-only
+number with `cmd != "start"`, which is indistinguishable on the wire from a
+`/target` prescription edit. That is why the controller carries the
+`startCarried`/`startCarriedAt` latch. The durable fix is server-side: a
+separate slot consumed with the command in `fetch_command()`, which would make
+the controller's latch redundant. Out of scope here because deployed servers
+exist and the controller-side fix is needed regardless. See the decision log,
+Task 5.
 
 ## Testing
 

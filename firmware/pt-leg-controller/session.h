@@ -31,10 +31,12 @@ struct CycleCfg {
 };
 
 // How long a confirmation waits for a human before giving up. Nothing is
-// committed while it waits, so expiry is always safe — it returns to Idle
+// committed while it waits, so expiry is always safe — it returns to wherever
+// the confirmation was opened from (Idle, or a Fault that is still latched)
 // rather than starting.
 // [TH] เวลาที่หน้ายืนยันจะรอคนกดก่อนเลิกรอ ระหว่างรอยังไม่มีอะไรถูกยืนยัน
-//      การหมดเวลาจึงปลอดภัยเสมอ คือกลับไปสถานะว่าง ไม่ใช่เริ่มทำงาน
+//      การหมดเวลาจึงปลอดภัยเสมอ คือกลับไปยังสถานะที่เปิดหน้ายืนยันมา
+//      (ว่าง หรือสถานะผิดพลาดที่ยังค้างอยู่) ไม่ใช่เริ่มทำงาน
 static const uint32_t CONFIRM_TIMEOUT_MS = 30000;
 
 class SessionSM {
@@ -49,6 +51,10 @@ class SessionSM {
   // existing recovery route. Confirming from Fault still gets the mandatory
   // lower-before-lift recovery at the real start -- see the legPositionUnknown
   // line below for how that survives the Fault -> Confirm -> Lift detour.
+  // A confirmation opened from Fault also REMEMBERS that it was
+  // (confirmFromFault below): leaving the phase is not the same as recovering
+  // -- the fault is only postponed behind a question -- and a question nobody
+  // answers must not retire it. See cancelConfirm().
   // The pending target seeds from the stored default, which is the
   // prescription; editing it on the confirm screen changes only this session.
   // [TH] ว่าง/ผิดพลาด -> รอยืนยัน ยังไม่ผูกมัดอะไรทั้งสิ้น ไม่แตะชุดขับเคลื่อนและรีเลย์ดับทั้งคู่
@@ -59,6 +65,9 @@ class SessionSM {
   //      ยังคงได้รับการลดขาก่อนเสมอตอนเริ่มจริง ดูบรรทัด legPositionUnknown ด้านล่างว่าทำไมเรื่องนี้
   //      ถึงยังเป็นจริงแม้จะอ้อมผ่านสถานะรอยืนยันก่อนไปถึงสถานะยกขา ค่าเป้าหมายที่รอยืนยันเริ่มจากค่าตั้งต้น
   //      ที่บันทึกไว้ ซึ่งเป็นค่าที่แพทย์สั่ง การแก้ที่หน้ายืนยันมีผลเฉพาะรอบนี้เท่านั้น
+  //      การยืนยันที่เปิดมาจากสถานะผิดพลาดยังจำที่มานั้นไว้ด้วย (confirmFromFault ด้านล่าง)
+  //      การออกจากสถานะไม่เท่ากับการกู้สถานการณ์ ความผิดพลาดแค่ถูกพักไว้หลังคำถามเท่านั้น
+  //      และคำถามที่ไม่มีใครตอบต้องไม่ทำให้ความผิดพลาดนั้นหายไป ดู cancelConfirm()
   void requestStart(uint32_t nowMs);
 
   // Mirrors what the operator is looking at on the display. Ignored outside
@@ -86,15 +95,35 @@ class SessionSM {
   //      ดู sessionTargetReps และ target() ว่าค่านี้ไปป้อนอะไรจริงๆ
   void confirmStart(uint32_t nowMs);
 
-  // Confirm -> Idle, discarding the pending target. requestStart() and
-  // setPendingTarget() never committed anything to cfg.targetReps or
-  // sessionTargetReps, so there is nothing else to undo -- including when
-  // Confirm was entered from Fault: legPositionUnknown, set by requestStart()
-  // in that case, is untouched here and stays armed for the next start.
-  // [TH] รอยืนยัน -> ว่าง ทิ้งค่าเป้าหมายที่รอยืนยัน เพราะ requestStart() กับ setPendingTarget()
-  //      ไม่เคยผูกมัดอะไรไว้กับ cfg.targetReps หรือ sessionTargetReps เลย จึงไม่มีอะไรอื่นต้องย้อนคืน
-  //      รวมถึงตอนที่เข้าสถานะรอยืนยันมาจากสถานะผิดพลาดด้วย: legPositionUnknown ที่ requestStart()
-  //      ตั้งไว้ในกรณีนั้นจะไม่ถูกแตะตรงนี้ และยังคงพร้อมทำงานสำหรับการเริ่มครั้งถัดไป
+  // Confirm -> back to wherever the confirmation came from, discarding the
+  // pending target: Idle for one opened from Idle, Fault for one opened from a
+  // latched Fault. requestStart() and setPendingTarget() never committed
+  // anything to cfg.targetReps or sessionTargetReps, so there is nothing else
+  // to undo, and legPositionUnknown -- set by requestStart() in the Fault case
+  // -- is untouched either way and stays armed for the next start.
+  //
+  // The Fault landing is not symmetry for its own sake. A fault must not be
+  // retired by a confirmation nobody answered: dropped in Idle instead, the
+  // panel would read "ready" with the leg possibly still raised, and the STOP
+  // an operator then reaches for would land in requestStop()'s Idle case,
+  // which clears the rep count and moves nothing -- leaving another session
+  // as the leg's only way down. Coming back to Fault keeps the route
+  // firmware/README.md names "a fault does not trap the leg" open, and keeps
+  // the CYD, which reads the phase, saying what the lamps say. tick()'s 30 s
+  // expiry lands the same way, for the same reason.
+  // [TH] รอยืนยัน -> กลับไปยังสถานะที่เปิดการยืนยันมา ทิ้งค่าเป้าหมายที่รอยืนยัน
+  //      ถ้าเปิดมาจากสถานะว่างก็กลับไปว่าง ถ้าเปิดมาจากสถานะผิดพลาดที่ค้างอยู่ก็กลับไปผิดพลาด
+  //      requestStart() กับ setPendingTarget() ไม่เคยผูกมัดอะไรไว้กับ cfg.targetReps หรือ
+  //      sessionTargetReps เลย จึงไม่มีอะไรอื่นต้องย้อนคืน ส่วน legPositionUnknown ที่ requestStart()
+  //      ตั้งไว้ในกรณีผิดพลาดจะไม่ถูกแตะตรงนี้ทั้งสองทาง และยังคงพร้อมทำงานสำหรับการเริ่มครั้งถัดไป
+  //
+  //      การกลับไปสถานะผิดพลาดไม่ได้ทำเพื่อความสมมาตรเฉยๆ ความผิดพลาดต้องไม่ถูกยกเลิกด้วยการยืนยัน
+  //      ที่ไม่มีใครตอบ ถ้าปล่อยให้ไปจบที่สถานะว่าง หน้าปัดจะอ่านได้ว่า "พร้อมใช้งาน" ทั้งที่ขาอาจยังยกอยู่
+  //      และปุ่ม STOP ที่ผู้ใช้เอื้อมไปกดจะไปตกที่สาขาสถานะว่างของ requestStop() ซึ่งล้างจำนวนครั้ง
+  //      แต่ไม่ขยับอะไรเลย ทางเดียวที่ขาจะลงได้จึงกลายเป็นการเริ่มรอบใหม่
+  //      การกลับไปสถานะผิดพลาดทำให้เส้นทางที่ firmware/README.md เรียกว่า "ความผิดพลาดไม่ขังขาไว้"
+  //      ยังใช้ได้ และทำให้จอ CYD ซึ่งอ่านจากสถานะ พูดตรงกับไฟหน้าปัด
+  //      การหมดเวลา 30 วินาทีใน tick() ก็ไปจบแบบเดียวกันด้วยเหตุผลเดียวกัน
   void cancelConfirm(uint32_t nowMs);
   uint16_t pendingTarget() const { return pendingTargetReps; }
   bool confirming() const { return ph == Phase::Confirm; }
@@ -198,9 +227,12 @@ class SessionSM {
   // edit down to this board is a bare emit() with no id, ack or CRC on this
   // branch (see link.cpp) -- the display's only way to know an edit actually
   // arrived is to watch this field echo the same number back over the state
-  // message, and to resend while it does not. Reporting cfg.targetReps here
-  // instead, the way Idle does, would make every confirm-screen edit look
-  // silently dropped forever, since it could never match. Feeds the "target"
+  // message; a disagreement that outlives the display's grace window is shown
+  // there as unconfirmed (ui.cpp), not resent -- there is deliberately no
+  // resend timer, since feature/link-crc-ack adds retransmit under every
+  // sender. Reporting cfg.targetReps here instead, the way Idle does, would
+  // make every confirm-screen edit look silently dropped forever, since it
+  // could never match. Feeds the "target"
   // field of the heartbeat and the link state message -- see
   // firmware/link-protocol.md's "a session ends by itself when reps reaches
   // target", which is only true on the wire if this reports the same number
@@ -210,7 +242,9 @@ class SessionSM {
   //      ส่วนสถานะรอยืนยันไม่ใช่ทั้งสองอย่างนั้น จะรายงาน pendingTargetReps ซึ่งเป็นค่าที่ผู้ใช้กำลังแก้อยู่บนหน้าจอ
   //      ไม่ใช่ cfg.targetReps ข้อความ "sets" ที่ส่งค่าที่แก้ลงมาที่บอร์ดนี้เป็นแค่ emit() เปล่าๆ ไม่มี id
   //      ไม่มี ack ไม่มี CRC บนสายนี้ (ดู link.cpp) ทางเดียวที่จอจะรู้ว่าค่าที่แก้ไปถึงจริงหรือไม่
-  //      คือดูฟิลด์นี้ว่าสะท้อนตัวเลขเดียวกันกลับมาทางข้อความสถานะหรือไม่ แล้วส่งซ้ำถ้ายังไม่ตรง
+  //      คือดูฟิลด์นี้ว่าสะท้อนตัวเลขเดียวกันกลับมาทางข้อความสถานะหรือไม่ ถ้าไม่ตรงกันนานเกินช่วงผ่อนผัน
+  //      ของจอ จอจะแสดงว่ายังไม่ยืนยัน (ui.cpp) ไม่ได้ส่งซ้ำ จงใจไม่มีตัวจับเวลาส่งซ้ำ
+  //      เพราะ feature/link-crc-ack จะเพิ่มการส่งซ้ำให้ผู้ส่งทุกตัวอยู่แล้ว
   //      ถ้ารายงาน cfg.targetReps แทนเหมือนตอนว่าง การแก้ทุกครั้งบนหน้ายืนยันจะดูเหมือนหลุดหายตลอดไป
   //      เพราะไม่มีทางตรงกันได้เลย ค่านี้ใช้ป้อนฟิลด์ "target" ในสัญญาณชีพและข้อความสถานะ
   //      ดู firmware/link-protocol.md ที่ว่า "รอบจบเองเมื่อ reps ถึง target" ซึ่งจะเป็นจริงบนสายจริง
@@ -234,6 +268,21 @@ class SessionSM {
     return ph != Phase::Idle && ph != Phase::Fault && ph != Phase::Confirm;
   }
   bool faulted() const { return ph == Phase::Fault; }
+  // faulted(), plus the confirmation window opened out of one. For that window
+  // the phase reads Confirm, but nothing has been recovered -- the leg is
+  // exactly as unverified as it was -- so the panel must go on saying so
+  // rather than dropping to the ordinary idle pattern for 30 s. This answers
+  // the lamps' question ("is a fault still standing"), not the wire's: the
+  // link and the heartbeat still carry the real phase, and a finished session
+  // is still reported with finalFaulted().
+  // [TH] เหมือน faulted() แต่รวมช่วงหน้ายืนยันที่เปิดมาจากสถานะผิดพลาดด้วย
+  //      ช่วงนั้นสถานะจะอ่านได้ว่ารอยืนยัน แต่ยังไม่มีอะไรถูกกู้คืนเลย ขายังไม่ทราบตำแหน่งเท่าเดิม
+  //      หน้าปัดจึงต้องบอกแบบนั้นต่อไป ไม่ใช่ตกไปเป็นรูปแบบไฟว่างตามปกติเป็นเวลา 30 วินาที
+  //      นี่คือคำตอบสำหรับไฟหน้าปัด ("ยังมีความผิดพลาดค้างอยู่ไหม") ไม่ใช่สำหรับสายสื่อสาร
+  //      ลิงก์และสัญญาณชีพยังส่งสถานะจริงตามเดิม และรอบที่จบแล้วยังรายงานด้วย finalFaulted()
+  bool faultPending() const {
+    return ph == Phase::Fault || (ph == Phase::Confirm && confirmFromFault);
+  }
   Phase phase() const { return ph; }
   uint32_t elapsedSec(uint32_t nowMs) const;
   uint16_t reps() const { return repCount; }
@@ -279,6 +328,28 @@ class SessionSM {
   //      และถูกคัดลอกไปยัง sessionTargetReps โดย confirmStart() ก็ต่อเมื่อผู้ใช้กดยืนยันจริงเท่านั้น
   //      ดู setPendingTarget()
   uint16_t pendingTargetReps = 0;
+  // The confirmation now open was entered from a latched Fault, not from Idle.
+  // requestStart() accepts both origins, so once the phase reads Confirm it can
+  // no longer tell them apart on its own -- and the two must not end the same
+  // way. cancelConfirm() and tick()'s expiry read this to decide where an
+  // abandoned confirmation lands, so that a fault is never retired by a
+  // confirmation nobody answered: an operator who presses START in a fault and
+  // then walks away has to come back to the same latched fault, not to a
+  // machine reading "ready" with the leg still up. faultPending() reads it so
+  // the panel says the same thing for the whole window. Set by requestStart(),
+  // cleared by confirmStart() (the recovery lowering is genuinely running by
+  // then) and by enter() on any arrival at Idle, the one landing that means
+  // nothing is owed any more.
+  // [TH] การยืนยันที่เปิดอยู่ตอนนี้เข้ามาจากสถานะผิดพลาดที่ค้างอยู่ ไม่ใช่จากสถานะว่าง
+  //      requestStart() รับที่มาได้ทั้งสองแบบ พอสถานะอ่านได้ว่ารอยืนยันแล้วก็แยกสองที่มานั้นเองไม่ออกอีก
+  //      และทั้งสองที่มาต้องไม่จบเหมือนกัน cancelConfirm() กับการหมดเวลาใน tick() อ่านค่านี้
+  //      เพื่อตัดสินว่าการยืนยันที่ถูกทิ้งจะไปจบที่ไหน เพื่อไม่ให้ความผิดพลาดถูกยกเลิกด้วยการยืนยัน
+  //      ที่ไม่มีใครตอบ ผู้ใช้ที่กด START ตอนเครื่องผิดพลาดแล้วเดินจากไป ต้องกลับมาเจอความผิดพลาด
+  //      ที่ค้างอยู่เหมือนเดิม ไม่ใช่เครื่องที่อ่านได้ว่า "พร้อมใช้งาน" ทั้งที่ขายังยกอยู่
+  //      faultPending() ก็อ่านค่านี้ เพื่อให้หน้าปัดบอกแบบเดียวกันตลอดทั้งช่วง
+  //      ตั้งค่าโดย requestStart() ล้างโดย confirmStart() (ตอนนั้นการลดขากู้สถานการณ์กำลังทำงานจริงแล้ว)
+  //      และโดย enter() ทุกครั้งที่มาถึงสถานะว่าง ซึ่งเป็นจุดเดียวที่แปลว่าไม่มีอะไรค้างอยู่อีกแล้ว
+  bool confirmFromFault = false;
   // What the CURRENT (or most recently run/faulted) session actually counts
   // toward — see target()'s comment for the full contract. Defaulted to 0,
   // which is never observed: target() only reads this outside Idle/Confirm,

@@ -106,17 +106,6 @@ static bool gPendingSettings = false;
 static DeviceSettings gPending;
 static bool gTargetDirty = false;
 
-// Set when a confirmation opened from a latched Fault (requestStart() accepting
-// Fault, see session.h) is still owed the recovery lowering it was opened for --
-// i.e. Confirm was entered with faulted() true, and running() has not been true
-// since. Read and cleared only by the panel-lamp call in loop(); see there for
-// what it changes and why.
-// [TH] ตั้งเป็นจริงเมื่อการยืนยันที่เปิดมาจากสถานะผิดพลาดที่ค้างอยู่ (requestStart() ที่ยอมรับสถานะผิดพลาด
-//      ดู session.h) ยังค้างหนี้การลดขากู้สถานการณ์ที่มันถูกเปิดมาเพื่อสิ่งนั้นอยู่ คือเข้าสถานะรอยืนยันตอนที่
-//      faulted() เป็นจริง และยังไม่เคยเป็นจริง (running()) เลยตั้งแต่นั้น อ่านและล้างเฉพาะที่จุดเรียกไฟหน้าปัดใน
-//      loop() ดูที่นั่นว่าเปลี่ยนอะไรและทำไม
-static bool gFaultRecoveryPending = false;
-
 static void onLinkSettings(const LinkSettings& s) {
   DeviceSettings d;
   d.wifiSsid = s.ssid; d.wifiPass = s.pass; d.serverUrl = s.server;
@@ -493,18 +482,19 @@ void loop() {
     Serial.println("start refused: START reads pressed, check its wiring");
   else if (pressStart && gSession.confirming()) gSession.confirmStart(now);
   else if (pressStart && linkUp) {
-    // See gFaultRecoveryPending's declaration and the panel-lamp call below: a
-    // Confirm opened from Fault may be cancelled or expire without ever running
-    // the recovery it was opened for, and this is the one place that origin is
-    // still visible (faulted() is about to read false the instant
-    // requestStart() below moves ph off Fault).
-    // [TH] ดูจุดประกาศ gFaultRecoveryPending และจุดเรียกไฟหน้าปัดด้านล่าง สถานะรอยืนยันที่เปิดมาจากสถานะผิดพลาด
-    //      อาจถูกยกเลิกหรือหมดเวลาโดยไม่เคยลดขากู้สถานการณ์ตามที่เปิดมาเพื่อสิ่งนั้นเลย และนี่คือจุดเดียวที่ยังเห็น
-    //      ที่มานั้นได้ (faulted() กำลังจะอ่านได้เท็จทันทีที่ requestStart() ด้านล่างย้าย ph ออกจากสถานะผิดพลาด)
-    if (gSession.faulted()) {
-      gFaultRecoveryPending = true;
+    // Logged, not latched. SessionSM remembers this origin itself now
+    // (confirmFromFault, see session.h), so a confirmation opened here and
+    // then cancelled or left to expire comes back to Fault rather than to
+    // Idle -- the sketch has nothing left to mirror. The line is kept because
+    // this is the one detour where a fault stops being the live phase for up
+    // to 30 s, and a bench log that says so is worth a string.
+    // [TH] บันทึกลง log เฉยๆ ไม่ได้เก็บสถานะไว้เอง เพราะตอนนี้ SessionSM จำที่มานี้ได้เอง
+    //      (confirmFromFault ดู session.h) การยืนยันที่เปิดตรงนี้แล้วถูกยกเลิกหรือปล่อยให้หมดเวลา
+    //      จะกลับไปสถานะผิดพลาด ไม่ใช่สถานะว่าง สเก็ตช์จึงไม่มีอะไรต้องคอยสะท้อนอีก
+    //      ที่ยังเก็บบรรทัดนี้ไว้เพราะนี่คือทางอ้อมเดียวที่ความผิดพลาดหยุดเป็นสถานะปัจจุบันได้นานถึง 30 วินาที
+    //      และบันทึกบนโต๊ะทดสอบที่บอกเรื่องนี้ก็คุ้มกับข้อความหนึ่งบรรทัด
+    if (gSession.faulted())
       Serial.println("confirm: opened from FAULT, leg position stays unverified until this is confirmed");
-    }
     gSession.requestStart(now);
   } else if (pressStart) gSession.start(now);
   // STOP while the confirm screen is up cancels it without touching the rep
@@ -526,44 +516,42 @@ void loop() {
   // on the iterations where netLoop() later blocks on an unreachable server.
   // Two arguments now. running() is still "the actuator may move" — true for
   // Lift/Hold/Lower/Rest and for the safe-lower, false for Idle and for a
-  // latched Fault. faulted() is passed alongside it so a latched Fault lights
-  // both lamps instead of reading identically to ordinary Idle, which matters
-  // on a panel-only machine with no CYD to say which one it is.
+  // latched Fault. faultPending() is passed alongside it so a latched Fault —
+  // or the confirmation window opened out of one, where the phase reads
+  // Confirm but nothing has been recovered — lights both lamps instead of
+  // reading identically to ordinary Idle, which matters on a panel-only
+  // machine with no CYD to say which one it is.
   // [TH] วางไว้ต่อจากการสั่งรีเลย์และก่อนงานเครือข่าย
   //      หลอดจะได้ตรงกับคำสั่งชุดขับเคลื่อนที่ออกไปในลูปรอบเดียวกัน
   //      และยังถูกอัปเดตในรอบที่ netLoop() ไปค้างรอเซิร์ฟเวอร์ที่ติดต่อไม่ได้ด้วย
   //      ตอนนี้รับสองอาร์กิวเมนต์ running() ยังคงหมายถึง "ชุดขับเคลื่อนอาจเคลื่อนที่"
   //      เป็นจริงตอนยกขึ้น/ค้าง/ลดลง/พัก และตอนลดขาเพื่อหยุด เป็นเท็จตอนว่างและตอนค้างสถานะผิดพลาด
-  //      ส่วน faulted() ถูกส่งเข้าไปด้วยเพื่อให้สถานะผิดพลาดที่ค้างอยู่ติดไฟทั้งสองดวง
+  //      ส่วน faultPending() ถูกส่งเข้าไปด้วย เพื่อให้สถานะผิดพลาดที่ค้างอยู่ หรือช่วงหน้ายืนยัน
+  //      ที่เปิดมาจากมัน ซึ่งสถานะอ่านได้ว่ารอยืนยันแต่ยังไม่มีอะไรถูกกู้คืนเลย ติดไฟทั้งสองดวง
   //      แทนที่จะดูเหมือนสถานะว่างตามปกติ ซึ่งสำคัญบนเครื่องที่มีแค่หน้าปัดโดยไม่มีจอ CYD บอกว่าเป็นสถานะไหน
   //
-  // A latched Fault is not the only time the leg's position is unverified. START
-  // pressed while faulted opens Confirm rather than recovering immediately (see
-  // requestStart() in session.h), and if that confirmation is cancelled or left
-  // to expire, ph reaches Idle having never run the recovery lowering it was
-  // opened for -- the button dispatch above set gFaultRecoveryPending for
-  // exactly that case. legPositionUnknown still forces the lowering at the next
-  // real start regardless, so nothing here is a movement hazard either way; this
-  // is only about what the two lamps claim in the meantime. Folded into the
-  // fault argument rather than spent on a fourth lamp pattern: this panel has
-  // exactly three reachable states (panel_lamps.h) and no blink, and "both lit"
-  // already means precisely this -- session.h's own words are "the leg may be
-  // raised" -- whether the phase saying so is literally Fault or an
-  // escaped-Confirm Idle that has not yet proven otherwise. Cleared the line
-  // above the moment running() is next observed true, which given
-  // legPositionUnknown can only be the owed recovery itself starting.
-  // [TH] ไม่ใช่แค่สถานะผิดพลาดที่ค้างอยู่เท่านั้นที่ทำให้ไม่ทราบตำแหน่งขาแน่ชัด ปุ่ม START ที่กดตอนอยู่ในสถานะผิดพลาด
-  //      จะเปิดหน้ายืนยันแทนการกู้สถานการณ์ทันที (ดู requestStart() ใน session.h) ถ้าการยืนยันนั้นถูกยกเลิก
-  //      หรือปล่อยให้หมดเวลา สถานะจะกลับไปว่างโดยไม่เคยลดขากู้สถานการณ์ตามที่เปิดมาเพื่อสิ่งนั้นเลย
-  //      จุดจ่ายงานปุ่มด้านบนตั้ง gFaultRecoveryPending ไว้สำหรับกรณีนั้นโดยเฉพาะ legPositionUnknown
-  //      ยังคงบังคับให้ลดขาก่อนตอนเริ่มจริงครั้งถัดไปอยู่ดี จึงไม่ใช่อันตรายด้านการเคลื่อนที่ไม่ว่าทางใด
-  //      เรื่องนี้เกี่ยวกับสิ่งที่ไฟทั้งสองดวงอ้างระหว่างนั้นเท่านั้น รวมเข้ากับเงื่อนไขผิดพลาดแทนการเสียไฟรูปแบบที่สี่
-  //      เพราะหน้าปัดนี้มีสถานะที่เป็นไปได้แค่สามแบบ (panel_lamps.h) และไม่กะพริบ และ "ติดทั้งคู่" ก็มีความหมาย
-  //      ตรงนี้อยู่แล้ว คำพูดของ session.h เองคือ "ขาอาจยังยกอยู่" ไม่ว่าสถานะที่บอกแบบนั้นจะเป็นสถานะผิดพลาดจริงๆ
-  //      หรือสถานะว่างที่หนีออกจากหน้ายืนยันมาโดยยังไม่ได้พิสูจน์ว่าไม่ใช่ ล้างค่าที่บรรทัดด้านบนทันทีที่ running()
-  //      เป็นจริงครั้งถัดไป ซึ่งเมื่อมี legPositionUnknown อยู่แล้วจะเป็นได้แค่การกู้สถานการณ์ที่ค้างอยู่นั้นเริ่มทำงานเท่านั้น
-  if (gSession.running()) gFaultRecoveryPending = false;
-  panelLampsSet(gSession.running(), gSession.faulted() || gFaultRecoveryPending);
+  // A latched Fault is not the only time the leg's position is unverified, and
+  // faultPending() is what closes the gap this branch opens. START pressed
+  // while faulted opens Confirm rather than recovering immediately (see
+  // requestStart() in session.h), so for up to 30 s the phase is Confirm and
+  // faulted() reads false while nothing whatsoever has been recovered. If that
+  // confirmation is then cancelled or left to expire, SessionSM puts the
+  // machine back in Fault, so the lamps only need covering for the window
+  // itself -- there is no escaped-Confirm Idle to cover any more, which is why
+  // the sketch-side mirror this used to need is gone. Folded into the fault
+  // argument rather than spent on a fourth lamp pattern: this panel has exactly
+  // three reachable states (panel_lamps.h) and no blink, and "both lit" already
+  // means precisely this -- session.h's own words are "the leg may be raised".
+  // [TH] ไม่ใช่แค่สถานะผิดพลาดที่ค้างอยู่เท่านั้นที่ทำให้ไม่ทราบตำแหน่งขาแน่ชัด และ faultPending()
+  //      คือสิ่งที่ปิดช่องว่างที่สาขานี้เปิดขึ้น ปุ่ม START ที่กดตอนอยู่ในสถานะผิดพลาดจะเปิดหน้ายืนยัน
+  //      แทนการกู้สถานการณ์ทันที (ดู requestStart() ใน session.h) นานถึง 30 วินาทีที่สถานะเป็นรอยืนยัน
+  //      และ faulted() อ่านได้เท็จ ทั้งที่ยังไม่มีอะไรถูกกู้คืนเลยแม้แต่น้อย ถ้าการยืนยันนั้นถูกยกเลิก
+  //      หรือปล่อยให้หมดเวลา SessionSM จะพาเครื่องกลับไปสถานะผิดพลาด ไฟหน้าปัดจึงต้องครอบคลุม
+  //      แค่ช่วงหน้าต่างนั้นเท่านั้น ไม่มีสถานะว่างที่หนีออกจากหน้ายืนยันให้ต้องครอบคลุมอีกแล้ว
+  //      ตัวสะท้อนสถานะฝั่งสเก็ตช์ที่เคยต้องมีจึงถูกลบไป รวมเข้ากับเงื่อนไขผิดพลาดแทนการเสียไฟรูปแบบที่สี่
+  //      เพราะหน้าปัดนี้มีสถานะที่เป็นไปได้แค่สามแบบ (panel_lamps.h) และไม่กะพริบ
+  //      และ "ติดทั้งคู่" ก็มีความหมายตรงนี้อยู่แล้ว คำพูดของ session.h เองคือ "ขาอาจยังยกอยู่"
+  panelLampsSet(gSession.running(), gSession.faultPending());
   // The trip raised by actuatorTick's own software check is consumed at the top of
   // the NEXT iteration, alongside the hardware timer's. Both go through the one
   // place above, so a trip can never be charged to a session that started after

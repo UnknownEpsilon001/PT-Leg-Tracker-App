@@ -75,6 +75,16 @@ void SessionSM::enter(Phase p, uint32_t nowMs) {
   }
   ph = p;
   phaseStart = nowMs;  // จับเวลาเริ่มสถานะใหม่
+  // Idle is the one arrival that means no fault is owed anywhere: either the
+  // recovery lowering ran to the bottom, or the confirmation that was holding
+  // one open never came from a fault to begin with. Cleared in the funnel every
+  // entry passes through rather than at each landing, so an exit added later
+  // cannot forget it. See confirmFromFault in session.h.
+  // [TH] สถานะว่างคือจุดเดียวที่แปลว่าไม่มีความผิดพลาดค้างอยู่ที่ใดอีก ไม่ว่าจะเพราะการลดขากู้สถานการณ์
+  //      ทำงานจนถึงพื้นแล้ว หรือเพราะการยืนยันที่ค้างอยู่ไม่ได้มาจากความผิดพลาดตั้งแต่แรก
+  //      ล้างที่จุดรวมซึ่งการเข้าสถานะทุกครั้งต้องผ่าน ไม่ใช่ล้างที่ปลายทางแต่ละจุด
+  //      ทางออกที่เพิ่มเข้ามาทีหลังจึงลืมล้างไม่ได้ ดู confirmFromFault ใน session.h
+  if (p == Phase::Idle) confirmFromFault = false;
 }
 
 bool SessionSM::takeStrokeRenewEdge() {
@@ -116,6 +126,17 @@ void SessionSM::requestStart(uint32_t nowMs) {
   //      ที่เหลืออยู่ซึ่งยังบังคับให้ลดขาก่อนยกได้ตอนเริ่มจริง ดูคำอธิบายที่จุดประกาศตัวแปรนี้ใน session.h
   //      ว่าทำไมการตั้งกลับเป็นจริงครั้งเดียวนี้จึงไม่กลายเป็นอันตรายเข้าวงวนไม่รู้จบ
   if (ph == Phase::Fault) legPositionUnknown = true;
+  // Recorded here for the same reason as the line above, in the same one-line
+  // window: this is the last point at which the origin is visible.
+  // legPositionUnknown makes the eventual start lower before it lifts;
+  // confirmFromFault makes an abandoned confirmation put the fault back instead
+  // of dropping it. Assigned rather than merely set, so a confirmation opened
+  // from Idle positively clears it.
+  // [TH] บันทึกตรงนี้ด้วยเหตุผลเดียวกับบรรทัดด้านบน และเป็นช่องเดียวกันด้วย
+  //      คือจุดสุดท้ายที่ยังเห็นที่มาได้ legPositionUnknown ทำให้การเริ่มจริงลดขาก่อนยกเสมอ
+  //      ส่วน confirmFromFault ทำให้การยืนยันที่ถูกทิ้งเอาความผิดพลาดกลับคืนมา แทนที่จะทิ้งมันไป
+  //      ใช้การกำหนดค่า ไม่ใช่แค่ตั้งเป็นจริง การยืนยันที่เปิดจากสถานะว่างจึงล้างค่านี้อย่างชัดเจน
+  confirmFromFault = (ph == Phase::Fault);
   pendingTargetReps = cfg.targetReps;
   enter(Phase::Confirm, nowMs);
 }
@@ -136,6 +157,13 @@ void SessionSM::setPendingTarget(uint32_t nowMs, uint16_t reps) {
 void SessionSM::confirmStart(uint32_t nowMs) {
   if (ph != Phase::Confirm) return;
   uint16_t reps = pendingTargetReps;
+  // Answered, so the fault is no longer merely postponed -- start() below queues
+  // the recovery lowering that actually clears it, and no phase it can reach
+  // from here passes enter()'s own clear, which only fires on Idle.
+  // [TH] มีคนตอบแล้ว ความผิดพลาดจึงไม่ใช่แค่ถูกพักไว้อีกต่อไป start() ด้านล่างจะเข้าคิวการลดขา
+  //      กู้สถานการณ์ที่ล้างมันจริงๆ และสถานะที่ไปถึงได้จากตรงนี้ไม่ผ่านจุดล้างใน enter() เลย
+  //      เพราะจุดนั้นทำงานเฉพาะตอนเข้าสถานะว่าง
+  confirmFromFault = false;
   // Called directly, not through a "ph = Phase::Idle" stand-in for the phase
   // start() expects. running() now excludes Confirm (see session.h), so
   // start()'s own "if (running()) return" guard already lets this call through
@@ -153,13 +181,15 @@ void SessionSM::confirmStart(uint32_t nowMs) {
   // Written after start(), not before: start() unconditionally seeds
   // sessionTargetReps from cfg.targetReps as its own default (see start()) —
   // needed because it is still also called directly, bypassing Confirm
-  // entirely (the panel button and the server "start" command do today) — and
+  // entirely (the server "start" command always does; the panel button only
+  // when the link is down, since there is then no display to confirm on) — and
   // writing this here first would just have that default clobber it a few
   // lines later. Never cfg.targetReps: see session.h for why the stored
   // prescription must not move for a confirm-screen one-off.
   // [TH] เขียนหลัง start() ไม่ใช่ก่อน เพราะ start() จะตั้งค่าเริ่มต้นของ sessionTargetReps จาก
   //      cfg.targetReps เองโดยไม่มีเงื่อนไข (ดู start()) จำเป็นเพราะฟังก์ชันนั้นยังถูกเรียกตรงๆ ได้อยู่
-  //      โดยข้ามสถานะรอยืนยันไปเลย (ปุ่มหน้าปัดกับคำสั่ง start จากเซิร์ฟเวอร์ยังทำแบบนั้นอยู่ในตอนนี้)
+  //      โดยข้ามสถานะรอยืนยันไปเลย (คำสั่ง start จากเซิร์ฟเวอร์ทำแบบนั้นเสมอ ส่วนปุ่มหน้าปัดทำเฉพาะ
+  //      ตอนลิงก์หลุด ซึ่งไม่มีจอให้ยืนยัน)
   //      ถ้าเขียนตรงนี้ก่อน ค่าเริ่มต้นนั้นจะมาทับค่านี้อีกทีในอีกไม่กี่บรรทัดถัดไป ไม่แตะ cfg.targetReps เลย
   //      ดู session.h ว่าทำไมค่าที่แพทย์สั่งต้องไม่ขยับเพราะค่าครั้งเดียวจากหน้ายืนยัน
   sessionTargetReps = reps;
@@ -167,21 +197,29 @@ void SessionSM::confirmStart(uint32_t nowMs) {
 
 void SessionSM::cancelConfirm(uint32_t nowMs) {
   if (ph != Phase::Confirm) return;
-  enter(Phase::Idle, nowMs);
+  // Back to the origin, not always Idle. A fault must not be retired by a
+  // confirmation nobody answered -- see this function's contract in session.h
+  // for what dropping it in Idle would cost the operator.
+  // [TH] กลับไปยังสถานะที่มา ไม่ใช่กลับไปว่างเสมอ ความผิดพลาดต้องไม่ถูกยกเลิกด้วยการยืนยัน
+  //      ที่ไม่มีใครตอบ ดูสัญญาของฟังก์ชันนี้ใน session.h ว่าถ้าปล่อยให้ไปจบที่สถานะว่าง
+  //      ผู้ใช้จะต้องเสียอะไรบ้าง
+  enter(confirmFromFault ? Phase::Fault : Phase::Idle, nowMs);
 }
 
 void SessionSM::start(uint32_t nowMs) {
   if (running()) return;  // ignore while a session is under way — ถ้ากำลังทำงานอยู่ให้ข้าม
   // Default the session target to the stored prescription before either
   // branch below transitions the phase. Covers this function's other callers
-  // directly — the panel button and the server "start" command still bypass
-  // Confirm entirely — and confirmStart() overwrites this right after calling
+  // directly — the server "start" command always bypasses Confirm entirely,
+  // and the panel button does whenever the link is down and there is no display
+  // to confirm on — and confirmStart() overwrites this right after calling
   // in with the confirmed value, for the one call site where the two may
   // differ. See sessionTargetReps and target() in session.h for the field
   // this feeds.
   // [TH] ตั้งค่าเริ่มต้นของเป้าหมายรอบนี้เป็นค่าที่แพทย์สั่ง ก่อนที่สาขาใดสาขาหนึ่งด้านล่างจะเปลี่ยนสถานะ
-  //      ครอบคลุมผู้เรียกฟังก์ชันนี้ทางอื่นด้วยโดยตรง ปุ่มหน้าปัดและคำสั่ง start จากเซิร์ฟเวอร์ยังข้าม
-  //      สถานะรอยืนยันไปเลยอยู่ในตอนนี้ ส่วน confirmStart() จะเขียนทับค่านี้อีกทีทันทีหลังเรียกเข้ามา
+  //      ครอบคลุมผู้เรียกฟังก์ชันนี้ทางอื่นด้วยโดยตรง คำสั่ง start จากเซิร์ฟเวอร์ข้ามสถานะรอยืนยันไปเลยเสมอ
+  //      ส่วนปุ่มหน้าปัดข้ามเฉพาะตอนลิงก์หลุด ซึ่งไม่มีจอให้ยืนยัน
+  //      ส่วน confirmStart() จะเขียนทับค่านี้อีกทีทันทีหลังเรียกเข้ามา
   //      ด้วยค่าที่ยืนยันแล้ว สำหรับจุดเรียกจุดเดียวที่ทั้งสองค่าอาจต่างกัน
   //      ดู sessionTargetReps กับ target() ใน session.h ว่าค่านี้ไปป้อนอะไร
   sessionTargetReps = cfg.targetReps;
@@ -234,15 +272,20 @@ void SessionSM::requestStop(uint32_t nowMs) {
       // through gSession.requestStop()) while the confirm screen is up. The
       // panel STOP button is wired to cancelConfirm() separately; this is the
       // path that button does not cover. requestStart()/setPendingTarget()
-      // never committed anything, so this cancels back to Idle exactly like
-      // cancelConfirm() does, instead of falling through to Idle's below and
-      // clearing a rep count that Confirm never touched.
+      // never committed anything, so this cancels exactly like cancelConfirm()
+      // does -- by calling it, so the one decision about where an abandoned
+      // confirmation lands (Idle, or the Fault it was opened from) is made in a
+      // single place and a remote stop cannot retire a fault the panel's own
+      // STOP would have kept -- instead of falling through to Idle's case below
+      // and clearing a rep count that Confirm never touched.
       // [TH] คำสั่งหยุดจากเซิร์ฟเวอร์ (ปุ่มหยุดบนแอป ซึ่งมาถึงจุดนี้ผ่าน gSession.requestStop())
       //      ขณะหน้ายืนยันเปิดอยู่ ปุ่ม STOP บนแผงเดินสายไปยัง cancelConfirm() แยกต่างหาก
       //      นี่คือเส้นทางที่ปุ่มนั้นไม่ครอบคลุม requestStart()/setPendingTarget() ไม่เคยผูกมัด
-      //      อะไรไว้เลย การกดนี้จึงยกเลิกกลับไปสถานะว่างเหมือนกับ cancelConfirm() ทุกประการ
+      //      อะไรไว้เลย การกดนี้จึงยกเลิกเหมือนกับ cancelConfirm() ทุกประการ โดยเรียกฟังก์ชันนั้นตรงๆ
+      //      การตัดสินว่าการยืนยันที่ถูกทิ้งจะไปจบที่ไหน (ว่าง หรือสถานะผิดพลาดที่เปิดมันมา) จึงอยู่ที่เดียว
+      //      และคำสั่งหยุดจากระยะไกลจะยกเลิกความผิดพลาดที่ปุ่ม STOP บนแผงเก็บไว้ไม่ได้
       //      แทนที่จะตกไปใช้สาขาสถานะว่างด้านล่างซึ่งจะไปล้างจำนวนครั้งที่รอยืนยันไม่เคยแตะ
-      enter(Phase::Idle, nowMs);
+      cancelConfirm(nowMs);
       return;
     case Phase::Idle:
       // Nothing is moving and nothing is latched, so STOP is the "clear" button:
@@ -306,8 +349,30 @@ void SessionSM::requestStop(uint32_t nowMs) {
   }
 }
 
+// A cap trip that arrives outside a running stroke. Idle, Fault and Confirm all
+// own no session and command no relay, so there is nothing for a fault to end:
+// falling through to finish() would raise a stopped edge for a session that
+// never ran and compute its duration from a stale sessionStart, putting an
+// invented row on the card and an uptime-sized one on the server. Confirm is
+// grouped with the other two rather than routed to cancelConfirm(), because a
+// stale trip must not dismiss a confirmation an operator is reading, and a
+// phase that never energized anything did not fault. No live path reaches here
+// in Confirm today -- the trip is consumed at the top of each iteration, and
+// applyActuator() calls actuatorOff() every Confirm iteration, cancelling the
+// hardware cap timer -- so this is the guard staying complete as the phase list
+// grows, exactly as requestStop() already does for Confirm.
+// [TH] การชนเพดานเวลาที่มาถึงตอนไม่มีจังหวะเคลื่อนที่ใดทำงานอยู่ สถานะว่าง ผิดพลาด และรอยืนยัน
+//      ล้วนไม่มีรอบเป็นของตัวเองและไม่ได้สั่งรีเลย์ใดเลย จึงไม่มีรอบให้ความผิดพลาดปิด
+//      ถ้าปล่อยให้ตกไปถึง finish() จะตั้งสัญญาณหยุดให้รอบที่ไม่เคยเริ่ม และคำนวณเวลาจาก sessionStart
+//      ค่าเก่า ทำให้มีแถวที่ไม่มีจริงบนการ์ด และแถวที่ยาวเท่าเวลาเปิดเครื่องบนเซิร์ฟเวอร์
+//      จัดรอยืนยันไว้กลุ่มเดียวกับอีกสองสถานะ แทนที่จะส่งต่อไป cancelConfirm() เพราะการชนเพดาน
+//      ที่ค้างมาจากก่อนหน้าต้องไม่ไปปิดหน้ายืนยันที่ผู้ใช้กำลังอ่านอยู่ และสถานะที่ไม่เคยจ่ายไฟให้อะไรเลย
+//      ก็ไม่ได้ผิดพลาด ตอนนี้ยังไม่มีเส้นทางจริงที่มาถึงจุดนี้ในสถานะรอยืนยัน เพราะสัญญาณชนเพดาน
+//      ถูกอ่านทิ้งที่ต้นลูปทุกรอบ และ applyActuator() เรียก actuatorOff() ทุกลูปของสถานะรอยืนยัน
+//      ซึ่งยกเลิกตัวจับเวลาเพดานทางฮาร์ดแวร์ นี่จึงเป็นการทำให้ตัวป้องกันครบถ้วนตามจำนวนสถานะที่เพิ่มขึ้น
+//      เหมือนที่ requestStop() ทำให้สถานะรอยืนยันไปแล้ว
 void SessionSM::forceFault(uint32_t nowMs) {
-  if (ph == Phase::Idle || ph == Phase::Fault) return;
+  if (ph == Phase::Idle || ph == Phase::Fault || ph == Phase::Confirm) return;
   // A recovery lower has no session of its own to end — the fault that preceded
   // it already sent one. Latch back to Fault without raising a second stopped
   // edge, which would put a duplicate row on the card for one session.
@@ -328,14 +393,22 @@ void SessionSM::tick(uint32_t nowMs) {
     case Phase::Confirm:
       // Nobody answered within the timeout. Nothing was committed while
       // waiting — requestStart() and setPendingTarget() only ever touch the
-      // pending target, never cfg.targetReps — so this returns to Idle and
-      // never starts on its own; a machine that begins moving with nobody
-      // having confirmed is the wrong default on a therapy device.
+      // pending target, never cfg.targetReps — so this returns to wherever the
+      // confirmation was opened from and never starts on its own; a machine
+      // that begins moving with nobody having confirmed is the wrong default
+      // on a therapy device. The landing follows cancelConfirm()'s rule exactly
+      // (Idle, or the Fault it was opened from), and this is the half of that
+      // rule reachable with no operator error at all: walking away from an
+      // accidental START in a fault must not clear the fault.
       // [TH] ไม่มีใครตอบภายในเวลาที่กำหนด ระหว่างรอยังไม่มีอะไรถูกผูกมัด
       //      (requestStart() กับ setPendingTarget() แตะแค่ค่าที่รอยืนยัน ไม่แตะ cfg.targetReps เลย)
-      //      จึงกลับไปสถานะว่าง ไม่เริ่มทำงานเอง เพราะเครื่องที่เริ่มเคลื่อนที่โดยไม่มีใครยืนยัน
-      //      คือค่าเริ่มต้นที่ผิดสำหรับเครื่องกายภาพบำบัด
-      if (dt >= CONFIRM_TIMEOUT_MS) enter(Phase::Idle, nowMs);
+      //      จึงกลับไปยังสถานะที่เปิดการยืนยันมา ไม่เริ่มทำงานเอง เพราะเครื่องที่เริ่มเคลื่อนที่โดยไม่มีใครยืนยัน
+      //      คือค่าเริ่มต้นที่ผิดสำหรับเครื่องกายภาพบำบัด ทางกลับใช้กฎเดียวกับ cancelConfirm()
+      //      คือกลับไปยังที่มา ไม่ใช่กลับไปว่างเสมอ และนี่คือครึ่งหนึ่งของกฎนั้นที่ไปถึงได้
+      //      โดยผู้ใช้ไม่ได้ทำอะไรผิดเลย แค่เดินจากไปเฉยๆ การกด START ผิดตอนเครื่องผิดพลาด
+      //      ต้องไม่ทำให้ความผิดพลาดหายไป
+      if (dt >= CONFIRM_TIMEOUT_MS)
+        enter(confirmFromFault ? Phase::Fault : Phase::Idle, nowMs);
       return;
     case Phase::Idle:
     case Phase::Fault:
