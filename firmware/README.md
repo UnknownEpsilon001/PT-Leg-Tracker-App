@@ -420,11 +420,28 @@ just touch each button pin to GND to stand in for a press.
 | GREEN lamp  | 23 | — output, see below | — |
 | YELLOW lamp | 32 | — output, see below | — |
 
-START does nothing while a session is already running. From Idle it begins a
-normal session. From a latched FAULT it lowers the leg for `lowerSec` first and
-then lifts straight into the new session — the debug build prints `EDGE START`
-on the press, `phase=SAFE-LOWER` while it recovers, then `phase=LIFT` once the
-new session actually begins.
+START does nothing while a session is already running. From Idle or a latched
+FAULT, START opens a confirmation instead of starting outright — but only when
+a display is linked to show it on. The debug build prints `EDGE START` on the
+press and `phase=CONFIRM`; the CYD names the phase รอยืนยัน and shows the rep
+count about to run, still editable there. A second START press commits it, and
+ตกลง on the touchscreen does the same — both follow from there exactly as a
+direct start always did, `phase=LIFT` from Idle, or `phase=SAFE-LOWER` while it
+recovers then `phase=LIFT` if the confirmation was opened from a FAULT. STOP
+cancels a pending confirmation back to Idle, and so does 30 s of nobody
+touching anything; either way nothing has run, because nothing energizes a
+relay while the confirmation is open. With the link down there is no screen to
+put a confirmation on, so START falls back to starting on the first press, the
+way it always has — a display that has dropped off must never be the reason
+the machine cannot be started.
+
+Whatever rep count is showing when a confirmation is committed becomes that one
+session's target and nothing more: it is never written back to `cfg.targetReps`,
+the stored prescription that the settings screen owns, so the next confirmation
+still starts from the settings screen's own number unless someone changes it
+again right there. The app's own start flow asks the same question before it
+queues a start over the server, for the same reason, and a target sent along
+with that start is likewise good for one session only.
 
 STOP always ends whatever is in progress: from LIFT/HOLD/LOWER it lowers the leg
 for `lowerSec` and then stops; from REST the leg is already down, so it stops on
@@ -576,12 +593,13 @@ never a travel timeout against a switch that no longer exists.
 **3. A fault does not trap the leg.** Both START and STOP drive a lowering out
 of a latched Fault — SafeLower for `lowerSec`, the same bounded stroke as any
 other descent. STOP clears the latch once that lowering finishes and the machine
-lands in Idle; START queues a fresh session behind it, so the descent runs first
-and the new LIFT begins right after. Neither is refused by a Fault, and neither
-drives the actuator further in the direction that may have caused it — descents
-only ever command DOWN. The lowering reports nothing of its own: the session was
-already recorded when it faulted, and a second report would put a duplicate row
-on the card.
+lands in Idle; START queues a fresh session behind it (behind a confirmation
+first, if a display is linked to show one — see above), so the descent runs
+first and the new LIFT begins right after. Neither is refused by a Fault, and
+neither drives the actuator further in the direction that may have caused it —
+descents only ever command DOWN. The lowering reports nothing of its own: the
+session was already recorded when it faulted, and a second report would put a
+duplicate row on the card.
 
 There is no confirmation that the descent actually reached the bottom — with the
 limit switches gone the firmware has no way to check, which is stated plainly in
