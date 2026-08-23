@@ -89,7 +89,7 @@ $settings = '{"t":"settings","ssid":"ClinicWiFi","pass":"secret123",' +
             '"server":"http://192.168.0.12:8000","code":"KNEE-01",' +
             '"maxtravel":8,"lift":7,"lower":7,"hold":10,"rest":10,"target":10}'
 
-# phase ordinals per link-protocol.md: 0 Idle 1 Lift 2 Hold 3 Lower 4 Rest 5 SafeLower 6 Fault
+# phase ordinals per link-protocol.md: 0 Idle 1 Lift 2 Hold 3 Lower 4 Rest 5 SafeLower 6 Fault 7 Confirm
 $running = $false
 $phase = 0
 $elapsed = 0
@@ -97,6 +97,21 @@ $reps = 0
 $target = $Target
 $phaseLeft = 0
 $sessionStart = $null
+
+# The number on the confirm screen while phase=7 -- seeded from $target when
+# Confirm is opened, edited in place by an inbound `sets`, and never written
+# back to $target unless the operator actually confirms. Kept separate from
+# $target the same way the real controller keeps pendingTargetReps separate
+# from cfg.targetReps: a cancelled or expired edit must leave the stored
+# number untouched. $confirmDeadline is the wall-clock moment the real
+# CONFIRM_TIMEOUT_MS (30 s) elapses; $null outside phase 7.
+# [TH] ตัวเลขบนหน้ายืนยันขณะ phase=7 ตั้งต้นจาก $target ตอนเปิดหน้า แล้วแก้ในตัวมันเองเมื่อมีข้อความ
+#      sets เข้ามา และจะไม่ถูกเขียนกลับไปที่ $target เว้นแต่ผู้ใช้กดยืนยันจริง แยกจาก $target
+#      เหมือนที่คอนโทรลเลอร์จริงแยก pendingTargetReps จาก cfg.targetReps
+#      เพื่อไม่ให้การยกเลิกหรือหมดเวลาไปแตะค่าที่บันทึกไว้ $confirmDeadline คือเวลาจริงที่ครบ 30 วินาที
+#      ตามค่า CONFIRM_TIMEOUT_MS ของเครื่องจริง เป็น $null นอกเหนือจาก phase 7
+$pendingReps = $Target
+$confirmDeadline = $null
 
 # One shot at session end, shared by a target-reached stop (never a fault, the
 # same as SessionSM::tick()'s Rest-phase check) and an operator/deadline stop
@@ -129,7 +144,7 @@ if ($AutoStart) {
 # runs headless with -AutoStart -Seconds.
 $interactive = -not [Console]::IsInputRedirected
 if ($interactive) {
-    Write-Host "keys: s=start  x=stop  r=stop-while-idle (clear reps)  q=quit" -ForegroundColor Cyan
+    Write-Host "keys: s=start (commits while CONFIRM open)  x=stop (cancels while CONFIRM open)  r=stop-while-idle (clear reps)  c=open confirm (idle only)  q=quit" -ForegroundColor Cyan
 }
 
 $deadline = if ($Seconds -gt 0) { (Get-Date).AddSeconds($Seconds) } else { [datetime]::MaxValue }
@@ -196,6 +211,51 @@ try {
                     Write-Host "   (target set to $target via link)" -ForegroundColor Yellow
                 }
             }
+            elseif ($line -match '"t"\s*:\s*"sets"') {
+                # Pending rep-target edit from the confirm screen. Effective only
+                # in phase 7, matching link-protocol.md's "silently ignored
+                # otherwise" -- a stray or late one outside Confirm changes
+                # nothing. Stored, then echoed back as `target` on the next
+                # `state` (see the state line below): that echo is the only way
+                # the display's mismatch indicator knows the edit arrived, so an
+                # accepted `sets` that is never echoed reproduces the exact bug
+                # this handler exists to avoid.
+                # [TH] ค่าที่แก้ไขบนหน้ายืนยัน มีผลเฉพาะตอน phase 7 เท่านั้น ตรงกับที่ link-protocol.md
+                #      ระบุว่า "เพิกเฉยเงียบๆ" นอกเหนือจากนั้น เก็บค่าไว้แล้วส่งกลับเป็น target ในข้อความ
+                #      state ถัดไป (ดูบรรทัด state ด้านล่าง) การสะท้อนกลับนี้คือทางเดียวที่ตัวบ่งชี้ความไม่ตรงกัน
+                #      บนจอจะรู้ว่าค่าที่แก้ไปถึงจริง
+                if ($phase -eq 7 -and $line -match '"reps"\s*:\s*(\d+)') {
+                    $pendingReps = [int]$Matches[1]
+                    Write-Host "   (pending sets = $pendingReps, CONFIRM)" -ForegroundColor Yellow
+                } else {
+                    Write-Host "   (sets ignored - not in CONFIRM)" -ForegroundColor DarkYellow
+                }
+            }
+            elseif ($line -match '"t"\s*:\s*"confirm"') {
+                # ok:true commits $pendingReps and starts the cycle exactly like
+                # the 's' key below, except the target is the confirmed value,
+                # not $Target. ok:false (and a missing "ok", matching
+                # link.cpp's `d["ok"] | false`) cancels back to Idle. Both are
+                # no-ops outside phase 7, matching cancelConfirm()/confirmStart()
+                # each guarding on Phase::Confirm.
+                # [TH] ok:true ยืนยัน $pendingReps แล้วเริ่มรอบเหมือนปุ่ม s ด้านล่าง ต่างกันที่เป้าหมายเป็นค่าที่
+                #      ยืนยันแล้ว ไม่ใช่ $Target ส่วน ok:false (หรือไม่มี "ok" เลย ตรงกับ d["ok"] | false ใน
+                #      link.cpp) ยกเลิกกลับไปสถานะว่าง ทั้งสองไม่มีผลถ้าไม่ได้อยู่ phase 7
+                if ($phase -eq 7) {
+                    $ok = $line -match '"ok"\s*:\s*true'
+                    if ($ok) {
+                        $running = $true; $phase = 1; $phaseLeft = $LiftSec
+                        $reps = 0; $sessionStart = Get-Date; $target = $pendingReps
+                        $confirmDeadline = $null
+                        Write-Host "   CONFIRM ok:true -> starting with target=$target" -ForegroundColor Green
+                    } else {
+                        $phase = 0; $confirmDeadline = $null
+                        Write-Host "   CONFIRM ok:false -> cancelled" -ForegroundColor Green
+                    }
+                } else {
+                    Write-Host "   (confirm ignored - not in CONFIRM)" -ForegroundColor DarkYellow
+                }
+            }
             # Run control used to travel over UART as a `cmd` message. It moved to
             # physical panel buttons on the controller, the display's main screen
             # is output-only, and link-protocol.md no longer defines the message -
@@ -212,7 +272,23 @@ try {
                 $key = [Console]::ReadKey($true).KeyChar
                 switch -CaseSensitive ([char]::ToLower($key)) {
                     's' {
-                        if (-not $running) {
+                        # A press of the panel's own START button while phase=7
+                        # commits Confirm every time, unconditionally - matching
+                        # requestStart()'s "if confirming(), confirmStart()"
+                        # branch in pt-leg-controller.ino, which is checked
+                        # before the branch that cares whether the link is up.
+                        # Same commit the inbound `confirm ok:true` handler
+                        # above performs; only the source of the press differs.
+                        # [TH] กดปุ่ม START บนหน้าปัดเองระหว่าง phase=7 ยืนยันเสมอไม่มีเงื่อนไข ตรงกับสาขา
+                        #      "if confirming(), confirmStart()" ของ requestStart() ใน pt-leg-controller.ino
+                        #      ซึ่งถูกตรวจก่อนสาขาที่สนใจว่าลิงก์เชื่อมอยู่หรือไม่ เป็นการยืนยันแบบเดียวกับตัวจัดการ
+                        #      ข้อความ confirm ok:true ด้านบน ต่างกันแค่ที่มาของการกด
+                        if ($phase -eq 7) {
+                            $running = $true; $phase = 1; $phaseLeft = $LiftSec
+                            $reps = 0; $sessionStart = Get-Date; $target = $pendingReps
+                            $confirmDeadline = $null
+                            Write-Host "   CONFIRM committed via START (key)" -ForegroundColor Green
+                        } elseif (-not $running) {
                             $running = $true; $phase = 1; $phaseLeft = $LiftSec
                             $reps = 0; $sessionStart = Get-Date
                             Write-Host "   START (key)" -ForegroundColor Green
@@ -221,7 +297,19 @@ try {
                         }
                     }
                     'x' {
-                        if ($running -and $phase -ne 5) {
+                        # The panel's own STOP button cancels Confirm outright,
+                        # never touching reps - see the panel STOP dispatch in
+                        # pt-leg-controller.ino, which wires it to
+                        # cancelConfirm() separately from requestStop(). Same
+                        # cancel the inbound `confirm ok:false` handler above
+                        # performs.
+                        # [TH] ปุ่ม STOP บนหน้าปัดเองยกเลิกหน้ายืนยันทันที ไม่แตะจำนวนครั้งเลย ดูจุดจ่ายงานปุ่ม STOP
+                        #      บนหน้าปัดใน pt-leg-controller.ino ซึ่งเดินสายไปยัง cancelConfirm() แยกจาก
+                        #      requestStop() เป็นการยกเลิกแบบเดียวกับตัวจัดการข้อความ confirm ok:false ด้านบน
+                        if ($phase -eq 7) {
+                            $phase = 0; $confirmDeadline = $null
+                            Write-Host "   CONFIRM cancelled via STOP (key)" -ForegroundColor Green
+                        } elseif ($running -and $phase -ne 5) {
                             $phase = 5; $phaseLeft = $LowerSec   # SafeLower, then idle
                             Write-Host "   STOP (key)" -ForegroundColor Green
                         } else {
@@ -234,6 +322,29 @@ try {
                             Write-Host "   STOP-while-idle: reps cleared (key)" -ForegroundColor Green
                         } else {
                             Write-Host "   ignored (running)" -ForegroundColor DarkYellow
+                        }
+                    }
+                    'c' {
+                        # Stands in for the panel's own START-from-idle-with-a-
+                        # link-up opening Confirm rather than running directly --
+                        # see requestStart() in session.cpp. A separate key
+                        # rather than folding this into 's': 's' already means
+                        # "start now" throughout this script and the real panel
+                        # button keeps meaning that too whenever the link is
+                        # down, so overloading it here would make the one key
+                        # do two different things depending on state that is not
+                        # visible at the keyboard.
+                        # [TH] แทนปุ่ม START บนหน้าปัดตอนกดจากสถานะว่างขณะมีลิงก์เชื่อมอยู่ ซึ่งจะเปิดหน้ายืนยัน
+                        #      แทนที่จะเริ่มทำงานทันที ดู requestStart() ใน session.cpp ใช้ปุ่มแยกจาก s เพราะ s
+                        #      หมายถึง "เริ่มเดี๋ยวนี้" มาตลอดทั้งสคริปต์ และปุ่มจริงบนหน้าปัดก็ยังหมายความแบบนั้น
+                        #      เสมอเมื่อลิงก์หลุด การใช้ปุ่มเดียวกันจะทำให้ปุ่มนั้นทำสองอย่างต่างกันตามสถานะที่
+                        #      มองไม่เห็นจากแป้นพิมพ์
+                        if (-not $running -and $phase -eq 0) {
+                            $phase = 7; $pendingReps = $target
+                            $confirmDeadline = (Get-Date).AddSeconds(30)
+                            Write-Host "   CONFIRM opened (key), pending=$pendingReps" -ForegroundColor Green
+                        } else {
+                            Write-Host "   CONFIRM ignored (not idle)" -ForegroundColor DarkYellow
                         }
                     }
                     'q' { Write-Host "   quit (key)" -ForegroundColor Green; return }
@@ -278,9 +389,32 @@ try {
             }
         }
 
+        if ($phase -eq 7 -and $confirmDeadline -and (Get-Date) -ge $confirmDeadline) {
+            # CONFIRM_TIMEOUT_MS on the real controller: nobody answered in 30 s,
+            # so it backs out to Idle on its own -- see SessionSM::tick()'s
+            # Phase::Confirm case. Outside the $running block above because
+            # Confirm is deliberately not running() on the real firmware either
+            # (session.h), so it needs its own clock instead of riding
+            # $phaseLeft. Nothing was committed while it waited, matching that
+            # nothing here touches $target.
+            # [TH] ตรงกับ CONFIRM_TIMEOUT_MS ของคอนโทรลเลอร์จริง: ไม่มีใครตอบภายใน 30 วินาที จึงกลับไปสถานะว่างเอง
+            #      ดู case Phase::Confirm ของ SessionSM::tick() อยู่นอกบล็อก $running ด้านบนเพราะสถานะรอยืนยัน
+            #      ไม่นับเป็น running() บนเครื่องจริงเช่นกัน (session.h) จึงต้องมีนาฬิกาของตัวเองแทนที่จะอาศัย
+            #      $phaseLeft ไม่มีอะไรถูกผูกมัดระหว่างที่รอ ตรงกับที่ตรงนี้ก็ไม่แตะ $target เช่นกัน
+            $phase = 0; $confirmDeadline = $null
+            Write-Host "   CONFIRM expired (30s)" -ForegroundColor Green
+        }
+
+        # target() on the real controller reports pendingTargetReps while
+        # phase=Confirm, not cfg.targetReps -- see session.h. Mirrored here so
+        # the display's mismatch indicator sees its edit echoed back the same
+        # way it would from real hardware.
+        # [TH] target() บนคอนโทรลเลอร์จริงรายงาน pendingTargetReps ระหว่าง phase=Confirm ไม่ใช่ cfg.targetReps
+        #      ดู session.h ทำตามที่นี่ด้วย เพื่อให้ตัวบ่งชี้ความไม่ตรงกันบนจอเห็นค่าที่แก้สะท้อนกลับมาเหมือนของจริง
+        $reportedTarget = if ($phase -eq 7) { $pendingReps } else { $target }
         $state = '{{"t":"state","running":{0},"phase":{1},"elapsed":{2},"reps":{3},"target":{4},' +
                  '"wifi":true,"server":true}}'
-        $sp.WriteLine([string]::Format($state, $running.ToString().ToLower(), $phase, $elapsed, $reps, $target))
+        $sp.WriteLine([string]::Format($state, $running.ToString().ToLower(), $phase, $elapsed, $reps, $reportedTarget))
         Start-Sleep -Milliseconds 250
     }
 }

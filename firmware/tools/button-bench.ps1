@@ -70,6 +70,42 @@ $script:dryTranscript = @(
     '[dbg 33000] phase=LIFT reps=0 elapsed=0s'
     'actuator: energize cap opened the relays'
     '[dbg 34500] phase=FAULT reps=0 elapsed=1s'
+    # [TH] จากตรงนี้เป็นบทสนทนาจำลองของสถานะรอยืนยัน (CONFIRM) เริ่มด้วยการล้างสถานะผิดพลาดค้างจากขั้นก่อนหน้า
+    # From here on: the CONFIRM lines, exercising the five steps below. Opens
+    # by clearing the FAULT the previous step left latched, the same STOP a
+    # human would touch first per that step's own Hint. Recovering out of a
+    # latched Fault always drives the full lowerSec (enter()'s Fault/Idle
+    # branch in session.cpp), not the proportional partial descent a STOP
+    # mid-LIFT gets elsewhere in this transcript - hence the full 7000 ms gap
+    # and elapsed pinned at 0s throughout (elapsedSec() returns 0 while
+    # recovering, same as it does for Confirm itself just below).
+    '[dbg 40000] EDGE STOP'
+    '[dbg 40000] phase=SAFE-LOWER reps=0 elapsed=0s'
+    '[dbg 47000] phase=IDLE reps=0 elapsed=0s'   # 7000 ms later: full lowerSec, a fault recovery is never proportional
+    '[dbg 50000] EDGE START'
+    '[dbg 50000] phase=CONFIRM reps=0 elapsed=0s'   # elapsed pinned at 0 the whole time Confirm is open (session.cpp)
+    '[dbg 51000] EDGE START'                        # a second START while CONFIRM is open always commits it
+    '[dbg 51000] phase=LIFT reps=0 elapsed=0s'
+    # Settles the LIFT just committed back to IDLE so the next CONFIRM opens
+    # from a clean idle, the same way the checklist's own steps ask for it.
+    # [TH] คืนสถานะจากการยกที่เพิ่งยืนยันกลับไปว่าง เพื่อให้รอบยืนยันครั้งถัดไปเริ่มจากสถานะว่างที่สะอาด
+    '[dbg 52000] EDGE STOP'
+    '[dbg 52000] phase=SAFE-LOWER reps=0 elapsed=1s'
+    '[dbg 53500] phase=IDLE reps=0 elapsed=0s'   # 1 s into a 7 s/7 s lift/lower, so 1 s down + 0.5 s margin
+    '[dbg 55000] EDGE START'
+    '[dbg 55000] phase=CONFIRM reps=0 elapsed=0s'
+    '[dbg 56000] EDGE STOP'                      # panel STOP while CONFIRM is open cancels it, reps untouched
+    '[dbg 56000] phase=IDLE reps=0 elapsed=0s'
+    '[dbg 58000] EDGE START'
+    '[dbg 58000] phase=CONFIRM reps=0 elapsed=0s'
+    '[dbg 88000] phase=IDLE reps=0 elapsed=0s'   # +30000 ms = CONFIRM_TIMEOUT_MS exactly; no EDGE line, tick() alone drives it
+    # Link down (jumpers out): requestStart() only opens Confirm when linkUp
+    # is true, so this START behaves exactly like the very first START step
+    # earlier in this transcript - straight to LIFT, no CONFIRM at all.
+    # [TH] ลิงก์หลุด (ถอดจัมเปอร์): requestStart() จะเปิดหน้ายืนยันก็ต่อเมื่อ linkUp เป็นจริงเท่านั้น
+    #      ปุ่ม START นี้จึงทำตัวเหมือนขั้น START ตัวแรกสุดในบทสนทนานี้ทุกประการ คือไปที่ LIFT ตรงๆ ไม่ผ่าน CONFIRM เลย
+    '[dbg 91000] EDGE START'
+    '[dbg 91000] phase=LIFT reps=0 elapsed=0s'
 )
 $script:dryIndex = 0
 $script:seenLines = [System.Collections.ArrayList]::new()
@@ -247,6 +283,71 @@ $steps = @(
         Do      = "reflash once more with BENCH_DEBUG=1 and, this time, a low DEFAULT_MAX_TRAVEL_SEC (say 1) in config.h with NVS erased first, so DEFAULT_LIFT_SEC/DEFAULT_LOWER_SEC auto-clamp down to match - this shrinks the cap's fixed 500 ms margin to a much bigger share of the 1 s stroke. Then set serverUrl to an address nothing answers on the LAN - not a down WiFi, which makes net.cpp's post() return instantly instead of blocking, but a real IP with no listener. Touch GPIO 25 to GND to START: the 1/s heartbeat blocks up to ~400 ms per attempt against that address, and one landing across the LIFT->HOLD boundary is what eats the margin and trips the actuator's own hardware timer. May take a couple of tries to land the timing - each START is an independent attempt"
         Expect  = @('EDGE START', 'phase=LIFT', 'actuator: energize cap opened the relays', 'phase=FAULT')
         Hint    = "No trip after several tries: check maxTravelSec really did come out at 1 - a value already stored in NVS from a previous flash beats a lowered config.h default, since settingsLoad only falls back to the compiled default when the key is absent. Also confirm the unreachable address fails SLOW: a WiFi that is actually down, or a host that actively refuses the connection, returns near-instantly and never blocks long enough - it has to be an address that is silently unreachable, packets just dropped. Watch the lamps: both should light together the instant it faults - that is the new latched-FAULT indication, previously indistinguishable plain yellow. To clear it, touch GPIO 26 (STOP): the leg lowers through the fault's own safe-lower and the latch clears the moment phase reaches IDLE, same as any other STOP-from-FAULT recovery."
+    }
+    # The five steps below need something every step above deliberately did
+    # not: the display link actually up. requestStart() only opens Confirm
+    # when linkUp is true (pt-leg-controller.ino) - without a linked display
+    # every START here would behave exactly like "START starts a session"
+    # above, and the interesting half of this feature, that a bare panel
+    # press waits for a human instead of moving the leg, would never be
+    # exercised. Fit the UART jumpers per firmware/README.md and power a CYD
+    # running pt-leg-display (any settings; only its 1 Hz ping matters here)
+    # before running this group. The previous step may still be latched into
+    # FAULT - the first step below clears it.
+    # [TH] ห้าขั้นด้านล่างนี้ต้องการสิ่งที่ทุกขั้นก่อนหน้าตั้งใจไม่ต้องการเลย: ลิงก์กับจอต้องเชื่อมอยู่จริง
+    #      requestStart() จะเปิดหน้ายืนยันก็ต่อเมื่อ linkUp เป็นจริงเท่านั้น (pt-leg-controller.ino)
+    #      ถ้าไม่มีจอเชื่อมอยู่ ปุ่ม START ทุกขั้นด้านล่างจะทำตัวเหมือนขั้น "START starts a session" ด้านบนทุกประการ
+    #      และครึ่งหนึ่งที่น่าสนใจของฟีเจอร์นี้ คือการกดปุ่มหน้าปัดเปล่าๆ จะรอคนแทนที่จะขยับขา จะไม่เคยถูกทดสอบเลย
+    #      ต่อสายจัมเปอร์ UART ตาม firmware/README.md และเปิดจอ CYD ที่ลง pt-leg-display ไว้
+    #      (ตั้งค่าใดก็ได้ สนใจแค่สัญญาณ ping 1 เฮิรตซ์ของมัน) ก่อนเริ่มกลุ่มนี้
+    #      ขั้นก่อนหน้าอาจยังค้างอยู่ในสถานะผิดพลาด ขั้นแรกด้านล่างจะล้างให้เอง
+    [pscustomobject]@{
+        Name    = "START opens CONFIRM, no relay click"
+        # The whole point of this feature: a bare panel press must NOT move
+        # anything. A step that only checked phase=CONFIRM would pass on a
+        # machine that opened the confirm screen and started lifting anyway -
+        # the exact regression this step exists to catch - so the click (or
+        # its absence) is graded by ear, not by the two Expect patterns below,
+        # which say nothing about the relay either way.
+        Do      = "if the previous step's FAULT is still latched, touch GPIO 26 first and wait for phase=IDLE (full 7 s lowerSec - this is a fault recovery, not a proportional one). With the display linked and phase=IDLE, touch GPIO 25 to GND briefly and let go. Listen: unlike every other START in this checklist, this press must produce NO relay click, and the green lamp must stay dark with yellow still lit - exactly the idle picture, because nothing has been committed yet"
+        Expect  = @('EDGE START', 'phase=CONFIRM')
+        Hint    = "phase=CONFIRM printing is necessary but not sufficient - it would print just the same on a machine that clicked the relay and started lifting a moment later, since BENCH_DEBUG never reports the actuator, only phase and reps. A click here means requestStart() ran the old direct-start path instead of opening Confirm - check the display is actually linked (a ping every second keeps linkUp alive; a CYD that is powered but never flashed with the current firmware, or unplugged from the UART jumpers, leaves linkUp false and this step silently becomes the last step in this group instead). Green lit or yellow dark here is the same tell as an audible click - something moved that Confirm should have held still."
+    }
+    [pscustomobject]@{
+        Name    = "a second START commits"
+        # Any press of START while phase=CONFIRM commits it - confirmStart()
+        # does not care whether this is literally the second physical press of
+        # the checklist, only that the machine is currently on the confirm
+        # screen (session.cpp).
+        Do      = "with phase=CONFIRM still open from the previous step, touch GPIO 25 again. This time you should hear the relay click and see green light, yellow go dark - the same picture the earlier START step described, now on the far side of the confirm screen instead of straight from idle"
+        Expect  = @('EDGE START', 'phase=LIFT')
+        Hint    = "No click and phase stays CONFIRM: confirmStart() never ran, which given the previous step just passed means this press was not read at all - check the button wiring and that START is not reading stuck-pressed since the first touch. CONFIRM reopens instead of LIFT: the machine backed out to IDLE on its own (the 30 s timeout tested two steps from now) in the gap between the two presses, and this one opened a fresh confirm screen rather than committing one - repeat the two presses closer together."
+    }
+    [pscustomobject]@{
+        Name    = "STOP cancels CONFIRM"
+        Do      = "settle whatever the previous step left running: touch GPIO 26 and wait for phase=IDLE. Then, with the display still linked, touch GPIO 25 to reopen CONFIRM, and this time touch GPIO 26 instead of GPIO 25 - the confirm screen should cancel straight back to IDLE. Watch and listen through the whole cancel the way the first CONFIRM step asked: no relay click, no LIFT, lamps never leave the idle picture"
+        Expect  = @('EDGE START', 'phase=CONFIRM', 'EDGE STOP', 'phase=IDLE')
+        Hint    = "The four Expect patterns above pass whether or not a click happened in between - they only prove CONFIRM was entered and IDLE was reached eventually, the same click-blindness the first CONFIRM step's hint describes. The panel STOP button is wired to cancelConfirm() directly while CONFIRM is open (pt-leg-controller.ino) and, unlike an idle STOP, never touches the rep count - so reps in the final phase=IDLE line should read whatever it already was, not necessarily 0."
+    }
+    [pscustomobject]@{
+        Name    = "CONFIRM expires after 30 s"
+        # CONFIRM_TIMEOUT_MS is exactly 30000 ms, measured by the firmware's
+        # own clock from the moment Confirm was entered - not from when this
+        # step starts reading the port. The default -StepTimeoutSec 30 leaves
+        # no slack for the time spent reading this line and reacting, so this
+        # one step wants a longer budget than the rest of the checklist.
+        Do      = "run this one step with more patience than the default budget - either re-run the whole bench with -StepTimeoutSec 40, or just know that a FAIL here reading 'never saw: phase=IDLE' after almost exactly 30 s of silence is this script's timeout racing the firmware's, not a real bug. With phase=IDLE and the display linked, touch GPIO 25 once to open CONFIRM, then touch nothing at all - no STOP, no second START - and wait. The confirm screen should back out to IDLE by itself, with no EDGE line in front of that phase=IDLE: nobody pressed anything, tick() alone drove it"
+        Expect  = @('EDGE START', 'phase=CONFIRM', 'phase=IDLE')
+        Hint    = "A STOP or a second START anywhere in the wait changes what this step is actually testing - cancelling or committing before the clock runs out only re-proves the two steps already covered above, not the timeout. If phase=CONFIRM never yields to phase=IDLE at all even with a generous timeout, the 30 s window itself is not firing - check CONFIRM_TIMEOUT_MS in session.h is still 30000 and that the board is not sitting in a debugger breakpoint or otherwise stalling millis()."
+    }
+    [pscustomobject]@{
+        Name    = "link down: START skips CONFIRM"
+        # The failure mode this guards against is the opposite of every step
+        # above: a machine stuck behind a confirm screen with no way to
+        # answer it, because the display that would show it is not there.
+        Do      = "pull the UART jumpers (or power off the CYD) and wait at least 2 s past its last ping - link-protocol.md's UART-loss window, the same 2 s the mid-session safe-stop uses, is what requestStart() reads as linkUp too. Then, with phase=IDLE, touch GPIO 25 to GND briefly. This should behave exactly like the very first START step in this checklist again: one relay click, green lit, yellow dark, and phase=LIFT with no CONFIRM in between - the same as running this whole bench with no display ever attached at all"
+        Expect  = @('EDGE START', 'phase=LIFT')
+        Hint    = "phase=CONFIRM appears here instead: either the jumpers are still seated, the CYD is still powered and pinging, or GPIO 25 was touched inside that 2 s window before the link actually went stale - wait it out fully and try again. This is the same pair of patterns the very first START step checked with no display ever in the picture; the only thing this step adds is proving a display that WAS linked, and then dropped, does not leave the machine waiting on a confirm screen nobody can answer."
     }
 )
 
