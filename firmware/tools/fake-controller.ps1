@@ -124,6 +124,35 @@ function Send-Done([bool]$isFault) {
     Send-Line ([string]::Format($done, $elapsed, $reps, $ep, $isFault.ToString().ToLower()))
 }
 
+# Shared by both ways the confirm screen can be committed -- the inbound
+# `confirm ok:true` message and a press of the panel's own START button (the
+# 's' key) once phase=7. $via only labels which one it was, for the log line;
+# $script: prefixes are needed here (unlike the rest of this file) because
+# this runs inside a function's own scope, not inline in the main loop.
+# [TH] ใช้ร่วมกันระหว่างสองทางที่ยืนยันหน้ารอยืนยันได้ คือข้อความ confirm ok:true ที่มาทางลิงก์ และการกดปุ่ม
+#      START บนหน้าปัดเอง (ปุ่ม s) เมื่ออยู่ phase=7 $via ใช้แค่บอกที่มาของการยืนยันในบรรทัด log ต้องใส่
+#      $script: นำหน้า (ต่างจากส่วนอื่นของไฟล์นี้) เพราะโค้ดนี้ทำงานในสโคปของฟังก์ชันเอง ไม่ใช่แบบแทรกตรงในลูปหลัก
+function Commit-Confirm([string]$via) {
+    $script:running = $true; $script:phase = 1; $script:phaseLeft = $LiftSec
+    $script:reps = 0; $script:sessionStart = Get-Date; $script:target = $script:pendingReps
+    $script:confirmDeadline = $null
+    Write-Host "   CONFIRM committed via $via -> starting with target=$($script:target)" -ForegroundColor Green
+}
+
+# Shared by both ways the confirm screen can be cancelled -- the inbound
+# `confirm ok:false` message (and a missing "ok", matching link.cpp's
+# `d["ok"] | false`) and a press of the panel's own STOP button (the 'x' key)
+# once phase=7. Neither touches $pendingReps or $target: nothing was ever
+# committed, matching cancelConfirm() on the real controller.
+# [TH] ใช้ร่วมกันระหว่างสองทางที่ยกเลิกหน้ารอยืนยันได้ คือข้อความ confirm ok:false ที่มาทางลิงก์ (หรือไม่มี "ok"
+#      เลย ตรงกับ d["ok"] | false ใน link.cpp) และการกดปุ่ม STOP บนหน้าปัดเอง (ปุ่ม x) เมื่ออยู่ phase=7
+#      ทั้งสองทางไม่แตะ $pendingReps หรือ $target เลย เพราะไม่มีอะไรถูกผูกมัดไว้ตั้งแต่แรก ตรงกับ cancelConfirm()
+#      บนคอนโทรลเลอร์จริง
+function Cancel-Confirm([string]$via) {
+    $script:phase = 0; $script:confirmDeadline = $null
+    Write-Host "   CONFIRM cancelled via $via" -ForegroundColor Green
+}
+
 Send-Line $settings
 
 if ($AutoStart) {
@@ -224,9 +253,21 @@ try {
                 #      ระบุว่า "เพิกเฉยเงียบๆ" นอกเหนือจากนั้น เก็บค่าไว้แล้วส่งกลับเป็น target ในข้อความ
                 #      state ถัดไป (ดูบรรทัด state ด้านล่าง) การสะท้อนกลับนี้คือทางเดียวที่ตัวบ่งชี้ความไม่ตรงกัน
                 #      บนจอจะรู้ว่าค่าที่แก้ไปถึงจริง
-                if ($phase -eq 7 -and $line -match '"reps"\s*:\s*(\d+)') {
-                    $pendingReps = [int]$Matches[1]
-                    Write-Host "   (pending sets = $pendingReps, CONFIRM)" -ForegroundColor Yellow
+                if ($phase -eq 7) {
+                    if ($line -match '"reps"\s*:\s*(\d+)') {
+                        $pendingReps = [int]$Matches[1]
+                        Write-Host "   (pending sets = $pendingReps, CONFIRM)" -ForegroundColor Yellow
+                    } else {
+                        # In Confirm, but the field itself did not parse (missing
+                        # or non-numeric "reps") -- a different failure than "not
+                        # in CONFIRM", and worth saying so: this one means the
+                        # message was malformed, not that it arrived at the wrong
+                        # time.
+                        # [TH] อยู่ในสถานะรอยืนยันแล้ว แต่ตัวฟิลด์เองแปลงค่าไม่ได้ (ไม่มี "reps" หรือไม่ใช่ตัวเลข)
+                        #      เป็นความผิดพลาดคนละแบบกับ "ไม่ได้อยู่ในสถานะรอยืนยัน" ควรบอกให้ต่างกันไว้
+                        #      กรณีนี้หมายถึงข้อความมีรูปแบบผิด ไม่ใช่ว่ามาถึงผิดจังหวะ
+                        Write-Host "   (sets ignored - in CONFIRM but reps did not parse)" -ForegroundColor DarkYellow
+                    }
                 } else {
                     Write-Host "   (sets ignored - not in CONFIRM)" -ForegroundColor DarkYellow
                 }
@@ -237,21 +278,17 @@ try {
                 # not $Target. ok:false (and a missing "ok", matching
                 # link.cpp's `d["ok"] | false`) cancels back to Idle. Both are
                 # no-ops outside phase 7, matching cancelConfirm()/confirmStart()
-                # each guarding on Phase::Confirm.
+                # each guarding on Phase::Confirm. Commit-Confirm/Cancel-Confirm
+                # are the same functions the 's'/'x' keys call below, so a link
+                # message and a panel-button press reach an identical state.
                 # [TH] ok:true ยืนยัน $pendingReps แล้วเริ่มรอบเหมือนปุ่ม s ด้านล่าง ต่างกันที่เป้าหมายเป็นค่าที่
                 #      ยืนยันแล้ว ไม่ใช่ $Target ส่วน ok:false (หรือไม่มี "ok" เลย ตรงกับ d["ok"] | false ใน
-                #      link.cpp) ยกเลิกกลับไปสถานะว่าง ทั้งสองไม่มีผลถ้าไม่ได้อยู่ phase 7
+                #      link.cpp) ยกเลิกกลับไปสถานะว่าง ทั้งสองไม่มีผลถ้าไม่ได้อยู่ phase 7 Commit-Confirm กับ
+                #      Cancel-Confirm เป็นฟังก์ชันเดียวกับที่ปุ่ม s/x ด้านล่างเรียก ข้อความทางลิงก์กับการกดปุ่ม
+                #      หน้าปัดจึงพาไปสู่สถานะเดียวกันเป๊ะ
                 if ($phase -eq 7) {
-                    $ok = $line -match '"ok"\s*:\s*true'
-                    if ($ok) {
-                        $running = $true; $phase = 1; $phaseLeft = $LiftSec
-                        $reps = 0; $sessionStart = Get-Date; $target = $pendingReps
-                        $confirmDeadline = $null
-                        Write-Host "   CONFIRM ok:true -> starting with target=$target" -ForegroundColor Green
-                    } else {
-                        $phase = 0; $confirmDeadline = $null
-                        Write-Host "   CONFIRM ok:false -> cancelled" -ForegroundColor Green
-                    }
+                    if ($line -match '"ok"\s*:\s*true') { Commit-Confirm 'link' }
+                    else { Cancel-Confirm 'link' }
                 } else {
                     Write-Host "   (confirm ignored - not in CONFIRM)" -ForegroundColor DarkYellow
                 }
@@ -284,10 +321,7 @@ try {
                         #      ซึ่งถูกตรวจก่อนสาขาที่สนใจว่าลิงก์เชื่อมอยู่หรือไม่ เป็นการยืนยันแบบเดียวกับตัวจัดการ
                         #      ข้อความ confirm ok:true ด้านบน ต่างกันแค่ที่มาของการกด
                         if ($phase -eq 7) {
-                            $running = $true; $phase = 1; $phaseLeft = $LiftSec
-                            $reps = 0; $sessionStart = Get-Date; $target = $pendingReps
-                            $confirmDeadline = $null
-                            Write-Host "   CONFIRM committed via START (key)" -ForegroundColor Green
+                            Commit-Confirm 'START (key)'
                         } elseif (-not $running) {
                             $running = $true; $phase = 1; $phaseLeft = $LiftSec
                             $reps = 0; $sessionStart = Get-Date
@@ -307,8 +341,7 @@ try {
                         #      บนหน้าปัดใน pt-leg-controller.ino ซึ่งเดินสายไปยัง cancelConfirm() แยกจาก
                         #      requestStop() เป็นการยกเลิกแบบเดียวกับตัวจัดการข้อความ confirm ok:false ด้านบน
                         if ($phase -eq 7) {
-                            $phase = 0; $confirmDeadline = $null
-                            Write-Host "   CONFIRM cancelled via STOP (key)" -ForegroundColor Green
+                            Cancel-Confirm 'STOP (key)'
                         } elseif ($running -and $phase -ne 5) {
                             $phase = 5; $phaseLeft = $LowerSec   # SafeLower, then idle
                             Write-Host "   STOP (key)" -ForegroundColor Green

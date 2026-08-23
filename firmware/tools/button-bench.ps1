@@ -330,15 +330,30 @@ $steps = @(
         Hint    = "The four Expect patterns above pass whether or not a click happened in between - they only prove CONFIRM was entered and IDLE was reached eventually, the same click-blindness the first CONFIRM step's hint describes. The panel STOP button is wired to cancelConfirm() directly while CONFIRM is open (pt-leg-controller.ino) and, unlike an idle STOP, never touches the rep count - so reps in the final phase=IDLE line should read whatever it already was, not necessarily 0."
     }
     [pscustomobject]@{
-        Name    = "CONFIRM expires after 30 s"
+        Name       = "CONFIRM expires after 30 s"
         # CONFIRM_TIMEOUT_MS is exactly 30000 ms, measured by the firmware's
-        # own clock from the moment Confirm was entered - not from when this
-        # step starts reading the port. The default -StepTimeoutSec 30 leaves
-        # no slack for the time spent reading this line and reacting, so this
-        # one step wants a longer budget than the rest of the checklist.
-        Do      = "run this one step with more patience than the default budget - either re-run the whole bench with -StepTimeoutSec 40, or just know that a FAIL here reading 'never saw: phase=IDLE' after almost exactly 30 s of silence is this script's timeout racing the firmware's, not a real bug. With phase=IDLE and the display linked, touch GPIO 25 once to open CONFIRM, then touch nothing at all - no STOP, no second START - and wait. The confirm screen should back out to IDLE by itself, with no EDGE line in front of that phase=IDLE: nobody pressed anything, tick() alone drove it"
-        Expect  = @('EDGE START', 'phase=CONFIRM', 'phase=IDLE')
-        Hint    = "A STOP or a second START anywhere in the wait changes what this step is actually testing - cancelling or committing before the clock runs out only re-proves the two steps already covered above, not the timeout. If phase=CONFIRM never yields to phase=IDLE at all even with a generous timeout, the 30 s window itself is not firing - check CONFIRM_TIMEOUT_MS in session.h is still 30000 and that the board is not sitting in a debugger breakpoint or otherwise stalling millis()."
+        # own clock from the moment Confirm was entered. Wait-ForPatterns
+        # starts ITS deadline the instant this step begins, which is before
+        # the operator has even read the Do line below and pressed START -
+        # so against the shared -StepTimeoutSec default (30) this step's own
+        # window always closes before the firmware's does. That is not an
+        # occasional flake, it is a guaranteed FAIL at the default budget
+        # every single time, which is worse: a checklist step that always
+        # fails teaches whoever is running it to discount failures - the
+        # last thing a hand-run safety checklist should do. TimeoutSec below
+        # gives this one step alone a wider budget than the rest of the
+        # checklist; every other step keeps the shared default.
+        # [TH] CONFIRM_TIMEOUT_MS อยู่ที่ 30000 มิลลิวินาทีพอดี นับจากนาฬิกาของเฟิร์มแวร์เองตอนที่เข้าสถานะ
+        #      รอยืนยัน ส่วน Wait-ForPatterns เริ่มนับเวลาของตัวเองตั้งแต่ขั้นนี้เริ่ม ซึ่งเป็นช่วงก่อนที่ผู้ใช้
+        #      จะอ่านบรรทัด Do ด้านล่างและกด START ด้วยซ้ำ เทียบกับงบเวลา -StepTimeoutSec ที่ใช้ร่วมกัน (30)
+        #      หน้าต่างเวลาของขั้นนี้จึงปิดก่อนของเฟิร์มแวร์เสมอ ไม่ใช่แค่คลาดเคลื่อนเป็นบางครั้ง แต่พังทุกครั้งที่รันด้วย
+        #      งบเริ่มต้น ซึ่งแย่กว่านั้น เพราะขั้นตรวจสอบที่พังทุกครั้งจะสอนให้คนที่รันมองข้ามความล้มเหลวไป
+        #      ซึ่งเป็นสิ่งสุดท้ายที่รายการตรวจสอบด้านความปลอดภัยที่รันด้วยมือควรทำ TimeoutSec ด้านล่างให้งบเวลา
+        #      ที่กว้างกว่าขั้นอื่นในรายการเฉพาะขั้นนี้ขั้นเดียว ขั้นอื่นยังใช้ค่าเริ่มต้นที่ใช้ร่วมกันตามเดิม
+        TimeoutSec = 40   # 30 s CONFIRM window + slack for reading this line and pressing START
+        Do         = "with phase=IDLE and the display linked, touch GPIO 25 once to open CONFIRM, then touch nothing at all - no STOP, no second START - and wait. The confirm screen should back out to IDLE by itself, with no EDGE line in front of that phase=IDLE: nobody pressed anything, tick() alone drove it"
+        Expect     = @('EDGE START', 'phase=CONFIRM', 'phase=IDLE')
+        Hint       = "A STOP or a second START anywhere in the wait changes what this step is actually testing - cancelling or committing before the clock runs out only re-proves the two steps already covered above, not the timeout. If phase=CONFIRM never yields to phase=IDLE at all even with this step's own wider budget, the 30 s window itself is not firing - check CONFIRM_TIMEOUT_MS in session.h is still 30000 and that the board is not sitting in a debugger breakpoint or otherwise stalling millis()."
     }
     [pscustomobject]@{
         Name    = "link down: START skips CONFIRM"
@@ -366,7 +381,25 @@ try {
         Write-Host "[$n/$($steps.Count)] $($step.Name)" -ForegroundColor White
         Write-Host "      do: $($step.Do)" -ForegroundColor Cyan
         if ($n -gt 1) { Clear-Serial }
-        $r = Wait-ForPatterns $step.Expect $StepTimeoutSec
+        # Most steps share the one -StepTimeoutSec budget. A step whose own
+        # Do instructions require riding out a fixed firmware timer (CONFIRM's
+        # 30 s expiry) needs more than that, and needs it every time, not just
+        # on a slow reaction - see that step's own comment for why the shared
+        # default guarantees a FAIL there. TimeoutSec on the step object
+        # overrides the shared budget for exactly that one step; every step
+        # without it keeps using $StepTimeoutSec exactly as before. Still run
+        # through the same DryRun clamp as the shared budget, so a step that
+        # regresses in dry-run mode fails fast instead of spinning for
+        # whatever wider timeout it was given.
+        # [TH] ส่วนใหญ่ใช้งบเวลา -StepTimeoutSec ร่วมกัน แต่ขั้นที่คำสั่งของมันเองต้องรอให้ครบตัวจับเวลาคงที่ของ
+        #      เฟิร์มแวร์ (30 วินาทีของ CONFIRM) ต้องการมากกว่านั้น และต้องการทุกครั้ง ไม่ใช่แค่ตอนตอบสนองช้า
+        #      ดูคอมเมนต์ของขั้นนั้นเองว่าทำไมงบเริ่มต้นที่ใช้ร่วมกันถึงพังแน่นอน TimeoutSec บนตัวขั้นเองจะแทนที่
+        #      งบเวลาร่วมเฉพาะขั้นนั้นขั้นเดียว ขั้นที่ไม่มีค่านี้ยังใช้ $StepTimeoutSec เหมือนเดิมทุกประการ
+        #      ยังผ่านตัวคุมของ DryRun เดียวกันกับงบเวลาร่วม เพื่อให้ขั้นที่พังตอน dry-run ยังพังเร็วเหมือนเดิม
+        #      แทนที่จะหมุนรอจนครบเวลาที่กว้างกว่าซึ่งได้รับมา
+        $timeout = if ($step.PSObject.Properties['TimeoutSec']) { $step.TimeoutSec } else { $StepTimeoutSec }
+        if ($DryRun) { $timeout = [Math]::Min($timeout, 3) }
+        $r = Wait-ForPatterns $step.Expect $timeout
         if ($r.Ok) {
             Write-Host "      PASS" -ForegroundColor Green
         } else {
