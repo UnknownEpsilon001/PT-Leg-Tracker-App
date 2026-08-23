@@ -22,8 +22,8 @@
 enum class Phase { Idle, Lift, Hold, Lower, Rest, SafeLower, Fault };
 
 struct CycleCfg {
-  uint32_t liftMs;       // เวลาที่รีเลย์ยกขึ้นจ่ายไฟต่อหนึ่งจังหวะ
-  uint32_t lowerMs;      // เวลาที่รีเลย์ลดลงจ่ายไฟต่อหนึ่งจังหวะ
+  uint32_t liftMs;       // เวลาที่ขับมอเตอร์ยกขึ้นต่อหนึ่งจังหวะ
+  uint32_t lowerMs;      // เวลาที่ขับมอเตอร์ลดลงต่อหนึ่งจังหวะ
   uint32_t holdMs;       // เวลาค้างตอนยกสุด
   uint32_t restMs;       // เวลาพักตอนลงสุด
   uint32_t maxTravelMs;  // ceiling liftMs/lowerMs are clamped to — เพดานที่ใช้จำกัดสองค่าแรก
@@ -70,7 +70,7 @@ class SessionSM {
   void requestStop(uint32_t nowMs);
 
   void forceFault(uint32_t nowMs);   // external safety trip (actuator cap)
-                                     // [TH] บังคับเข้าสถานะผิดพลาดจากภายนอก (เพดานเวลารีเลย์)
+                                     // [TH] บังคับเข้าสถานะผิดพลาดจากภายนอก (เพดานเวลาจ่ายไฟ)
 
   // Drop a start queued behind a recovery lowering, without touching the
   // lowering itself. For a genuine actuator-cap trip that lands mid-SafeLower
@@ -117,9 +117,9 @@ class SessionSM {
   bool finalFaulted() const { return finalFault; }
   // One-shot: a new stroke has begun that may drive the same direction as the
   // last one, so the actuator's energize clock has to be restarted. Read once per
-  // loop, before the relays are commanded.
+  // loop, before the motor is commanded.
   // [TH] อ่านได้ครั้งเดียว: มีการเคลื่อนที่ครั้งใหม่ที่อาจสั่งไปทางเดิม ต้องเริ่มจับเวลาการจ่ายไฟใหม่
-  //      อ่านหนึ่งครั้งต่อลูป ก่อนสั่งรีเลย์
+  //      อ่านหนึ่งครั้งต่อลูป ก่อนสั่งมอเตอร์
   bool takeStrokeRenewEdge();
 
  private:

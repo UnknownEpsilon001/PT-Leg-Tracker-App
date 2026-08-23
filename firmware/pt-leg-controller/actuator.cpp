@@ -1,65 +1,104 @@
-// การจ่ายไฟรีเลย์ยก/ลดขา พร้อมกลไกความปลอดภัย "ตัดก่อนต่อ" และเพดานเวลาจ่ายไฟ
-// Relay drive for up/down with break-before-make and a max-energize time cap.
+// การขับมอเตอร์ยก/ลดขาด้วยสะพานเอช BTS7960 พร้อมกลไก "ตัดก่อนต่อ" การไล่กำลังขับ
+// เพดานเวลาจ่ายไฟ และรีเลย์ตัดหลัก
+// BTS7960 drive for up/down, with break-before-make, ramping, a max-energize
+// time cap and a master cut relay.
 #include "actuator.h"
 #include <Arduino.h>
 #include <esp_timer.h>
 #include "config.h"
 
-#ifdef RELAY_ACTIVE_LOW
-static const int ON = LOW, OFF = HIGH;
+#ifdef MASTER_ACTIVE_LOW
+static const int MASTER_ON = LOW, MASTER_OFF = HIGH;
 #else
-static const int ON = HIGH, OFF = LOW;
+static const int MASTER_ON = HIGH, MASTER_OFF = LOW;
 #endif
-// [TH] ON/OFF คือระดับลอจิกที่จ่าย/ตัดรีเลย์ กลับด้านตามชนิดบอร์ด (active-low หรือไม่)
+// [TH] MASTER_ON/OFF คือระดับลอจิกที่ปิด/เปิดวงจรของรีเลย์ตัดหลัก กลับด้านตามชนิดบอร์ด
+// The BTS7960's own inputs need no such flip: RPWM, LPWM and the shared enable
+// are all active-HIGH, and LOW is the safe level on every one of them.
+// [TH] ขาอินพุตของ BTS7960 เองไม่ต้องกลับด้าน ทั้ง RPWM, LPWM และขาเปิดใช้งานที่ใช้ร่วมกัน
+//      ล้วนสั่งงานด้วยลอจิกสูง และลอจิกต่ำคือระดับที่ปลอดภัยของทุกขา
 
+// state is the COMMANDED direction; driveDir is the half-bridge that currently
+// carries duty. They are the same thing except while a normal stop fades out —
+// there, state is already ACT_OFF but the motor is still turning, and every
+// safety check below has to look at driveDir rather than state to see that.
+// [TH] state คือทิศที่ถูกสั่ง ส่วน driveDir คือซีกสะพานที่กำลังจ่ายกำลังอยู่จริง
+//      สองค่านี้เท่ากันเสมอ ยกเว้นระหว่างที่การหยุดตามปกติกำลังผ่อนกำลังลง
+//      ตอนนั้น state เป็น ACT_OFF ไปแล้วแต่มอเตอร์ยังหมุนอยู่
+//      การตรวจสอบความปลอดภัยทุกจุดด้านล่างจึงต้องดู driveDir ไม่ใช่ state
 static ActState state = ACT_OFF;
+static ActState driveDir = ACT_OFF;
+static uint16_t duty = 0, dutyTarget = 0;  // กำลังขับปัจจุบัน และค่าที่กำลังไล่ไปหา
+// Where the current leg of the ramp started, and when. Every step is measured
+// from these rather than from the previous step: MOTOR_DUTY_MAX * 1 ms /
+// MOTOR_RAMP_MS truncates to 2 of the 1023 counts, and stepping by a truncated 2
+// every millisecond stretches a 400 ms ramp to 512 ms. Measuring the whole
+// distance from the start of the leg has no accumulating error, and it costs one
+// extra variable.
+// [TH] จุดเริ่มและเวลาเริ่มของช่วงไล่กำลังปัจจุบัน ทุกขั้นวัดจากสองค่านี้ ไม่ใช่วัดจากขั้นก่อนหน้า
+//      เพราะ MOTOR_DUTY_MAX คูณ 1 มิลลิวินาที หารด้วย MOTOR_RAMP_MS ถูกปัดเศษเหลือ 2 จาก 1023 หน่วย
+//      การเดินทีละ 2 ที่ถูกปัดแล้วทุกมิลลิวินาทีจะยืดช่วงไล่ 400 มิลลิวินาทีเป็น 512 มิลลิวินาที
+//      การวัดระยะทั้งหมดจากจุดเริ่มของช่วงจึงไม่มีความคลาดเคลื่อนสะสม และเสียตัวแปรเพิ่มแค่ตัวเดียว
+static uint16_t rampFrom = 0;
+static uint32_t rampAt = 0;
 static uint32_t capMs = 0, energizeStart = 0;  // เพดานเวลา และเวลาที่เริ่มจ่ายไฟ
 // volatile: written by the esp_timer callback on the other core as well as by the
 // loop. [TH] ต้องเป็น volatile เพราะถูกเขียนจากฟังก์ชันเรียกกลับของตัวจับเวลาบนอีกคอร์ด้วย ไม่ใช่แค่จากลูป
 static volatile bool capTripped = false;       // ธงว่าเพดานเวลาถูกตัดไปแล้ว
 
-// Dead time between de-energizing one relay and energizing the other. Commanding
-// them apart is not the same as them being apart: the coils take milliseconds to
-// release, and back-to-back digitalWrites are microseconds apart, so a live
-// reversal — STOP during a lift, which goes straight from UP to SafeLower's DOWN
-// in one loop iteration — relied on the UP relay happening to release faster than
-// the DOWN one operates. That holds for most parts and is why the bench works,
-// but it is a property of the relays, not of this code, and the two channels are
-// on different connectors. 50 ms comfortably exceeds the release time of the
-// relay modules these boards use.
-// [TH] เวลาหน่วงระหว่างดับรีเลย์ตัวหนึ่งกับจ่ายไฟให้อีกตัว
-//      การสั่งแยกกันไม่เท่ากับการที่หน้าสัมผัสแยกกันจริง ขดลวดใช้เวลาหลายมิลลิวินาทีกว่าจะคลาย
-//      แต่คำสั่งเขียนขาสองครั้งติดกันห่างกันแค่ไมโครวินาที
-//      การกลับทิศขณะกำลังเคลื่อนที่ เช่นกด STOP ตอนกำลังยก ซึ่งเปลี่ยนจากยกเป็นลดในลูปรอบเดียว
-//      จึงไปพึ่งว่ารีเลย์ตัวยกจะคลายเร็วกว่าที่ตัวลดจะทำงาน
-//      ซึ่งเป็นจริงกับอุปกรณ์ส่วนใหญ่และเป็นเหตุผลที่ทดสอบบนโต๊ะแล้วผ่าน
-//      แต่นั่นเป็นคุณสมบัติของรีเลย์ ไม่ใช่ของโค้ดนี้ และรีเลย์สองตัวอยู่คนละขั้วต่อ
-//      ค่า 50 มิลลิวินาทีมากกว่าเวลาคลายของโมดูลรีเลย์ที่บอร์ดนี้ใช้อยู่พอสมควร
+// Master cut relay state. armed is what the contacts are actually doing;
+// armWanted is what the sketch last asked for. They differ only while an open is
+// waiting for a fade to finish.
+// [TH] สถานะรีเลย์ตัดหลัก armed คือสิ่งที่หน้าสัมผัสเป็นอยู่จริง
+//      ส่วน armWanted คือสิ่งที่สเก็ตช์สั่งไว้ล่าสุด สองค่านี้ต่างกันเฉพาะตอนที่การเปิดวงจรรอให้การผ่อนกำลังจบก่อน
+static bool armed = false, armWanted = false;
+static uint32_t armAt = 0;  // when the contacts were commanded closed — เวลาที่สั่งให้หน้าสัมผัสปิด
+
+static bool pwmReady = false;
+
+// Dead time between dropping one direction and driving the other, and the settle
+// time the master relay's contacts get before any PWM follows them.
+//
+// The relays are gone but the reason is not. Commanding a reversal apart is not
+// the same as it being apart: a live reversal — STOP during a lift, which goes
+// straight from UP to SafeLower's DOWN in one loop iteration — would otherwise
+// slam a loaded, still-turning motor into the opposite direction in the
+// microseconds between two writes. The BTS7960 survives that; the gearbox and
+// the leg on it are what this protects. 50 ms is also comfortably longer than
+// the operate time of the relay module the master cut uses.
+// [TH] เวลาหน่วงระหว่างการหยุดขับทิศหนึ่งกับการเริ่มขับอีกทิศ
+//      และเป็นเวลาที่ให้หน้าสัมผัสของรีเลย์ตัดหลักนิ่งก่อนที่จะจ่าย PWM ตามไป
+//      รีเลย์มอเตอร์หายไปแล้วแต่เหตุผลยังอยู่
+//      การสั่งกลับทิศแยกกันไม่เท่ากับการที่มันแยกกันจริง
+//      การกลับทิศขณะกำลังขับ เช่นกด STOP ตอนกำลังยก ซึ่งเปลี่ยนจากยกเป็นลดในลูปรอบเดียว
+//      จะกระชากมอเตอร์ที่มีโหลดและยังหมุนอยู่ให้กลับทิศภายในเวลาไม่กี่ไมโครวินาทีระหว่างคำสั่งเขียนสองครั้ง
+//      ตัว BTS7960 ทนได้ แต่สิ่งที่ป้องกันคือชุดเกียร์และขาที่วางอยู่บนนั้น
+//      ค่า 50 มิลลิวินาทียังมากกว่าเวลาทำงานของโมดูลรีเลย์ที่ใช้เป็นตัวตัดหลักอยู่พอสมควร
 static const uint32_t DEADTIME_MS = 50;
 static ActState pending = ACT_OFF;   // direction waiting out the dead time
-static uint32_t pendingAt = 0;       // when it may be energized
-// When the relays were last actually de-energized. The dead time has to be
-// measured from this, not only from a live reversal: most direction changes pass
-// through an OFF phase first, and the short ones do not wait. A fault during a
-// lift cuts the UP relay and the operator's STOP — or a server stop in the same
-// iteration — enters SafeLower immediately after, so DOWN could be energized tens
-// of milliseconds later, while the UP contacts are still closing.
-// [TH] เวลาที่รีเลย์ถูกดับจริงครั้งล่าสุด ต้องวัดเวลาหน่วงจากค่านี้
-//      ไม่ใช่วัดเฉพาะตอนกลับทิศขณะกำลังเคลื่อนที่
+static uint32_t pendingAt = 0;       // when it may be driven
+// When the drive was last actually at zero. The dead time has to be measured
+// from this, not only from a live reversal: most direction changes pass through
+// an OFF phase first, and the short ones do not wait. A fault during a lift cuts
+// the drive and the operator's STOP — or a server stop in the same iteration —
+// enters SafeLower immediately after, so DOWN could be driven tens of
+// milliseconds later with the motor still coasting the other way.
+// [TH] เวลาที่กำลังขับลงถึงศูนย์จริงครั้งล่าสุด ต้องวัดเวลาหน่วงจากค่านี้
+//      ไม่ใช่วัดเฉพาะตอนกลับทิศขณะกำลังขับ
 //      เพราะการเปลี่ยนทิศส่วนใหญ่ผ่านช่วงที่ดับก่อน และช่วงที่สั้นๆ ก็ไม่ได้รอ
-//      ความผิดพลาดระหว่างยกขาจะตัดรีเลย์ขึ้น แล้วการกด STOP ของผู้ใช้
+//      ความผิดพลาดระหว่างยกขาจะตัดกำลังขับ แล้วการกด STOP ของผู้ใช้
 //      หรือคำสั่งหยุดจากเซิร์ฟเวอร์ในลูปรอบเดียวกัน จะพาเข้าสถานะลดขาทันทีหลังจากนั้น
-//      รีเลย์ลงจึงอาจถูกจ่ายไฟห่างออกไปเพียงไม่กี่สิบมิลลิวินาที ขณะที่หน้าสัมผัสของรีเลย์ขึ้นยังกำลังปิดอยู่
+//      ทิศลงจึงอาจถูกขับห่างออกไปเพียงไม่กี่สิบมิลลิวินาที ขณะที่มอเตอร์ยังไหลไปทางเดิมอยู่
 static uint32_t offAt = 0;
 
-// Hardware backstop for the energize cap. actuatorTick() can only cut the relays
+// Hardware backstop for the energize cap. actuatorTick() can only cut the drive
 // when the loop reaches it, and the failure that makes a stroke run long — a loop
 // blocked in a network call, an NVS commit, a panic — is the same failure that
 // stops the tick from running at all. That made the "independent" second net
 // depend on the very thing it was guarding. This timer runs off the esp_timer
 // task instead, so it fires whether or not loop() is alive.
 // [TH] แนวป้องกันสำรองระดับฮาร์ดแวร์สำหรับเพดานเวลาจ่ายไฟ
-//      actuatorTick() ตัดรีเลย์ได้เฉพาะตอนที่ลูปเดินมาถึงมันเท่านั้น
+//      actuatorTick() ตัดกำลังขับได้เฉพาะตอนที่ลูปเดินมาถึงมันเท่านั้น
 //      และความล้มเหลวที่ทำให้จ่ายไฟยาวเกิน เช่นลูปค้างอยู่ในการเรียกเครือข่าย การเขียน NVS หรือโปรแกรมพัง
 //      คือความล้มเหลวเดียวกับที่ทำให้ actuatorTick() ไม่ได้ทำงานเลย
 //      ตาข่ายกันพลาดชั้นที่สองจึงไปขึ้นกับสิ่งที่ตัวเองมีไว้เฝ้าพอดี
@@ -67,41 +106,83 @@ static uint32_t offAt = 0;
 static esp_timer_handle_t capTimer = nullptr;
 static volatile bool capTimerFired = false;
 
-static void writePins(int up, int down) {
-  // break-before-make: always de-energize both before energizing one
-  // [TH] ตัดก่อนต่อ: ดับรีเลย์ทั้งคู่ก่อนเสมอ แล้วค่อยจ่ายไฟด้านที่ต้องการ
-  digitalWrite(PIN_RELAY_UP, OFF);
-  digitalWrite(PIN_RELAY_DOWN, OFF);
-  if (up == ON) digitalWrite(PIN_RELAY_UP, ON);
-  if (down == ON) digitalWrite(PIN_RELAY_DOWN, ON);
+// The only place PWM levels are written. The idle half-bridge is always zeroed
+// BEFORE the driving one is raised, which is what break-before-make means on a
+// bridge: RPWM and LPWM high together is a shoot-through command, and the fact
+// that the BTS7960 refuses it internally is a property of the chip, not of this
+// code.
+// [TH] เป็นจุดเดียวที่เขียนค่ากำลังขับ ซีกที่ไม่ได้ใช้จะถูกลดเป็นศูนย์ก่อนที่ซีกที่ขับจะถูกยกขึ้นเสมอ
+//      นี่คือความหมายของ "ตัดก่อนต่อ" บนสะพานเอช
+//      การสั่ง RPWM และ LPWM สูงพร้อมกันคือการสั่งให้กระแสทะลุ
+//      และการที่ BTS7960 ปฏิเสธคำสั่งนั้นเองเป็นคุณสมบัติของชิป ไม่ใช่ของโค้ดนี้
+static void driveRaw(ActState dir, uint16_t d) {
+  if (dir != ACT_UP) ledcWrite(PIN_MOT_RPWM, 0);
+  if (dir != ACT_DOWN) ledcWrite(PIN_MOT_LPWM, 0);
+  if (dir == ACT_OFF || d == 0) {
+    digitalWrite(PIN_MOT_EN, LOW);
+    return;
+  }
+  digitalWrite(PIN_MOT_EN, HIGH);
+  ledcWrite(dir == ACT_UP ? PIN_MOT_RPWM : PIN_MOT_LPWM, d);
 }
 
-// Cuts the relays from the timer task. Only the pins are touched here; the
-// bookkeeping is left to actuatorTick() on the main loop, so nothing races over
-// the state variables.
-// [TH] ตัดรีเลย์จากงานของตัวจับเวลา แตะเฉพาะขาสัญญาณเท่านั้น
-//      ส่วนการปรับค่าสถานะปล่อยให้ actuatorTick() ในลูปหลักทำ จะได้ไม่มีการแย่งเขียนตัวแปรสถานะกัน
+// Everything the emergency paths need, and nothing else — no bookkeeping, so it
+// is safe to call from the timer task as well as from the loop.
+//
+// The enable pin goes LOW first, deliberately. It is one GPIO write and it
+// disables both half-bridges on its own, so even if a ledcWrite here interleaves
+// with one on the loop's side, the bridge is already off before either lands.
+// The master relay is opened last and only ever after that: by then the circuit
+// it breaks is dead, so the contacts are not switching current.
+// [TH] มีเฉพาะสิ่งที่เส้นทางฉุกเฉินต้องใช้ ไม่มีการปรับค่าสถานะ
+//      จึงเรียกจากงานของตัวจับเวลาได้เช่นเดียวกับเรียกจากลูป
+//      ขาเปิดใช้งานถูกสั่งลอจิกต่ำก่อนโดยตั้งใจ เป็นการเขียนขา GPIO ครั้งเดียว
+//      และปิดสะพานทั้งสองซีกได้ด้วยตัวเอง
+//      ต่อให้การเขียนค่ากำลังขับตรงนี้ไปสลับจังหวะกับการเขียนจากฝั่งลูป สะพานก็ปิดไปก่อนแล้วทั้งคู่
+//      รีเลย์ตัดหลักถูกเปิดวงจรเป็นลำดับสุดท้ายและต่อจากนั้นเสมอ
+//      ถึงตอนนั้นวงจรที่มันตัดไม่มีกระแสแล้ว หน้าสัมผัสจึงไม่ได้ตัดกระแส
+static void killPins(bool openMaster) {
+  digitalWrite(PIN_MOT_EN, LOW);
+  ledcWrite(PIN_MOT_RPWM, 0);
+  ledcWrite(PIN_MOT_LPWM, 0);
+  if (openMaster) digitalWrite(PIN_MOT_MASTER, MASTER_OFF);
+}
+
+// Cuts the drive from the timer task, master relay included — a cap trip is the
+// one moment where a shorted output FET and a stroke that simply ran long look
+// identical from here, and the relay is the only cut that covers both. Only the
+// pins are touched; the bookkeeping is left to actuatorTick() on the main loop,
+// so nothing races over the state variables.
+// [TH] ตัดกำลังขับจากงานของตัวจับเวลา รวมถึงรีเลย์ตัดหลักด้วย
+//      การชนเพดานเวลาเป็นจังหวะเดียวที่มอสเฟตขาออกลัดวงจร กับจังหวะที่วิ่งนานเกินไปเฉยๆ
+//      ดูเหมือนกันทุกอย่างเมื่อมองจากตรงนี้ และรีเลย์คือการตัดอย่างเดียวที่ครอบคลุมทั้งสองกรณี
+//      แตะเฉพาะขาสัญญาณเท่านั้น ส่วนการปรับค่าสถานะปล่อยให้ actuatorTick() ในลูปหลักทำ
+//      จะได้ไม่มีการแย่งเขียนตัวแปรสถานะกัน
 static void capTimerCb(void*) {
-  writePins(OFF, OFF);
+  killPins(true);
   // capTripped is latched here, not left for the loop to derive from the flag
   // below. The loop's own order is applyActuator() then actuatorTick(), and by
   // the time it resumes the state machine has usually faulted on its own net
   // already — so applyActuator() calls actuatorOff(), which disarms and clears
-  // the flag before actuatorTick() ever reads it. The relays still opened, but
+  // the flag before actuatorTick() ever reads it. The drive was still cut, but
   // the trip was never reported. Latching it here survives that, and request()
   // clears it on the next energize.
   // [TH] ตั้งค่า capTripped ตรงนี้ ไม่ปล่อยให้ลูปไปสรุปเอาจากธงด้านล่าง
   //      ลำดับในลูปคือ applyActuator() แล้วจึง actuatorTick()
   //      กว่าลูปจะกลับมาทำงาน เครื่องสถานะมักตัดสินว่าผิดพลาดด้วยตาข่ายของตัวเองไปแล้ว
   //      applyActuator() จึงเรียก actuatorOff() ซึ่งยกเลิกตัวจับเวลาและล้างธงทิ้งก่อนที่ actuatorTick() จะได้อ่าน
-  //      รีเลย์ถูกตัดจริง แต่ไม่มีการรายงานว่าถูกตัด การเก็บค่าไว้ตรงนี้จะรอดจากลำดับนั้น
+  //      กำลังขับถูกตัดจริง แต่ไม่มีการรายงานว่าถูกตัด การเก็บค่าไว้ตรงนี้จะรอดจากลำดับนั้น
   //      และ request() จะล้างค่าให้เองตอนจ่ายไฟครั้งถัดไป
   capTripped = true;
   capTimerFired = true;
 }
 
-// Armed whenever a relay is energized, cancelled the moment both are off.
-// [TH] ตั้งเวลาทุกครั้งที่จ่ายไฟรีเลย์ และยกเลิกทันทีที่ดับทั้งคู่
+// Armed whenever the motor is driven, cancelled the moment it is genuinely at
+// zero. A fade-out re-arms it rather than running uncovered — see
+// actuatorSoftOff().
+// [TH] ตั้งเวลาทุกครั้งที่ขับมอเตอร์ และยกเลิกทันทีที่กำลังขับลงถึงศูนย์จริง
+//      ช่วงผ่อนกำลังลงจะตั้งเวลาใหม่แทนการปล่อยให้ทำงานโดยไม่มีอะไรคุม
+//      ดูรายละเอียดที่ actuatorSoftOff()
 static void armCapTimer() {
   if (!capTimer || capMs == 0) return;
   esp_timer_stop(capTimer);  // harmless if it is not running — ถ้ายังไม่ได้เดินอยู่ก็ไม่มีผล
@@ -115,12 +196,12 @@ static void disarmCapTimer() {
   // other core can set the flag between the two, and it would otherwise be read
   // on a later iteration as a cap trip for a stroke that had ended normally —
   // faulting a session that was fine. Only reached from paths that are taking the
-  // relays off anyway, so a genuine trip during a driving phase is untouched: the
+  // drive down anyway, so a genuine trip during a driving phase is untouched: the
   // driving paths early-return without disarming.
   // [TH] ล้างค่าหลังสั่งหยุด ไม่ใช่ก่อน เพราะฟังก์ชันเรียกกลับที่ถูกส่งไปทำงานบนอีกคอร์แล้ว
   //      อาจตั้งค่าธงในช่วงระหว่างสองคำสั่งนี้ ซึ่งจะถูกอ่านในรอบถัดไปว่าเป็นการตัดเพราะเกินเพดานเวลา
   //      ของการเคลื่อนที่ที่จบไปตามปกติแล้ว และทำให้รอบที่ปกติกลายเป็นรอบที่ผิดพลาด
-  //      จะมาถึงตรงนี้เฉพาะเส้นทางที่กำลังจะดับรีเลย์อยู่แล้ว การตัดจริงระหว่างสถานะที่กำลังขับเคลื่อนจึงไม่ถูกแตะ
+  //      จะมาถึงตรงนี้เฉพาะเส้นทางที่กำลังจะลดกำลังขับอยู่แล้ว การตัดจริงระหว่างสถานะที่กำลังขับเคลื่อนจึงไม่ถูกแตะ
   //      เพราะเส้นทางที่กำลังขับเคลื่อนจะคืนค่าออกไปก่อนโดยไม่เรียกฟังก์ชันนี้
   capTimerFired = false;
 }
@@ -128,74 +209,136 @@ static void disarmCapTimer() {
 void actuatorBegin() {
   // Level before mode, the same order beginLamp() uses and for the same reason. A
   // pin comes out of reset high-Z; pinMode(OUTPUT) makes it drive whatever the
-  // output register already holds, which is LOW. With RELAY_ACTIVE_LOW that is
-  // energized, so mode-then-write would close BOTH motor relays for the
-  // microseconds until the next line — at every boot and every reset, and with
-  // both directions commanded at once, which is the pair break-before-make exists
-  // to keep apart.
+  // output register already holds, which is LOW. On the master relay's active-low
+  // board LOW is CLOSED, so mode-then-write would connect motor power at every
+  // boot and every reset. On the BTS7960's three active-high inputs LOW is
+  // already the safe level, and they are written first anyway so the order is one
+  // rule rather than two.
   // [TH] ตั้งระดับก่อนตั้งโหมด ลำดับเดียวกับ beginLamp() และด้วยเหตุผลเดียวกัน
   //      ขา GPIO ออกจากรีเซ็ตมาเป็นอินพุตอิมพีแดนซ์สูง
   //      คำสั่ง pinMode(OUTPUT) จะทำให้ขาเริ่มขับค่าที่ค้างอยู่ในรีจิสเตอร์ ซึ่งคือ LOW
-  //      เมื่อเปิด RELAY_ACTIVE_LOW ค่านั้นคือสถานะที่รีเลย์ทำงาน
-  //      การตั้งโหมดก่อนจะทำให้รีเลย์มอเตอร์ทำงานพร้อมกันทั้งสองตัวชั่วไมโครวินาที
-  //      ทุกครั้งที่เปิดเครื่องและทุกครั้งที่รีเซ็ต ซึ่งเป็นคู่ที่กลไกตัดก่อนต่อมีไว้กันไม่ให้ทำงานพร้อมกัน
-  writePins(OFF, OFF);
-  pinMode(PIN_RELAY_UP, OUTPUT);
-  pinMode(PIN_RELAY_DOWN, OUTPUT);
+  //      บนบอร์ดรีเลย์ตัดหลักที่สั่งงานด้วยลอจิกต่ำ ค่า LOW คือปิดวงจร
+  //      การตั้งโหมดก่อนจึงจะต่อไฟมอเตอร์ทุกครั้งที่เปิดเครื่องและทุกครั้งที่รีเซ็ต
+  //      ส่วนขาอินพุตสามขาของ BTS7960 ที่สั่งงานด้วยลอจิกสูงนั้น LOW ปลอดภัยอยู่แล้ว
+  //      แต่ก็เขียนก่อนเหมือนกัน กฎเรื่องลำดับจะได้มีข้อเดียว ไม่ใช่สองข้อ
+  digitalWrite(PIN_MOT_MASTER, MASTER_OFF);
+  pinMode(PIN_MOT_MASTER, OUTPUT);
+  digitalWrite(PIN_MOT_EN, LOW);
+  pinMode(PIN_MOT_EN, OUTPUT);
+  digitalWrite(PIN_MOT_RPWM, LOW);
+  pinMode(PIN_MOT_RPWM, OUTPUT);
+  digitalWrite(PIN_MOT_LPWM, LOW);
+  pinMode(PIN_MOT_LPWM, OUTPUT);
+  // ledcAttach takes the pins over from here; both are written to zero duty
+  // immediately, because attaching leaves the channel's duty register at whatever
+  // it held and "whatever it held" is not a safe level to assume.
+  // [TH] จากตรงนี้ไป ledcAttach เป็นผู้ควบคุมขาทั้งสอง
+  //      ต้องเขียนกำลังขับเป็นศูนย์ทันทีทั้งคู่ เพราะการผูกช่องสัญญาณจะทิ้งค่าเดิมไว้ในรีจิสเตอร์
+  //      และ "ค่าเดิมที่ทิ้งไว้" ไม่ใช่ค่าที่จะเดาว่าปลอดภัยได้
+  pwmReady = ledcAttach(PIN_MOT_RPWM, MOTOR_PWM_HZ, MOTOR_PWM_BITS);
+  pwmReady = ledcAttach(PIN_MOT_LPWM, MOTOR_PWM_HZ, MOTOR_PWM_BITS) && pwmReady;
+  ledcWrite(PIN_MOT_RPWM, 0);
+  ledcWrite(PIN_MOT_LPWM, 0);
   state = ACT_OFF;
+  driveDir = ACT_OFF;
   pending = ACT_OFF;
+  duty = dutyTarget = 0;
+  armed = armWanted = false;
   const esp_timer_create_args_t args = {capTimerCb, nullptr, ESP_TIMER_TASK, "actcap", false};
   // Recorded, not printed: actuatorBegin() is the first call in setup(), before
   // Serial.begin(), and HardwareSerial drops writes while its UART is null — the
   // message would have gone nowhere, which is the one place it must not go.
-  // setup() reports it once the port is open.
+  // setup() reports it once the port is open. Same for pwmReady above.
   // [TH] เก็บค่าไว้ ไม่พิมพ์ทันที เพราะ actuatorBegin() เป็นคำสั่งแรกใน setup() ก่อน Serial.begin()
   //      และไลบรารีจะทิ้งข้อมูลที่เขียนตอนที่พอร์ตยังไม่ถูกเปิด ข้อความจะหายไปเฉยๆ
   //      ซึ่งเป็นสิ่งเดียวที่ต้องไม่เกิดกับข้อความนี้ ให้ setup() รายงานหลังเปิดพอร์ตแล้ว
+  //      ค่า pwmReady ด้านบนก็ด้วยเหตุผลเดียวกัน
   if (esp_timer_create(&args, &capTimer) != ESP_OK) capTimer = nullptr;
 }
 
 bool actuatorCapTimerReady() { return capTimer != nullptr; }
 
-// Energizes `dir`, or parks the request behind the dead time when the opposite
-// relay is still energized. Idempotent: applyActuator() calls these every loop
+bool actuatorPwmReady() { return pwmReady; }
+
+// The master relay is the gate everything else sits behind. Closing it permits
+// motion without starting any; opening it is held back until the drive is
+// genuinely at zero, so a fade-out is never cut short and the contacts never
+// break a live circuit.
+//
+// Called every loop from applyActuator() with the session's own "may the motor
+// move" answer, which is what retries a deferred open: the first call after the
+// fade lands finds duty at zero and opens the contacts.
+// [TH] รีเลย์ตัดหลักคือประตูที่ทุกอย่างอื่นอยู่ข้างหลัง
+//      การปิดวงจรเป็นการอนุญาตให้เคลื่อนที่ได้ ไม่ใช่การเริ่มเคลื่อนที่
+//      ส่วนการเปิดวงจรจะถูกหน่วงไว้จนกำลังขับลงถึงศูนย์จริง
+//      การผ่อนกำลังลงจึงไม่ถูกตัดกลางคัน และหน้าสัมผัสไม่เคยตัดวงจรที่มีกระแส
+//      applyActuator() เรียกฟังก์ชันนี้ทุกลูปด้วยคำตอบของรอบการทำงานเองว่า "มอเตอร์เคลื่อนที่ได้หรือไม่"
+//      นั่นคือสิ่งที่ทำให้การเปิดวงจรที่ถูกหน่วงไว้ได้ลองใหม่
+//      การเรียกครั้งแรกหลังการผ่อนกำลังจบจะเห็นกำลังขับเป็นศูนย์แล้วเปิดหน้าสัมผัส
+void actuatorArm(bool on) {
+  armWanted = on;
+  if (on) {
+    if (armed) return;
+    digitalWrite(PIN_MOT_MASTER, MASTER_ON);
+    armAt = millis();
+    armed = true;
+    return;
+  }
+  if (!armed) return;
+  if (driveDir != ACT_OFF || duty != 0) return;  // still moving — ยังเคลื่อนที่อยู่
+  killPins(true);
+  armed = false;
+}
+
+// Drives `dir`, or parks the request behind the dead time when the motor is
+// still turning the other way. Idempotent: applyActuator() calls these every loop
 // while a phase runs. Re-stamping energizeStart every time would keep
 // nowMs-energizeStart near zero forever and the travel cap could never trip, so
 // it is stamped only on a real transition.
-// [TH] จ่ายไฟให้ทิศที่ขอ หรือพักคำขอไว้รอเวลาหน่วงถ้ารีเลย์ฝั่งตรงข้ามยังจ่ายไฟอยู่
+// [TH] ขับไปในทิศที่ขอ หรือพักคำขอไว้รอเวลาหน่วงถ้ามอเตอร์ยังหมุนไปอีกทางอยู่
 //      ทำซ้ำได้ปลอดภัย: applyActuator() เรียกทุกลูประหว่างที่สถานะกำลังทำงาน
 //      ถ้าจับเวลา energizeStart ใหม่ทุกครั้ง ค่าจะเกือบศูนย์ตลอดและเพดานเวลาจะไม่มีวันตัด
 //      จึงจับเวลาเฉพาะตอนเปลี่ยนสถานะจริงเท่านั้น
 static void request(ActState dir) {
-  if (state == dir) { pending = ACT_OFF; return; }  // already there — อยู่ในทิศนั้นแล้ว
-  if (pending == dir) return;                       // already waiting — รออยู่แล้ว
-  // Relays off, but not off for long enough yet: wait out the remainder before
-  // driving the other way.
-  // [TH] รีเลย์ดับอยู่ แต่ยังดับไม่นานพอ ให้รอเวลาที่เหลือก่อนจึงค่อยสั่งไปอีกทาง
-  // Unsigned here, unlike the compares against the loop's captured `now`. offAt is
-  // always stamped from millis() and so is never ahead of it, which means the
-  // signed form bought nothing — and cost a great deal: for an elapsed time
-  // between 24.9 and 49.7 days the cast goes negative, every request parks in
-  // pending, and the honour test below never fires either. A machine left powered
-  // for 25 days would answer START and STOP with a stroke that never energizes,
-  // faulting after the cap with zero motion, until a reboot.
+  // No PWM ever leaves this file while the master relay is open. Not a
+  // convenience check: it is what makes the relay a cut rather than a suggestion,
+  // and it is why nothing has to trust that motor power is really disconnected.
+  // [TH] ห้ามมีสัญญาณ PWM ออกจากไฟล์นี้ขณะที่รีเลย์ตัดหลักเปิดวงจรอยู่
+  //      ไม่ใช่การตรวจเพื่อความสะดวก แต่เป็นสิ่งที่ทำให้รีเลย์นั้นเป็น "การตัด" ไม่ใช่ "ข้อเสนอแนะ"
+  //      และเป็นเหตุผลที่ไม่มีใครต้องไปเชื่อว่าไฟมอเตอร์ถูกตัดจริงหรือไม่
+  if (!armed) { pending = ACT_OFF; return; }
+  // Unsigned here, unlike the compares against the loop's captured `now`. armAt
+  // and offAt are always stamped from millis() and so are never ahead of it,
+  // which means the signed form bought nothing — and cost a great deal: for an
+  // elapsed time between 24.9 and 49.7 days the cast goes negative, every request
+  // parks in pending, and the honour test below never fires either. A machine
+  // left powered for 25 days would answer START and STOP with a stroke that never
+  // drives, faulting after the cap with zero motion, until a reboot.
   // [TH] ตรงนี้ใช้แบบไม่มีเครื่องหมาย ต่างจากการเทียบกับค่า now ที่ลูปอ่านไว้
-  //      ค่า offAt ถูกจับเวลาจาก millis() เสมอ จึงไม่มีทางล้ำหน้า millis() ได้
+  //      ค่า armAt และ offAt ถูกจับเวลาจาก millis() เสมอ จึงไม่มีทางล้ำหน้า millis() ได้
   //      การใช้แบบมีเครื่องหมายจึงไม่ได้ประโยชน์อะไรเลย แต่เสียหายมาก
   //      ถ้าเวลาที่ผ่านไปอยู่ระหว่าง 24.9 ถึง 49.7 วัน การแปลงชนิดจะได้ค่าติดลบ
   //      คำขอทุกครั้งจะไปพักรอ และเงื่อนไขปลดการรอด้านล่างก็จะไม่เป็นจริงเช่นกัน
-  //      เครื่องที่เปิดทิ้งไว้ 25 วันจะตอบปุ่มเริ่มและปุ่มหยุดด้วยการเคลื่อนที่ที่ไม่จ่ายไฟเลย
+  //      เครื่องที่เปิดทิ้งไว้ 25 วันจะตอบปุ่มเริ่มและปุ่มหยุดด้วยการเคลื่อนที่ที่ไม่ขับมอเตอร์เลย
   //      แล้วจบด้วยความผิดพลาดหลังครบเพดานเวลาโดยไม่ขยับ จนกว่าจะรีบูต
-  if (state == ACT_OFF && (millis() - offAt) < DEADTIME_MS) {
+  if ((millis() - armAt) < DEADTIME_MS) {  // contacts still settling — หน้าสัมผัสยังไม่นิ่ง
     pending = dir;
-    pendingAt = offAt + DEADTIME_MS;
+    pendingAt = armAt + DEADTIME_MS;
     return;
   }
-  if (state != ACT_OFF) {
-    // Live reversal: drop both now, energize the new direction once the coils
-    // have had time to release.
-    // [TH] กลับทิศขณะกำลังเคลื่อนที่: ดับทั้งคู่ทันที แล้วค่อยจ่ายไฟทิศใหม่เมื่อขดลวดคลายแล้ว
-    writePins(OFF, OFF);
+  if (state == dir) { pending = ACT_OFF; return; }  // already there — อยู่ในทิศนั้นแล้ว
+  if (pending == dir) return;                       // already waiting — รออยู่แล้ว
+  // Still carrying duty the other way. This covers a full-power live reversal and
+  // a reversal that catches a fade-out part-way down, which is the same hazard at
+  // a lower speed — a fade is not a substitute for the dead time.
+  // [TH] ยังจ่ายกำลังไปทางตรงข้ามอยู่ ครอบคลุมทั้งการกลับทิศขณะขับเต็มกำลัง
+  //      และการกลับทิศที่ไปทับช่วงผ่อนกำลังลงกลางคัน ซึ่งเป็นอันตรายแบบเดียวกันที่ความเร็วต่ำกว่า
+  //      การผ่อนกำลังลงไม่ใช่สิ่งที่ใช้แทนเวลาหน่วงได้
+  if (driveDir != ACT_OFF && driveDir != dir) {
+    killPins(false);  // master relay stays closed: this is a reversal, not a stop
+                      // [TH] รีเลย์ตัดหลักยังปิดวงจรอยู่ นี่คือการกลับทิศ ไม่ใช่การหยุด
+    driveDir = ACT_OFF;
+    duty = dutyTarget = 0;
     disarmCapTimer();
     state = ACT_OFF;
     offAt = millis();
@@ -203,8 +346,29 @@ static void request(ActState dir) {
     pendingAt = offAt + DEADTIME_MS;
     return;
   }
-  writePins(dir == ACT_UP ? ON : OFF, dir == ACT_DOWN ? ON : OFF);
+  // Drive is at zero, but not for long enough yet: wait out the remainder before
+  // driving the other way.
+  // [TH] กำลังขับเป็นศูนย์แล้ว แต่ยังไม่นานพอ ให้รอเวลาที่เหลือก่อนจึงค่อยสั่งไปอีกทาง
+  if (driveDir == ACT_OFF && (millis() - offAt) < DEADTIME_MS) {
+    pending = dir;
+    pendingAt = offAt + DEADTIME_MS;
+    return;
+  }
+  // Either the drive is off and the dead time is served, or a fade-out on this
+  // same direction is still running and the stroke simply resumes from whatever
+  // duty it had reached — a STOP inside the first 400 ms of a Rest does exactly
+  // that, and re-ramping from zero would be a second jolt for no reason.
+  // [TH] ไม่กำลังขับดับและเวลาหน่วงครบแล้ว ก็เป็นช่วงผ่อนกำลังลงในทิศเดิมที่ยังไม่จบ
+  //      แล้วจังหวะใหม่เร่งต่อจากกำลังขับที่ค้างอยู่ตรงนั้นเลย
+  //      การกด STOP ภายใน 400 มิลลิวินาทีแรกของช่วงพักเป็นกรณีนี้พอดี
+  //      การไล่กำลังใหม่จากศูนย์จะเป็นการกระชากครั้งที่สองโดยไม่ได้อะไร
   state = dir;
+  driveDir = dir;
+  dutyTarget = MOTOR_DUTY_MAX;
+  rampFrom = duty;  // 0 for a fresh stroke, mid-fade for a resumed one
+                    // [TH] เป็นศูนย์ถ้าเริ่มใหม่ หรือเป็นค่ากลางทางถ้าเร่งต่อจากช่วงผ่อนกำลัง
+  rampAt = millis();
+  driveRaw(dir, duty);
   pending = ACT_OFF;
   energizeStart = millis();
   capTripped = false;
@@ -217,23 +381,74 @@ void actuatorDown() { request(ACT_DOWN); }
 
 void actuatorOff() {
   // The pins are re-asserted every call, deliberately: applyActuator() runs this
-  // every loop in the phases that must not drive, so a relay line disturbed by
-  // anything else is driven back OFF within one iteration. Only the timer and the
-  // state bookkeeping are skipped when there is nothing to undo.
+  // every loop in the phases that must not drive, so an input disturbed by
+  // anything else is driven back to zero within one iteration. Only the timer and
+  // the state bookkeeping are skipped when there is nothing to undo. The master
+  // relay is left to actuatorArm() — a fault opens it through that, one loop
+  // later, and going behind its back here would break a live circuit on every
+  // ordinary stop.
   // [TH] สั่งระดับขาซ้ำทุกครั้งโดยตั้งใจ เพราะ applyActuator() เรียกฟังก์ชันนี้ทุกลูป
-  //      ในสถานะที่ต้องไม่ขับเคลื่อน ถ้าสายรีเลย์ถูกรบกวนจากอย่างอื่นก็จะถูกสั่งดับกลับภายในหนึ่งรอบ
+  //      ในสถานะที่ต้องไม่ขับเคลื่อน ถ้าขาอินพุตถูกรบกวนจากอย่างอื่นก็จะถูกสั่งกลับเป็นศูนย์ภายในหนึ่งรอบ
   //      ส่วนตัวจับเวลาและการปรับค่าสถานะจะข้ามไปเมื่อไม่มีอะไรต้องยกเลิก
-  writePins(OFF, OFF);
-  if (state == ACT_OFF && pending == ACT_OFF) return;  // nothing to undo — ไม่มีอะไรต้องยกเลิก
+  //      รีเลย์ตัดหลักปล่อยให้ actuatorArm() จัดการ ความผิดพลาดจะเปิดวงจรผ่านทางนั้นในลูปถัดไป
+  //      การไปสั่งลัดหลังมันตรงนี้จะกลายเป็นการตัดวงจรที่มีกระแสทุกครั้งที่หยุดตามปกติ
+  killPins(false);
+  bool live = (state != ACT_OFF) || (driveDir != ACT_OFF);
+  duty = dutyTarget = 0;
+  driveDir = ACT_OFF;
+  if (!live && pending == ACT_OFF) return;  // nothing to undo — ไม่มีอะไรต้องยกเลิก
   disarmCapTimer();
   // Stamped only on the transition, so idling does not keep pushing the dead time
   // forward and delay a genuine start.
   // [TH] จับเวลาเฉพาะตอนเปลี่ยนสถานะ การอยู่เฉยๆ จะได้ไม่เลื่อนเวลาหน่วงออกไปเรื่อยๆ
   //      จนทำให้การเริ่มเคลื่อนที่จริงถูกหน่วงตามไปด้วย
-  if (state != ACT_OFF) offAt = millis();
+  if (live) offAt = millis();
   state = ACT_OFF;
   pending = ACT_OFF;  // an OFF cancels a reversal still waiting out its dead time
                       // [TH] คำสั่งดับจะยกเลิกการกลับทิศที่ยังรอเวลาหน่วงอยู่ด้วย
+}
+
+void actuatorSoftOff() {
+  // Nothing turning: this IS actuatorOff(), including the every-loop re-assert of
+  // the pins. Falling through to it rather than returning early is what lets
+  // applyActuator() call soft-off unconditionally for Idle, Hold and Rest.
+  // [TH] ถ้าไม่มีอะไรหมุนอยู่ ฟังก์ชันนี้คือ actuatorOff() ทุกประการ รวมถึงการสั่งระดับขาซ้ำทุกลูปด้วย
+  //      การส่งต่อไปที่ actuatorOff() แทนการคืนค่าออกไปเฉยๆ
+  //      คือสิ่งที่ทำให้ applyActuator() เรียกการหยุดแบบนุ่มนวลได้เลยโดยไม่ต้องมีเงื่อนไข
+  //      ทั้งในสถานะว่าง สถานะค้าง และสถานะพัก
+  if (driveDir == ACT_OFF || duty == 0) { actuatorOff(); return; }
+  if (state == ACT_OFF && dutyTarget == 0) return;  // already fading — กำลังผ่อนลงอยู่แล้ว
+  state = ACT_OFF;
+  dutyTarget = 0;
+  rampFrom = duty;
+  rampAt = millis();
+  pending = ACT_OFF;
+  // Re-armed for the fade with a FULL cap, not disarmed with the stroke and not
+  // given a short window of its own.
+  //
+  // Disarming would leave the motor turning with no hardware backstop, and the
+  // loop is no substitute: the failure that strands a fade half-way down is the
+  // same blocked loop that stops the ramp advancing. A short window sized to the
+  // ramp — the obvious answer — is wrong for a reason worth writing down: this
+  // loop's blocking budget is two 400 ms HTTP timeouts per iteration, so an
+  // unreachable server routinely costs more than a ramp's worth of wall clock,
+  // and a fade window near MOTOR_RAMP_MS would fault the machine in Hold every
+  // session the Wi-Fi was down. A full cap cannot false-trip that way. What it
+  // costs is honest: a stroke plus a stranded fade can drive for up to twice
+  // capMs before the backstop lands, where the relay build had one capMs.
+  // [TH] ตั้งเวลาใหม่ให้ช่วงผ่อนกำลังลงด้วยเพดานเต็ม ไม่ใช่ยกเลิกไปพร้อมกับจังหวะที่จบ
+  //      และไม่ใช่ให้หน้าต่างเวลาสั้นๆ ของตัวเอง
+  //      การยกเลิกไปเลยจะทิ้งให้มอเตอร์หมุนโดยไม่มีแนวป้องกันระดับฮาร์ดแวร์
+  //      และลูปใช้แทนไม่ได้ เพราะความล้มเหลวที่ทำให้การผ่อนกำลังค้างกลางทาง
+  //      คือลูปที่ถูกบล็อกตัวเดียวกับที่ทำให้การไล่กำลังไม่เดินต่อ
+  //      ส่วนการให้หน้าต่างสั้นเท่าช่วงไล่กำลังซึ่งเป็นคำตอบที่ดูตรงไปตรงมาที่สุดนั้นผิด ด้วยเหตุผลที่ควรบันทึกไว้
+  //      งบเวลาที่ลูปนี้ยอมให้บล็อกได้คือ HTTP timeout 400 มิลลิวินาทีสองครั้งต่อหนึ่งรอบลูป
+  //      เซิร์ฟเวอร์ที่ติดต่อไม่ได้จึงกินเวลาจริงมากกว่าหนึ่งช่วงไล่กำลังเป็นปกติ
+  //      หน้าต่างเวลาที่ใกล้เคียง MOTOR_RAMP_MS จะทำให้เครื่องขึ้นความผิดพลาดตอนค้างขาทุกรอบที่ WiFi ใช้ไม่ได้
+  //      เพดานเต็มไม่มีทางตัดผิดพลาดแบบนั้น สิ่งที่ต้องแลกก็บอกกันตรงๆ
+  //      คือหนึ่งจังหวะบวกกับการผ่อนกำลังที่ค้าง อาจขับมอเตอร์ได้นานถึงสองเท่าของ capMs ก่อนที่แนวป้องกันจะตัด
+  //      ในขณะที่รุ่นที่ใช้รีเลย์มีเพดานเดียวคือ capMs
+  armCapTimer();
 }
 
 ActState actuatorState() { return state; }
@@ -254,33 +469,81 @@ void actuatorRenewStroke() {
   // capTripped is deliberately NOT cleared here. Only a real energize clears it,
   // in request(). Clearing it on a renew threw away a trip the hardware timer had
   // just recorded — the renew runs in applyActuator(), which is before the sketch
-  // reads the flag — so the relays had been cut by the backstop and nothing said
+  // reads the flag — so the drive had been cut by the backstop and nothing said
   // so.
   // [TH] จงใจไม่ล้างค่า capTripped ตรงนี้ มีแต่การจ่ายไฟจริงเท่านั้นที่ล้างได้ ซึ่งอยู่ใน request()
   //      การล้างค่าตอนเริ่มจับเวลาใหม่จะทิ้งการตัดที่ตัวจับเวลาฮาร์ดแวร์เพิ่งบันทึกไว้
   //      เพราะการเริ่มจับเวลาใหม่ทำงานใน applyActuator() ซึ่งอยู่ก่อนที่สเก็ตช์จะอ่านค่าธง
-  //      รีเลย์ถูกแนวป้องกันสำรองตัดไปแล้วโดยไม่มีอะไรบอก
+  //      กำลังขับถูกแนวป้องกันสำรองตัดไปแล้วโดยไม่มีอะไรบอก
   energizeStart = millis();
   armCapTimer();
 }
 
 void actuatorSetCap(uint32_t ms) { capMs = ms; }  // ตั้งเพดานเวลาจ่ายไฟสูงสุด
 
+// One step of the fade, in or out. Nothing else writes `duty`.
+// [TH] การไล่กำลังขับหนึ่งขั้น ทั้งขาขึ้นและขาลง ไม่มีที่อื่นเขียนค่า duty
+static void rampStep(uint32_t nowMs) {
+  if (driveDir == ACT_OFF || duty == dutyTarget) return;
+  // Signed, for the same reason the cap compare below is: rampAt is stamped with
+  // a fresh millis() inside request(), while nowMs was captured at the top of the
+  // loop, so on any iteration that crosses a millisecond boundary rampAt is
+  // nowMs+1. Unsigned, that subtraction is ~4.29e9, the step saturates, and the
+  // ramp this whole file exists for is skipped on a coin flip at every start.
+  // [TH] ใช้การเทียบแบบมีเครื่องหมายด้วยเหตุผลเดียวกับการเทียบเพดานเวลาด้านล่าง
+  //      ค่า rampAt ถูกจับเวลาจาก millis() ใหม่ภายใน request()
+  //      ขณะที่ nowMs อ่านไว้ตั้งแต่ต้นลูป ในรอบที่คร่อมขอบมิลลิวินาที ค่า rampAt จึงเป็น nowMs+1
+  //      ถ้าลบแบบไม่มีเครื่องหมายจะได้ราวสี่พันล้าน ขั้นการไล่จะพุ่งจนสุด
+  //      และการไล่กำลังซึ่งเป็นเหตุผลทั้งหมดของไฟล์นี้จะถูกข้ามไปแบบเสี่ยงทายทุกครั้งที่เริ่ม
+  int32_t dt = (int32_t)(nowMs - rampAt);
+  if (dt <= 0) return;
+  // Distance covered since this leg of the ramp began. A fade that starts from
+  // part-way — a STOP caught mid-fade, a stroke resumed before it finished
+  // fading out — therefore takes proportionally less than a full MOTOR_RAMP_MS,
+  // which is what makes the rate constant rather than the duration.
+  // [TH] ระยะที่เดินมาแล้วนับจากจุดเริ่มของช่วงไล่กำลังนี้
+  //      ช่วงที่เริ่มจากกลางทาง เช่นการกด STOP ที่ไปทับช่วงผ่อนกำลัง
+  //      หรือจังหวะที่กลับมาเร่งต่อก่อนที่การผ่อนกำลังจะจบ
+  //      จึงใช้เวลาน้อยกว่า MOTOR_RAMP_MS เต็มตามสัดส่วน
+  //      สิ่งที่คงที่จึงเป็นอัตราการเปลี่ยน ไม่ใช่ระยะเวลา
+  uint32_t moved = (uint32_t)MOTOR_DUTY_MAX * (uint32_t)dt / MOTOR_RAMP_MS;
+  if (moved == 0) return;  // not a whole count yet — ยังไม่ครบหนึ่งหน่วย
+  if (dutyTarget > rampFrom)
+    duty = (rampFrom + moved >= dutyTarget) ? dutyTarget : (uint16_t)(rampFrom + moved);
+  else
+    duty = (rampFrom <= moved || rampFrom - moved <= dutyTarget) ? dutyTarget
+                                                                 : (uint16_t)(rampFrom - moved);
+  driveRaw(driveDir, duty);
+  if (duty == 0) {
+    // The fade has landed. This is the moment the motor is genuinely at zero, so
+    // it is the moment the dead time starts counting and the fade's own backstop
+    // is no longer needed. A deferred master-relay open is picked up by the next
+    // actuatorArm(false) from applyActuator().
+    // [TH] การผ่อนกำลังลงจบแล้ว นี่คือจังหวะที่มอเตอร์เป็นศูนย์จริง
+    //      จึงเป็นจังหวะที่เวลาหน่วงเริ่มนับ และแนวป้องกันของช่วงผ่อนกำลังไม่จำเป็นอีกต่อไป
+    //      การเปิดวงจรรีเลย์ตัดหลักที่ถูกหน่วงไว้จะถูกสะสางโดย actuatorArm(false) ครั้งถัดไปจาก applyActuator()
+    driveDir = ACT_OFF;
+    offAt = nowMs;
+    disarmCapTimer();
+  }
+}
+
 void actuatorTick(uint32_t nowMs) {
-  // The hardware backstop got there first: the relays are already open, so this
-  // only catches the bookkeeping up and reports it. Reached whenever the loop was
-  // blocked past the cap — which is the case the timer exists for.
-  // [TH] แนวป้องกันระดับฮาร์ดแวร์ตัดไปก่อนแล้ว รีเลย์เปิดวงจรอยู่
+  // The hardware backstop got there first: the drive is already dead and the
+  // master relay already open, so this only catches the bookkeeping up and
+  // reports it. Reached whenever the loop was blocked past the cap — which is the
+  // case the timer exists for.
+  // [TH] แนวป้องกันระดับฮาร์ดแวร์ตัดไปก่อนแล้ว กำลังขับดับและรีเลย์ตัดหลักเปิดวงจรอยู่
   //      ตรงนี้แค่ปรับค่าสถานะให้ตรงและรายงานผล
   //      จะมาถึงตรงนี้เมื่อลูปถูกบล็อกนานเกินเพดานเวลา ซึ่งเป็นกรณีที่ตัวจับเวลามีไว้เพื่อมัน
   // A reversal that has waited out its dead time is honoured before anything
   // else. Handling it after the cap branch let that branch clear `pending` and
   // drop the queued direction; applyActuator then re-issued it on the next
-  // iteration, energizing the new direction about 2 ms after the old one
-  // dropped instead of the 50 ms this file exists to guarantee.
+  // iteration, driving the new direction about 2 ms after the old one dropped
+  // instead of the 50 ms this file exists to guarantee.
   // [TH] การกลับทิศที่รอเวลาหน่วงครบแล้วจะถูกจัดการก่อนสิ่งอื่น
   //      ถ้าจัดการหลังส่วนตรวจเพดานเวลา ส่วนนั้นจะล้างค่า pending และทิ้งทิศที่รอคิวอยู่
-  //      แล้ว applyActuator จะสั่งใหม่ในลูปรอบถัดไป ทำให้จ่ายไฟทิศใหม่ห่างจากตอนดับทิศเก่าราว 2 มิลลิวินาที
+  //      แล้ว applyActuator จะสั่งใหม่ในลูปรอบถัดไป ทำให้ขับทิศใหม่ห่างจากตอนดับทิศเก่าราว 2 มิลลิวินาที
   //      แทนที่จะเป็น 50 มิลลิวินาทีตามที่ไฟล์นี้มีไว้เพื่อรับประกัน
   if (pending != ACT_OFF && (int32_t)(nowMs - pendingAt) >= 0) {
     ActState dir = pending;
@@ -299,18 +562,36 @@ void actuatorTick(uint32_t nowMs) {
     //      แต่การไม่สั่งหยุดจะทิ้งแฮนเดิลที่ยังตั้งเวลาไว้โดยไม่มีใครเป็นเจ้าของ
     //      เมื่อการปรับค่าสถานะด้านล่างทำเครื่องหมายว่าชุดขับเคลื่อนดับแล้ว
     disarmCapTimer();
-    if (state != ACT_OFF) offAt = nowMs;  // the callback cut them — ฟังก์ชันเรียกกลับเป็นคนตัด
+    if (state != ACT_OFF || driveDir != ACT_OFF) offAt = nowMs;  // the callback cut it — ฟังก์ชันเรียกกลับเป็นคนตัด
     state = ACT_OFF;
     pending = ACT_OFF;
+    driveDir = ACT_OFF;
+    duty = dutyTarget = 0;
+    // The callback opened the master relay too, so the contacts and this flag
+    // agree again. applyActuator() re-closes them on the next iteration if the
+    // session is still running, and that path waits out the settle time like any
+    // other.
+    // [TH] ฟังก์ชันเรียกกลับเปิดวงจรรีเลย์ตัดหลักไปด้วย ค่าธงกับหน้าสัมผัสจึงกลับมาตรงกัน
+    //      applyActuator() จะสั่งปิดวงจรใหม่ในรอบถัดไปถ้ารอบการทำงานยังเดินอยู่
+    //      และเส้นทางนั้นก็รอให้หน้าสัมผัสนิ่งเหมือนเส้นทางอื่นทุกประการ
+    armed = false;
     capTripped = true;
     return;
   }
 
-  // [TH] ตรวจทุกลูป: ถ้าจ่ายไฟค้างเกินเพดานเวลา ให้ตัดรีเลย์และตั้งธง capTripped
+  rampStep(nowMs);
+
+  // [TH] ตรวจทุกลูป: ถ้าจ่ายไฟค้างเกินเพดานเวลา ให้ตัดกำลังขับและตั้งธง capTripped
+  // A fade-out is deliberately outside this check — state is already ACT_OFF by
+  // then and the stroke's cap is spent, so the fade is covered by the shorter
+  // window armCapTimerMs() was given in actuatorSoftOff() instead.
+  // [TH] ช่วงผ่อนกำลังลงอยู่นอกการตรวจนี้โดยตั้งใจ เพราะตอนนั้น state เป็น ACT_OFF ไปแล้ว
+  //      และเพดานเวลาของจังหวะนั้นถูกใช้หมดแล้ว
+  //      ช่วงผ่อนกำลังจึงใช้หน้าต่างเวลาที่สั้นกว่าซึ่ง armCapTimerMs() ตั้งไว้ใน actuatorSoftOff() แทน
   if (state == ACT_OFF || capMs == 0) return;
   // Signed, because energizeStart can be AHEAD of nowMs. The loop captures
   // millis() once at the top and passes that same value all the way down, but a
-  // relay energized part-way through the iteration stamps a fresh millis() —
+  // stroke started part-way through the iteration stamps a fresh millis() —
   // so on any iteration that crosses a millisecond boundary, energizeStart is
   // nowMs+1. Unsigned, that subtraction is ~4.29e9, instantly past any cap: the
   // stroke was cut and the session faulted in the same iteration it started, a
@@ -318,17 +599,20 @@ void actuatorTick(uint32_t nowMs) {
   // energize, including the safe-lower out of a fault.
   // [TH] ใช้การเทียบแบบมีเครื่องหมาย เพราะ energizeStart อาจล้ำหน้า nowMs ได้
   //      ลูปอ่านค่า millis() ครั้งเดียวที่ต้นรอบแล้วส่งค่านั้นต่อไปทั้งรอบ
-  //      แต่รีเลย์ที่เริ่มจ่ายไฟกลางรอบจะจับเวลา millis() ใหม่
+  //      แต่จังหวะที่เริ่มขับกลางรอบจะจับเวลา millis() ใหม่
   //      ในรอบที่คร่อมขอบมิลลิวินาที ค่า energizeStart จึงเป็น nowMs+1
   //      ถ้าลบแบบไม่มีเครื่องหมายจะได้ราวสี่พันล้าน ซึ่งเกินเพดานทุกค่าทันที
   //      การเคลื่อนที่จะถูกตัดและรอบถูกตัดสินว่าผิดพลาดในรอบเดียวกับที่เพิ่งเริ่ม
   //      ได้แถวที่ผิดพลาดความยาวศูนย์วินาทีลงการ์ดโดยไม่มีสาเหตุ
   //      และเป็นการเสี่ยงแบบนี้ทุกครั้งที่จ่ายไฟ รวมถึงตอนลดขาลงหลังเกิดความผิดพลาดด้วย
   if ((int32_t)(nowMs - energizeStart) >= (int32_t)capMs) {
-    writePins(OFF, OFF);
+    killPins(false);  // the relay is left to actuatorArm(), as everywhere else
+                      // [TH] รีเลย์ปล่อยให้ actuatorArm() จัดการ เหมือนที่อื่นทั้งหมด
     disarmCapTimer();
     offAt = nowMs;
     state = ACT_OFF;
+    driveDir = ACT_OFF;
+    duty = dutyTarget = 0;
     capTripped = true;
   }
 }
@@ -338,13 +622,13 @@ void actuatorTick(uint32_t nowMs) {
 // actuatorTick() while the decision was taken in the sketch — and by the time the
 // loop got there after a long block, the state machine had usually faulted on its
 // own net first, so applyActuator()'s actuatorOff() had already disarmed and
-// cleared the diagnostic flag. The relays opened and nobody could tell that the
+// cleared the diagnostic flag. The drive was cut and nobody could tell that the
 // loop, rather than the leg, was what ran out of time.
 // [TH] อ่านแล้วล้างค่า จุดเดียวที่ตัดสินใจตามค่านี้จึงเป็นจุดเดียวกับที่รายงานมันได้
 //      ถ้าปล่อยค้างไว้ ข้อความวินิจฉัยจะถูกพิมพ์จาก actuatorTick() ขณะที่การตัดสินใจอยู่ในสเก็ตช์
 //      และกว่าลูปจะมาถึงหลังถูกบล็อกนานๆ เครื่องสถานะมักตัดสินว่าผิดพลาดด้วยตาข่ายของตัวเองไปก่อนแล้ว
 //      actuatorOff() ที่ applyActuator() เรียกจึงยกเลิกตัวจับเวลาและล้างธงวินิจฉัยไปเรียบร้อย
-//      รีเลย์ถูกตัดจริงแต่ไม่มีใครบอกได้ว่าสิ่งที่หมดเวลาคือลูป ไม่ใช่ขา
+//      กำลังขับถูกตัดจริงแต่ไม่มีใครบอกได้ว่าสิ่งที่หมดเวลาคือลูป ไม่ใช่ขา
 bool actuatorTakeCapTrip() {
   bool v = capTripped;
   capTripped = false;

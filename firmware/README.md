@@ -4,7 +4,7 @@ Two ESP32s per machine:
 
 | Sketch | Board | Job |
 |---|---|---|
-| `pt-leg-controller/` | plain ESP32 dev board (`esp32:esp32:esp32`) | relays, timed motion state machine, panel buttons + lamps, Wi-Fi + server client, NVS settings |
+| `pt-leg-controller/` | plain ESP32 dev board (`esp32:esp32:esp32`) | BTS7960 motor drive, timed motion state machine, panel buttons + lamps, Wi-Fi + server client, NVS settings |
 | `pt-leg-display/` | ESP32-2432S028R "Cheap Yellow Display" (`esp32:esp32:esp32`) | LVGL touch UI only |
 
 They talk over UART (19200 8N1, cross-wired RX↔TX + common GND, each line
@@ -228,7 +228,7 @@ Three things caught us on the bench, all of them things a clinic tech would hit:
 | Card pulled mid-save | New values go to `/settings.tmp`; the previous file is moved to `/settings.old.json` and only deleted once the new one holds its name, so a settings file always exists |
 | Interrupted save found at boot | `/settings.old.json` is loaded and renamed back — the save is lost, the configuration is not |
 | Card swapped while running | The new card's file is read the next time the settings screen opens |
-| Out-of-range value in the file | Clamped to the settings screen's own limits (`maxTravelSec` 1-20, `liftSec`/`lowerSec` 1-`maxTravelSec`, `holdSec`/`restSec` 1-60, `targetReps` 0-99) and logged, because `maxTravelSec` is the relay safety cap and `liftSec`/`lowerSec` are what actually time the travel |
+| Out-of-range value in the file | Clamped to the settings screen's own limits (`maxTravelSec` 1-20, `liftSec`/`lowerSec` 1-`maxTravelSec`, `holdSec`/`restSec` 1-60, `targetReps` 0-99) and logged, because `maxTravelSec` is the motor safety cap and `liftSec`/`lowerSec` are what actually time the travel |
 
 The Wi-Fi password is plaintext on removable media. That is inherent to editing
 it on a PC, and accepted for a clinic LAN.
@@ -487,7 +487,7 @@ both are lit for a fault:
 | ----- | ----- |
 | Green only  | a session is in progress and the actuator may move — keep clear |
 | Yellow only | idle; nothing will move on its own |
-| **Both lit** | a latched FAULT — the relays are off, but the leg may be raised |
+| **Both lit** | a latched FAULT — the motor is cut, but the leg may be raised |
 
 Green is lit on `SessionSM::running()` — LIFT, HOLD, LOWER, REST **and** the
 safe-lower — plus a latched FAULT; yellow is lit whenever the machine is not
@@ -520,8 +520,8 @@ built and documented around.
 `pinMode(OUTPUT)`. A pin leaves reset as a high-Z input, and `pinMode(OUTPUT)`
 makes it drive whatever the output register holds — LOW. The board fitted here
 is active-low, so LOW is *energized* and mode-then-write would flick a lamp on
-at every boot, or close both motor relays at once — the pair break-before-make
-exists to keep apart.
+at every boot, or close the master cut relay and connect motor power — which is
+what that relay exists to keep disconnected.
 
 There is deliberately **no power-on lamp test**. Idle is the boot state, so
 yellow comes on and stays on — that is not a lamp test and must not become one:
@@ -530,8 +530,8 @@ at power-up would read as the machine starting by itself, the one impression it
 must never give. Test the lamps by starting a session.
 
 `LED_ACTIVE_LOW` is **set** in `config.h`, because the lamps are two more
-channels of the same active-low relay board the motors are on (`RELAY_ACTIVE_LOW`
-is set for the same reason). It covers **both** lamps. Clear it only for a board
+channels of the same active-low relay board the master motor cut is on
+(`MASTER_ACTIVE_LOW` is set for the same reason). It covers **both** lamps. Clear it only for a board
 that energizes on HIGH, and **check this before first power-up**: backwards,
 green is lit whenever the machine is idle and yellow while it is working, which
 is the dangerous way round.
@@ -547,23 +547,29 @@ The limit switches are gone, and with them went the nets that depended on
 knowing where the leg was — a wiring-fault check on two switches closed at once,
 a bottom-switch-only-if-it-was-clear-at-the-start belief, and an Idle-can-lower
 path keyed off that belief. What is left is smaller and does not pretend to know
-the leg's position: it bounds how long a relay can be energized, and it makes
+the leg's position: it bounds how long the motor can be driven, and it makes
 sure every stop and every recovery drives the same bounded descent whether or
 not that descent actually gets the leg to the bottom.
 
 **1. Break-before-make, plus a 50 ms dead time.** `actuator.cpp` is the only
-file that touches the relay pins. It always de-energizes both before energizing
-one, and on a direction reversal it drops both, waits `DEADTIME_MS`, and
-energizes the new direction from `actuatorTick()`. The wait matters because
-commanding the relays apart is not the same as their contacts being apart: a
-STOP press during a lift goes from UP to SafeLower's DOWN in a single loop
-iteration, and without the wait that reversal relied on the UP relay releasing
-faster than the DOWN one operates — a property of the parts, not of this code,
-and the two are on different connectors.
+file that touches the motor pins. It always zeroes the idle half-bridge before
+raising the driving one, and on a direction reversal it cuts the drive dead,
+waits `DEADTIME_MS`, and drives the new direction from `actuatorTick()`. The
+wait matters because commanding a reversal apart is not the same as it being
+apart: a STOP press during a lift goes from UP to SafeLower's DOWN in a single
+loop iteration, and without the wait a loaded, still-turning motor is slammed
+into reverse in the microseconds between two writes. The BTS7960 survives that;
+the gearbox and the leg on it are what the dead time protects. The same wait
+covers a reversal that catches a soft stop part-way down — a fade is not a
+substitute for it. The relay-era hazard it replaced was contacts that had not
+released yet; the mechanism is the same, the reason is now mechanical.
 
 **2. The travel cap, enforced twice.** `actuatorTick()` checks it every loop,
-and an `esp_timer` one-shot armed on every energize cuts the relays from the
-timer task if the loop does not get there. The loop-side check alone was not a
+and an `esp_timer` one-shot armed on every energize cuts the drive **and opens
+the master relay** from the timer task if the loop does not get there. It opens
+the relay because a cap trip is the one moment where a stroke that merely ran
+long and a shorted output FET look identical from inside the firmware, and the
+relay is the only cut that covers both. The loop-side check alone was not a
 second net: the failures that make a stroke run long — a network call blocking
 for its timeout, a long flash write — are the same failures that stop the check
 running. The timer covers a blocked loop, and it runs on the other core so it
@@ -588,9 +594,73 @@ on the card.
 There is no confirmation that the descent actually reached the bottom — with the
 limit switches gone the firmware has no way to check, which is stated plainly in
 `config.h`: a slipping belt, a jammed actuator and a clean stroke all look
-identical to this firmware, "the relay was energized for `lowerSec`". A recovery
+identical to this firmware, "the motor was driven for `lowerSec`". A recovery
 that does not really clear whatever jammed the actuator is indistinguishable, to
 the firmware, from one that does; both simply run `lowerSec` and land in Idle.
+## The motor drive
+
+The two motor relays are gone; a **BTS7960** H-bridge drives the motor through
+`actuator.cpp`, which is still the only file that touches a motor pin.
+
+**Why change.** A relay is on or off, so every stroke started and stopped by
+slamming a loaded leg into and out of full speed. The bridge lets the drive be
+faded, and that fade is the whole point of the change.
+
+**PWM.** LEDC, 20 kHz, 10-bit (`MOTOR_PWM_HZ` / `MOTOR_PWM_BITS`). 20 kHz is
+above hearing, so the patient hears the gearbox and not the drive, and it is
+just under the BTS7960's 25 kHz datasheet ceiling. Drop to 10000 if the module
+runs hot — it will whine, but switching losses fall. 10-bit is the most LEDC
+holds at that frequency. If `ledcAttach` fails, `setup()` prints `LEDC attach
+failed, the motor CANNOT be driven`; that machine will time out every stroke and
+fault with nothing having moved.
+
+**Ramping.** Every stroke fades in over `MOTOR_RAMP_MS` (400 ms) and every
+*normal* stop fades out over the same. That costs travel — roughly half a ramp
+at each end, about 0.4 s of a 7 s stroke — so **`liftSec` and `lowerSec` want
+re-tuning on the bench** after this change.
+
+Ramping is a comfort feature and never a safety one. These paths cut the drive
+dead, with no fade:
+
+| Path | Why |
+|---|---|
+| `Phase::Fault` | something is wrong with a leg that may be raised; another 400 ms of driving is the wrong answer |
+| the energize cap | a stroke that ran long, from either the loop check or the `esp_timer` backstop |
+| a live reversal | STOP during a lift; the dead time follows, the fade does not |
+| `actuatorBegin()` | boot and reset |
+
+`actuatorOff()` is the instant cut and `actuatorSoftOff()` is the fade; once a
+fade has landed the two are identical, which is why `applyActuator()` can call
+soft-off unconditionally for Idle, Hold and Rest.
+
+A fade re-arms the `esp_timer` backstop with a **full** `capMs` rather than a
+short window of its own. A window sized to the ramp is the obvious answer and it
+is wrong: this loop's blocking budget is two 400 ms HTTP timeouts per iteration,
+so an unreachable server routinely costs more wall clock than a ramp, and a
+ramp-sized window would fault the machine in Hold every session the Wi-Fi was
+down. The cost of the full cap is stated plainly in `actuator.cpp`: a stroke
+plus a *stranded* fade can drive for up to twice `capMs` before the backstop
+lands, where the relay build had one.
+
+**The master cut relay.** GPIO 33, in series with the bridge's motor supply. A
+relay contact fails open, a MOSFET fails shorted, and a shorted high-side FET
+drives the motor with the firmware unable to stop it — on a machine with a
+patient's leg loaded, that is the failure mode worth keeping a relay for.
+
+It follows the *session*, not the stroke: `applyActuator()` feeds it
+`gSession.running()` every loop, so it closes when a session starts and opens
+when one ends or faults. Two contact operations per session rather than two per
+rep — about 40 a day at twenty sessions, which keeps a ~100k-operation relay
+alive for years, the same argument the panel lamps are built on.
+
+It is never made or broken under load. Closing it starts nothing: the first
+stroke still waits out `DEADTIME_MS` for the contacts to settle, and `request()`
+refuses to emit any PWM at all while the relay is open — that refusal is what
+makes it a cut rather than a suggestion. Opening it is deferred until the drive
+is genuinely at zero, so a soft stop is never truncated. The one exception is
+the cap timer's callback, which opens it immediately — but only after the enable
+pin has already killed the bridge, so those contacts break a dead circuit too.
+
 That is why the machine must not run unattended with a leg loaded on it — the
 actuator's energize cap is the only backstop left.
 
@@ -633,7 +703,7 @@ regardless, so this refusal never costs the machine its only way to stop.
 
 ### What the firmware cannot fix
 
-A DOWN relay that has failed open, or a jammed actuator, leaves no way down by
+A BTS7960 output that has failed open, or a jammed actuator, leaves no way down by
 any command: every descent is a bounded `lowerSec` stroke and nothing here can
 tell whether the leg actually moved. Strokes stay bounded and the machine can
 always be told to try again — START or STOP from a latched Fault both drive
@@ -664,13 +734,17 @@ patient-facing machine it recovers instead of appearing bricked.
 
 ## Wiring
 
-- Controller relays: UP GPIO 22, DOWN GPIO 27, active-low (`RELAY_ACTIVE_LOW`
-  set). There are no limit switches — travel is timed by `liftSec`/`lowerSec`,
-  both editable and capped by `maxTravelSec`.
+- Motor drive: a **BTS7960** H-bridge module. RPWM GPIO 22 (P3 connector), LPWM
+  GPIO 27 (CN1) — the two wires the relay coils used, so the harness is
+  unchanged. `R_EN` and `L_EN` are wired **together** to GPIO 4. All three are
+  active-HIGH and LOW is the safe level on each; there is no `RELAY_ACTIVE_LOW`
+  for the motor any more. There are no limit switches — travel is timed by
+  `liftSec`/`lowerSec`, both editable and capped by `maxTravelSec`.
+- Master cut relay: GPIO 33, in series with the BTS7960's motor supply, one more
+  channel of the same active-low board as the lamps (`MASTER_ACTIVE_LOW`).
 - Panel buttons: START GPIO 25, STOP GPIO 26. Momentary, INPUT_PULLUP, other
   side to GND; both normally-open (`BTN_START_NC` / `BTN_STOP_NC`, both `0` in
-  `config.h`). GPIO 4 and GPIO 33 are free — nothing reads them and nothing
-  reserves them.
+  `config.h`). There are no free GPIOs left on this board.
 - Panel lamps: green GPIO 23, yellow GPIO 32, each a 12 V lamp through its own
   relay. Green lit while a session is in progress, yellow while idle, **both**
   lit for a latched FAULT — one lamp in each normal state, never blinking. The

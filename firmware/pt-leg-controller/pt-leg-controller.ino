@@ -1,6 +1,6 @@
 // สเก็ตช์หลักของบอร์ดคอนโทรลเลอร์ (ESP32) — สมองของเครื่องกายภาพบำบัดขา
-// รวมทุกโมดูล: อ่านปุ่ม -> เดินเครื่องสถานะ -> สั่งรีเลย์ -> คุยกับเซิร์ฟเวอร์และจอ
-// Controller main sketch: buttons -> state machine -> relays -> server + display.
+// รวมทุกโมดูล: อ่านปุ่ม -> เดินเครื่องสถานะ -> สั่งมอเตอร์ -> คุยกับเซิร์ฟเวอร์และจอ
+// Controller main sketch: buttons -> state machine -> motor -> server + display.
 //
 // Bench aid: with no display wired the board says nothing, so panel-button
 // polarity cannot be checked. Enable per-build to print button edges, raw pin
@@ -57,7 +57,7 @@ Link gLink;                // ลิงก์ UART ไปยังบอร์�
 static bool gNtpDone = false;
 
 static void applyActuator() {
-  // [TH] แปลงสถานะปัจจุบันของรอบให้เป็นคำสั่งรีเลย์ (เรียกทุกลูป)
+  // [TH] แปลงสถานะปัจจุบันของรอบให้เป็นคำสั่งขับมอเตอร์ (เรียกทุกลูป)
   //
   // The state machine raises this on every SafeLower entry, so the new stroke
   // does not inherit the previous one's energize clock. Asked of the session
@@ -70,16 +70,47 @@ static void applyActuator() {
   //      เพราะ tick() ทำงานก่อนปุ่ม การลดขาครั้งหนึ่งจึงจบและอีกครั้งเริ่มได้ระหว่างการมองสองครั้ง
   //      โค้ดตรงนี้จะไม่เห็นอะไรเปลี่ยนเลย
   if (gSession.takeStrokeRenewEdge()) actuatorRenewStroke();
+  // Two ways to stop, and which one a phase gets is a safety decision rather
+  // than a comfort one. Idle, Hold and Rest are strokes that ended because they
+  // were supposed to, so they fade out over MOTOR_RAMP_MS and the leg is not
+  // stopped dead. Fault is the one phase that cuts the drive in the same call —
+  // a latched fault means something is wrong with a leg that may be raised, and
+  // spending another 400 ms driving it is exactly the wrong answer. The other
+  // instant cuts live inside actuator.cpp and are not reachable from here: the
+  // energize cap, and a STOP that reverses a lift into a safe-lower.
+  // [TH] มีสองวิธีในการหยุด และการที่สถานะไหนได้วิธีไหนเป็นการตัดสินใจเรื่องความปลอดภัย ไม่ใช่ความสบาย
+  //      สถานะว่าง ค้าง และพัก คือจังหวะที่จบเพราะถึงเวลาของมันเอง
+  //      จึงค่อยๆ ผ่อนกำลังลงภายในเวลา MOTOR_RAMP_MS ขาจะได้ไม่ถูกหยุดกึก
+  //      ส่วนสถานะผิดพลาดเป็นสถานะเดียวที่ตัดกำลังขับในการเรียกครั้งเดียว
+  //      เพราะความผิดพลาดที่ค้างอยู่แปลว่ามีอะไรผิดปกติกับขาที่อาจยกอยู่
+  //      การขับต่ออีก 400 มิลลิวินาทีคือคำตอบที่ผิดพอดี
+  //      การตัดทันทีที่เหลืออยู่ใน actuator.cpp และเรียกจากตรงนี้ไม่ได้
+  //      คือเพดานเวลาจ่ายไฟ และการกด STOP ที่กลับทิศจากการยกไปเป็นการลดขาเพื่อหยุด
   switch (gSession.phase()) {
     case Phase::Lift: actuatorUp(); break;
     case Phase::Lower:
     case Phase::SafeLower: actuatorDown(); break;
-    default: actuatorOff(); break;  // Idle, Hold, Rest, Fault — สถานะที่ต้องดับรีเลย์
+    case Phase::Fault: actuatorOff(); break;  // instant — ตัดทันที
+    default: actuatorSoftOff(); break;        // Idle, Hold, Rest — ผ่อนกำลังลง
   }
+  // The master cut relay follows the session, not the stroke: closed for the
+  // whole of a session and open the rest of the time, so it switches twice a
+  // session instead of twice a rep. running() is already "the actuator may move",
+  // which is the exact question this relay answers in hardware — and it is false
+  // for a latched Fault, so a fault physically disconnects motor power rather
+  // than only commanding zero. Called every loop, which is also what retries the
+  // open that actuatorArm() defers until a fade has finished.
+  // [TH] รีเลย์ตัดหลักทำตามรอบการทำงาน ไม่ใช่ตามจังหวะการเคลื่อนที่
+  //      ปิดวงจรตลอดทั้งรอบและเปิดวงจรในเวลาที่เหลือ จึงตัดต่อสองครั้งต่อรอบ ไม่ใช่สองครั้งต่อการทำหนึ่งครั้ง
+  //      ค่า running() มีความหมายว่า "ชุดขับเคลื่อนอาจเคลื่อนที่" อยู่แล้ว
+  //      ซึ่งเป็นคำถามเดียวกับที่รีเลย์ตัวนี้ตอบในระดับฮาร์ดแวร์
+  //      และเป็นเท็จเมื่อค้างสถานะผิดพลาด ความผิดพลาดจึงตัดไฟมอเตอร์ออกจริง ไม่ใช่แค่สั่งกำลังเป็นศูนย์
+  //      เรียกทุกลูป ซึ่งเป็นสิ่งที่ทำให้การเปิดวงจรที่ actuatorArm() หน่วงไว้รอการผ่อนกำลังจบได้ลองใหม่ด้วย
+  actuatorArm(gSession.running());
 }
 
 static void applySettings(const DeviceSettings& s) {
-  // [TH] รับค่าตั้งค่าใหม่: บันทึกลง NVS, อัปเดตเวลารอบ, ตั้งเพดานรีเลย์ (เผื่อ 500 มิลลิวินาที
+  // [TH] รับค่าตั้งค่าใหม่: บันทึกลง NVS, อัปเดตเวลารอบ, ตั้งเพดานเวลาจ่ายไฟ (เผื่อ 500 มิลลิวินาที
   //      ให้สูงกว่าเพดานของเครื่องสถานะเล็กน้อย เพื่อเป็นแนวป้องกันสำรอง), แล้วเริ่มเครือข่ายใหม่
   gSettings = s;
   settingsSave(gSettings);
@@ -93,12 +124,12 @@ static void applySettings(const DeviceSettings& s) {
 // The cycle times set the actuator's hard cap, so they are clamped here rather
 // than trusted from the wire. Every sender clamps already — the spinboxes on the
 // settings screen and the card reader on the display — but this board owns the
-// relay: a maxTravel of 0 arriving down the UART would make the cap 0 ms, fault
+// motor: a maxTravel of 0 arriving down the UART would make the cap 0 ms, fault
 // every stroke instantly, and persist to NVS so it survived the reboot. The
 // ranges match the settings screen's spinbox limits, kept in step by hand.
-// [TH] เวลารอบเป็นตัวกำหนดเพดานเวลาของรีเลย์ จึงจำกัดช่วงค่าที่นี่ ไม่เชื่อค่าที่ส่งมาตรงๆ
+// [TH] เวลารอบเป็นตัวกำหนดเพดานเวลาจ่ายไฟ จึงจำกัดช่วงค่าที่นี่ ไม่เชื่อค่าที่ส่งมาตรงๆ
 //      ฝั่งผู้ส่งจำกัดค่าให้อยู่แล้วทั้งช่องกรอกในหน้าตั้งค่าและตอนอ่านไฟล์จากการ์ด
-//      แต่บอร์ดนี้เป็นเจ้าของรีเลย์ ถ้าค่า maxTravel เป็น 0 ส่งมาทาง UART เพดานจะเป็น 0 มิลลิวินาที
+//      แต่บอร์ดนี้เป็นเจ้าของมอเตอร์ ถ้าค่า maxTravel เป็น 0 ส่งมาทาง UART เพดานจะเป็น 0 มิลลิวินาที
 //      ทุกจังหวะยกจะผิดพลาดทันที และค่าจะถูกบันทึกลง NVS ค้างข้ามการเปิดปิดเครื่องด้วย
 //      ช่วงตัวเลขตรงกับที่หน้าตั้งค่ากำหนดไว้ ต้องแก้ให้ตรงกันเองถ้ามีการเปลี่ยน
 static uint16_t clampSec(uint16_t v, uint16_t lo, uint16_t hi, const char* name) {
@@ -112,14 +143,14 @@ static uint16_t clampSec(uint16_t v, uint16_t lo, uint16_t hi, const char* name)
 // A settings message that arrives mid-session is held until the machine is idle.
 // applySettings commits to NVS and restarts WiFi, both of which can stall for as
 // long as a flash erase takes — and gLink.poll() runs after applyActuator() and
-// actuatorTick(), so that stall happens with a relay energized and neither the
+// actuatorTick(), so that stall happens with the motor driving and neither the
 // limit switches nor the travel cap being read. It also swaps the live cycle
 // timings out from under a stroke already in progress. Nothing is lost by
 // waiting: the operator's SAVE lands the moment the leg is down.
 // [TH] ข้อความตั้งค่าที่มาถึงระหว่างรอบทำงานจะถูกพักไว้จนกว่าเครื่องจะว่าง
 //      applySettings เขียนลง NVS และเริ่มการเชื่อมต่อ WiFi ใหม่ ทั้งสองอย่างค้างได้นานเท่าการลบแฟลช
 //      และ gLink.poll() ทำงานหลัง applyActuator() กับ actuatorTick()
-//      การค้างนั้นจึงเกิดขึ้นตอนที่รีเลย์กำลังจ่ายไฟ โดยไม่มีการอ่านลิมิตสวิตช์และไม่มีการตรวจเพดานเวลาเลย
+//      การค้างนั้นจึงเกิดขึ้นตอนที่มอเตอร์กำลังขับอยู่ โดยไม่มีการอ่านลิมิตสวิตช์และไม่มีการตรวจเพดานเวลาเลย
 //      ทั้งยังสลับค่าเวลาของรอบที่กำลังเดินอยู่ด้วย
 //      การรอไม่ทำให้เสียอะไร ค่าที่ผู้ใช้กดบันทึกจะมีผลทันทีที่ขาลงถึงพื้น
 static bool gPendingSettings = false;
@@ -341,7 +372,7 @@ static void debugTick(uint32_t nowMs, bool startEdge, bool stopEdge) {
 #endif
 
 void setup() {
-  actuatorBegin();  // safety first — ดับรีเลย์ก่อนเป็นอันดับแรกเพื่อความปลอดภัย
+  actuatorBegin();  // safety first — ตัดกำลังขับและเปิดวงจรรีเลย์ตัดหลักก่อนเป็นอันดับแรกเพื่อความปลอดภัย
   buttonsBegin();
   panelLampsBegin();  // lamps dark before anything can drive them — ให้หลอดดับไว้ก่อนที่อะไรจะมาสั่งได้
   rtcBegin();  // absent chip is fine: epochs just read 0 — ไม่มีชิปก็ไม่เป็นไร เวลาจะเป็น 0
@@ -405,6 +436,16 @@ void setup() {
   configTime(0, 0, "pool.ntp.org", "time.google.com");
   if (!actuatorCapTimerReady())
     Serial.println("actuator: cap timer missing, the hardware backstop is OFF");
+  // Reported for the same reason and at the same point as the cap timer: both are
+  // decided in actuatorBegin(), before the port is open. A false here means the
+  // LEDC channels never attached, so no stroke can move the leg at all and every
+  // one of them will run to the cap and fault with nothing having happened.
+  // [TH] รายงานด้วยเหตุผลเดียวกันและที่จุดเดียวกับตัวจับเวลาเพดานเวลา
+  //      ทั้งคู่ถูกตัดสินใน actuatorBegin() ก่อนที่พอร์ตจะเปิด
+  //      ถ้าค่านี้เป็นเท็จแปลว่าผูกช่อง LEDC ไม่สำเร็จ
+  //      จะไม่มีจังหวะไหนขยับขาได้เลย และทุกจังหวะจะวิ่งจนชนเพดานเวลาแล้วขึ้นความผิดพลาดโดยไม่มีอะไรเกิดขึ้น
+  if (!actuatorPwmReady())
+    Serial.println("actuator: LEDC attach failed, the motor CANNOT be driven");
   gLink.begin(&Serial2);
   gLink.onSettings = onLinkSettings;
   gLink.onHello = onLinkHello;
@@ -434,7 +475,7 @@ static uint32_t dSeg_net, dSeg_ntp, dSeg_linkPoll, dSeg_cmd, dSeg_hb, dSeg_state
 #endif
 
 void loop() {
-  // [TH] ลำดับสำคัญ: อ่านปุ่ม -> เดินเครื่องสถานะ -> สั่งรีเลย์ -> ตรวจเพดานเวลา ก่อนงานเครือข่าย
+  // [TH] ลำดับสำคัญ: อ่านปุ่ม -> เดินเครื่องสถานะ -> สั่งมอเตอร์ -> ตรวจเพดานเวลา ก่อนงานเครือข่าย
   uint32_t now = millis();
 #if LOOP_DEBUG
   uint32_t dIter_t0 = now;
@@ -457,7 +498,7 @@ void loop() {
   //
   // Not while a safe-lower is running: the trip can surface in the same iteration
   // in which a RUN press entered SafeLower, and faulting there would abort the descent
-  // the operator just asked for before the DOWN relay had energized at all. That
+  // the operator just asked for before the DOWN stroke had driven at all. That
   // descent is separately bounded by its own fresh cap.
   // [TH] เพดานเวลาจ่ายไฟต้องถูกคิดให้กับการเคลื่อนที่ที่กำลังขับเคลื่อนอยู่จริง
   //      จึงต้องอ่านค่าก่อนที่ปุ่มจะเริ่มรอบใหม่ได้
@@ -466,10 +507,10 @@ void loop() {
   //      แล้วยอดรวมศูนย์ของรอบนั้นจะเขียนทับยอดจริงของรอบที่เพดานเวลาเป็นคนจบ
   //      ทำลายทั้งเวลารวมและจำนวนครั้งของรอบนั้นทั้งในเหตุการณ์ฝั่งเซิร์ฟเวอร์และในแถวข้อมูลบนการ์ด
   //      และไม่ทำระหว่างที่กำลังลดขาเพื่อหยุด เพราะการตัดอาจปรากฏในลูปรอบเดียวกับที่การกด RUN พาเข้าสถานะนั้น
-  //      การตัดสินว่าผิดพลาดตรงนั้นจะยกเลิกการลดขาที่ผู้ใช้เพิ่งสั่ง ตั้งแต่ก่อนที่รีเลย์ลงจะได้จ่ายไฟ
+  //      การตัดสินว่าผิดพลาดตรงนั้นจะยกเลิกการลดขาที่ผู้ใช้เพิ่งสั่ง ตั้งแต่ก่อนที่จังหวะลงจะได้ขับเลย
   //      การลดขาครั้งนั้นมีเพดานเวลาของตัวเองคุมอยู่แล้ว
   if (actuatorTakeCapTrip()) {
-    Serial.println("actuator: energize cap opened the relays");
+    Serial.println("actuator: energize cap cut the motor drive");
     // Swallowed here does not mean ignored: a trip that lands mid-SafeLower is
     // real even though forceFault() is skipped for it (see the comment above),
     // and a start queued behind that descent must not lift the instant the
@@ -501,7 +542,7 @@ void loop() {
   if (pressStop) gSession.requestStop(now);
   applyActuator();
   actuatorTick(now);
-  // Right after the relays, and before the network work: the lamp then agrees
+  // Right after the motor command, and before the network work: the lamp agrees
   // with the actuator command issued in the same iteration, and it still updates
   // on the iterations where netLoop() later blocks on an unreachable server.
   // Two arguments now. running() is still "the actuator may move" — true for
@@ -509,7 +550,7 @@ void loop() {
   // latched Fault. faulted() is passed alongside it so a latched Fault lights
   // both lamps instead of reading identically to ordinary Idle, which matters
   // on a panel-only machine with no CYD to say which one it is.
-  // [TH] วางไว้ต่อจากการสั่งรีเลย์และก่อนงานเครือข่าย
+  // [TH] วางไว้ต่อจากการสั่งขับมอเตอร์และก่อนงานเครือข่าย
   //      หลอดจะได้ตรงกับคำสั่งชุดขับเคลื่อนที่ออกไปในลูปรอบเดียวกัน
   //      และยังถูกอัปเดตในรอบที่ netLoop() ไปค้างรอเซิร์ฟเวอร์ที่ติดต่อไม่ได้ด้วย
   //      ตอนนี้รับสองอาร์กิวเมนต์ running() ยังคงหมายถึง "ชุดขับเคลื่อนอาจเคลื่อนที่"
@@ -609,12 +650,12 @@ void loop() {
     // Timings go through applySettings, which clamps them, persists them and — if
     // a session is running — holds the whole change until it ends. That deferral
     // is the point: the NVS commit and the Wi-Fi restart it performs must not
-    // happen with a relay energized, and a stroke length that changed halfway
+    // happen with the motor driving, and a stroke length that changed halfway
     // through a stroke would be worse than waiting.
     // [TH] ค่าเวลาของรอบส่งผ่าน applySettings ซึ่งจำกัดช่วง บันทึกค่า
     //      และถ้ากำลังมีรอบทำงานอยู่จะพักการเปลี่ยนแปลงทั้งชุดไว้จนกว่ารอบจะจบ
     //      การเลื่อนนั้นคือประเด็น เพราะการบันทึก NVS และการรีสตาร์ต WiFi ที่ตามมา
-    //      ต้องไม่เกิดขึ้นตอนที่รีเลย์กำลังจ่ายไฟ
+    //      ต้องไม่เกิดขึ้นตอนที่มอเตอร์กำลังขับอยู่
     //      และความยาวจังหวะที่เปลี่ยนกลางจังหวะก็แย่กว่าการรอ
     if (wantTimings.liftSec || wantTimings.lowerSec || wantTimings.holdSec ||
         wantTimings.restSec || wantTimings.maxTravelSec) {
@@ -657,12 +698,12 @@ void loop() {
     // rather than with the previous one.
     // [TH] นำไปใช้ก่อนคำสั่ง คำสั่งเริ่มที่แนบเป้าหมายมาจะได้ใช้ค่าใหม่ ไม่ใช่ค่าเดิม
     // Clamped here like every other entry point. The route validates 0..99, but
-    // this board owns the relay and the value reaches it from whatever is at the
+    // this board owns the motor and the value reaches it from whatever is at the
     // other end of serverUrl — which the operator types in by hand — so the range
     // is enforced where it is used rather than trusted from the wire, exactly as
     // onLinkTarget does for the UART path.
     // [TH] จำกัดช่วงตรงนี้เหมือนทางเข้าอื่นทุกทาง เส้นทาง HTTP ตรวจ 0..99 อยู่แล้ว
-    //      แต่บอร์ดนี้เป็นเจ้าของรีเลย์ และค่านี้มาจากอะไรก็ตามที่อยู่ปลายทาง serverUrl
+    //      แต่บอร์ดนี้เป็นเจ้าของมอเตอร์ และค่านี้มาจากอะไรก็ตามที่อยู่ปลายทาง serverUrl
     //      ซึ่งผู้ใช้พิมพ์เอง จึงบังคับช่วงค่าที่จุดที่ใช้งานจริง ไม่ใช่เชื่อค่าที่ส่งมา
     //      แบบเดียวกับที่ onLinkTarget ทำกับเส้นทาง UART
     if (wantTarget > 99) wantTarget = 99;
@@ -733,10 +774,10 @@ void loop() {
   // [TH] ส่งเหตุการณ์ "เพิ่งเริ่ม" (ตรวจจับขอบสัญญาณครั้งเดียว)
   if (gSession.takeStartedEdge()) netQueueEvent("started", gSession.elapsedSec(now), gSession.reps());
 
-  // Settings that arrived mid-session land here, once the relays are off. After
+  // Settings that arrived mid-session land here, once the motor is stopped. After
   // the done message on purpose: applySettings restarts WiFi, and the session's
   // record should be on its way out before that happens.
-  // [TH] ค่าตั้งค่าที่มาถึงระหว่างรอบจะถูกนำมาใช้ตรงนี้ หลังจากรีเลย์ดับแล้ว
+  // [TH] ค่าตั้งค่าที่มาถึงระหว่างรอบจะถูกนำมาใช้ตรงนี้ หลังจากมอเตอร์หยุดแล้ว
   //      วางไว้หลังข้อความ done โดยตั้งใจ เพราะ applySettings จะเริ่มการเชื่อมต่อ WiFi ใหม่
   //      ควรให้ข้อมูลของรอบนั้นถูกส่งออกไปก่อน
   if (gPendingSettings && !gSession.running()) {

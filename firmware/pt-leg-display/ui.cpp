@@ -991,9 +991,9 @@ static void buildSettings() {
   makeField(col, "รหัสอุปกรณ์", "KNEE-01", false, &taCode);
 
   // MAX TRAVEL is the safety cap the whole switch-timeout story rests on: it is
-  // how long a relay may stay energized with no end-of-travel switch closing.
+  // how long the motor may keep driving with no end-of-travel switch closing.
   // Its ceiling is deliberately far lower than HOLD/REST.
-  // [TH] MAX TRAVEL คือเพดานความปลอดภัยหลัก: เวลาที่รีเลย์จ่ายไฟได้โดยไม่มีสวิตช์ปลายทางปิด
+  // [TH] MAX TRAVEL คือเพดานความปลอดภัยหลัก: เวลาที่ขับมอเตอร์ได้โดยไม่มีสวิตช์ปลายทางปิด
   //      เพดานของมันตั้งไว้ต่ำกว่า HOLD/REST มากโดยตั้งใจ
   spinMax = makeSpinRow(col, "เวลาเดินทางสูงสุด (วิ)", 8, 1, 20);
   spinLift = makeSpinRow(col, "ยกขึ้น (วิ)", 7, 1, 20);

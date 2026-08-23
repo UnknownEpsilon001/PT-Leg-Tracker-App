@@ -68,7 +68,7 @@ $script:dryTranscript = @(
     '[dbg 30000] phase=IDLE reps=0 elapsed=0s'   # stopped from HOLD, so this one is the full 7 s lowerSec
     '[dbg 33000] EDGE START'
     '[dbg 33000] phase=LIFT reps=0 elapsed=0s'
-    'actuator: energize cap opened the relays'
+    'actuator: energize cap cut the motor drive'
     '[dbg 34500] phase=FAULT reps=0 elapsed=1s'
 )
 $script:dryIndex = 0
@@ -242,10 +242,10 @@ $steps = @(
         # which is exactly what stops a low cap from faulting every ordinary lift.
         # So the cap has to be tripped the way it is meant to be: a loop stall that
         # outlasts its fixed 500 ms margin (actuatorSetCap = maxTravelSec*1000+500,
-        # see actuator.cpp) while a relay is energized. The heartbeat POST is the
+        # see actuator.cpp) while the motor is driving. The heartbeat POST is the
         # practical way to arrange that on the bench - see net.cpp.
         Do      = "reflash once more with BENCH_DEBUG=1 and, this time, a low DEFAULT_MAX_TRAVEL_SEC (say 1) in config.h with NVS erased first, so DEFAULT_LIFT_SEC/DEFAULT_LOWER_SEC auto-clamp down to match - this shrinks the cap's fixed 500 ms margin to a much bigger share of the 1 s stroke. Then set serverUrl to an address nothing answers on the LAN - not a down WiFi, which makes net.cpp's post() return instantly instead of blocking, but a real IP with no listener. Touch GPIO 25 to GND to START: the 1/s heartbeat blocks up to ~400 ms per attempt against that address, and one landing across the LIFT->HOLD boundary is what eats the margin and trips the actuator's own hardware timer. May take a couple of tries to land the timing - each START is an independent attempt"
-        Expect  = @('EDGE START', 'phase=LIFT', 'actuator: energize cap opened the relays', 'phase=FAULT')
+        Expect  = @('EDGE START', 'phase=LIFT', 'actuator: energize cap cut the motor drive', 'phase=FAULT')
         Hint    = "No trip after several tries: check maxTravelSec really did come out at 1 - a value already stored in NVS from a previous flash beats a lowered config.h default, since settingsLoad only falls back to the compiled default when the key is absent. Also confirm the unreachable address fails SLOW: a WiFi that is actually down, or a host that actively refuses the connection, returns near-instantly and never blocks long enough - it has to be an address that is silently unreachable, packets just dropped. Watch the lamps: both should light together the instant it faults - that is the new latched-FAULT indication, previously indistinguishable plain yellow. To clear it, touch GPIO 26 (STOP): the leg lowers through the fault's own safe-lower and the latch clears the moment phase reaches IDLE, same as any other STOP-from-FAULT recovery."
     }
 )

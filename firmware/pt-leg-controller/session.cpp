@@ -100,11 +100,11 @@ void SessionSM::finish(uint32_t nowMs, Phase to, bool fault) {
 
 void SessionSM::start(uint32_t nowMs) {
   if (running()) return;  // ignore while a session is under way — ถ้ากำลังทำงานอยู่ให้ข้าม
-  // Out of a latched Fault, lower before lifting. The fault stopped the relays
+  // Out of a latched Fault, lower before lifting. The fault stopped the motor
   // wherever the leg happened to be, and this firmware has no way to find out
   // where that was. The lowering runs first and the start is queued behind it.
   // [TH] ถ้ามาจากสถานะผิดพลาดที่ค้างอยู่ ให้ลดขาก่อนแล้วค่อยยก
-  //      ความผิดพลาดตัดรีเลย์ตรงจุดไหนก็ได้ที่ขาอยู่ และเฟิร์มแวร์นี้ไม่มีทางรู้ว่าตรงไหน
+  //      ความผิดพลาดตัดมอเตอร์ตรงจุดไหนก็ได้ที่ขาอยู่ และเฟิร์มแวร์นี้ไม่มีทางรู้ว่าตรงไหน
   //      จึงให้การลดขาทำงานก่อน แล้วเข้าคิวเริ่มรอบไว้ข้างหลัง
   // legPositionUnknown covers the reboot case the Fault branch does not: a
   // power cut mid-Lift boots straight to Idle, not Fault, and the state
@@ -157,11 +157,11 @@ void SessionSM::requestStop(uint32_t nowMs) {
       //      และข้อความ done ซึ่งเป็นแถวข้อมูลเดียวของรอบนั้นบนการ์ด
       return;
     case Phase::Fault:
-      // A fault stops the relays wherever the leg is, and it can be halfway up.
+      // A fault stops the motor wherever the leg is, and it can be halfway up.
       // STOP is the button an operator reaches for, so it brings the leg down and
       // clears the latch when it gets there. The fault was already recorded when
       // it happened, so this lowering reports nothing — see `recovering`.
-      // [TH] ความผิดพลาดตัดรีเลย์ไม่ว่าขาจะอยู่ตรงไหน และอาจค้างกลางทาง
+      // [TH] ความผิดพลาดตัดมอเตอร์ไม่ว่าขาจะอยู่ตรงไหน และอาจค้างกลางทาง
       //      ปุ่ม STOP คือปุ่มที่ผู้ใช้เอื้อมไปกด จึงพาขาลงมาและล้างสถานะเมื่อถึงพื้น
       //      ความผิดพลาดถูกบันทึกไปแล้วตอนเกิดเหตุ การลดขาครั้งนี้จึงไม่รายงานอะไร ดูตัวแปร recovering
       //
