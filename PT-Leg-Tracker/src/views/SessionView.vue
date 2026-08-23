@@ -14,6 +14,7 @@ import {
   queueStop,
   setTarget,
 } from '@/lib/device'
+import { canOpenConfirm, confirmSeed, planConfirmStep } from '@/lib/start-confirm'
 import { performTargetStep, planTargetStep } from '@/lib/target-step'
 import { usePainLogStore } from '@/stores/painlog'
 import { useProfileStore } from '@/stores/profile'
@@ -72,6 +73,18 @@ const targetLabel = computed(() => {
 const attachAvailable = ref(false)
 const connLost = ref(false)
 const errorMsg = ref('')
+
+// The pre-start confirmation sheet: open/closed, and the set count it is
+// currently showing while open. This value only ever reaches queueStart — it
+// is never written through setTarget — so a one-off choice here never becomes
+// the machine's stored default. 0 is a legal choice ("run until STOP"), so
+// confirmValue is a plain number, never null.
+// [TH] แผ่นยืนยันก่อนเริ่ม: เปิด/ปิด และจำนวนที่กำลังแสดงอยู่ขณะเปิด ค่านี้จะไปถึงแค่ queueStart เท่านั้น
+//      ไม่เคยเขียนผ่าน setTarget ทางเลือกครั้งเดียวตรงนี้จึงไม่มีวันกลายเป็นค่าเริ่มต้นที่เครื่องจำไว้
+//      0 เป็นค่าที่เลือกได้จริง ("ทำไปเรื่อยๆ จนกว่าจะกด STOP") confirmValue จึงเป็นตัวเลขล้วนๆ ไม่มี null
+const confirmOpen = ref(false)
+const confirmValue = ref(0)
+const confirmLabel = computed(() => (confirmValue.value > 0 ? `${confirmValue.value} ครั้ง` : 'ไม่จำกัด'))
 
 let poller: ReturnType<typeof setInterval> | null = null
 let ticker: ReturnType<typeof setInterval> | null = null
@@ -206,27 +219,48 @@ async function start() {
     errorMsg.value = 'ยังไม่ได้ตั้งรหัสเครื่อง (ให้เจ้าหน้าที่ตั้งค่าในเมนูตั้งค่า)'
     return
   }
+  // Ask how many sets to run before committing — but only when `target` is a
+  // baseline the sheet can seed itself with honestly. canOpenConfirm says no
+  // while a stepTarget() edit is still in flight, or before any value has ever
+  // been learned; in both cases we fall through to the pre-Task-10 behaviour
+  // below and start with no body, exactly as before this sheet existed.
+  // [TH] ถามจำนวนเซ็ตก่อนเริ่มจริง แต่จะเปิดแผ่นยืนยันก็ต่อเมื่อ target ตอนนี้เป็นค่าตั้งต้นที่เชื่อถือได้เท่านั้น
+  //      canOpenConfirm จะตอบว่าไม่ได้ ถ้าการแก้ไขจาก stepTarget() ยังค้างอยู่ หรือยังไม่เคยรู้ค่าเลย
+  //      ทั้งสองกรณีจะข้ามไปใช้พฤติกรรมเดิมก่อน Task 10 ด้านล่าง คือเริ่มโดยไม่ส่งค่าไปเลย เหมือนก่อนมีแผ่นนี้
+  if (canOpenConfirm(target.value, targetPending.value)) {
+    confirmValue.value = confirmSeed(target.value)
+    confirmOpen.value = true
+    return
+  }
+  // An unlearned target sends no body: device.ts leaves whatever the machine
+  // already holds untouched, rather than us guessing and overwriting it. The
+  // same applies while a stepTarget() edit is still in flight (targetPending
+  // non-null): targetShown may already read ahead of `target` from taps the
+  // server has not confirmed yet, and `target` itself is stale until it does.
+  // Sending it here would win the race against that outstanding setTarget and
+  // silently revert the in-flight edit the moment the device polls this start.
+  // [TH] ถ้ายังไม่รู้ค่าเป้าหมายจะไม่ส่งค่านี้ไปเลย เครื่องจะใช้ค่าที่มันถืออยู่เดิม
+  //      แทนที่จะให้แอปเดาแล้วไปเขียนทับ กรณีที่การแก้ไขจาก stepTarget() ยังค้างอยู่ก็เช่นกัน
+  //      (targetPending ไม่เป็น null): ค่าที่หน้าจอแสดง (targetShown) อาจนำหน้า target ไปแล้ว
+  //      จากการกดที่เซิร์ฟเวอร์ยังไม่ยืนยัน และ target เองก็เป็นค่าเก่าจนกว่าจะยืนยันเสร็จ
+  //      ถ้าส่งค่านี้ไปตอนนี้จะไปแข่งกับ setTarget ที่ยังค้างอยู่ และอาจทับการแก้ไขที่ค้างอยู่นั้น
+  //      เงียบๆ ทันทีที่เครื่องโพลคำสั่งเริ่มนี้
+  await commitStart(undefined)
+}
+
+// Shared by both paths that actually queue a start: the direct path above
+// (canOpenConfirm said no — no sheet, no target) and confirmStart() below (the
+// sheet's ตกลง). Only the sheet ever supplies a defined number, and it goes
+// straight to queueStart — never to setTarget — so the choice stays scoped to
+// this one session.
+// [TH] ใช้ร่วมกันโดยสองทางที่เข้าคิวเริ่มจริง: ทางตรงด้านบน (canOpenConfirm ตอบว่าไม่ได้ — ไม่มีแผ่นยืนยัน
+//      ไม่มีค่าเป้าหมาย) และ confirmStart() ด้านล่าง (การกดตกลงบนแผ่นยืนยัน) มีแต่แผ่นยืนยันเท่านั้นที่ส่งตัวเลขจริงมา
+//      และไปที่ queueStart ตรงๆ ไม่ผ่าน setTarget เลย ทางเลือกจึงมีผลแค่เซสชันนี้เซสชันเดียว
+async function commitStart(targetReps: number | undefined) {
   phase.value = 'starting'
   attachAvailable.value = false
   try {
-    // An unlearned target sends no body: device.ts leaves whatever the machine
-    // already holds untouched, rather than us guessing and overwriting it. The
-    // same applies while a stepTarget() edit is still in flight (targetPending
-    // non-null): targetShown may already read ahead of `target` from taps the
-    // server has not confirmed yet, and `target` itself is stale until it does.
-    // Sending it here would win the race against that outstanding setTarget and
-    // silently revert the in-flight edit the moment the device polls this start.
-    // [TH] ถ้ายังไม่รู้ค่าเป้าหมายจะไม่ส่งค่านี้ไปเลย เครื่องจะใช้ค่าที่มันถืออยู่เดิม
-    //      แทนที่จะให้แอปเดาแล้วไปเขียนทับ กรณีที่การแก้ไขจาก stepTarget() ยังค้างอยู่ก็เช่นกัน
-    //      (targetPending ไม่เป็น null): ค่าที่หน้าจอแสดง (targetShown) อาจนำหน้า target ไปแล้ว
-    //      จากการกดที่เซิร์ฟเวอร์ยังไม่ยืนยัน และ target เองก็เป็นค่าเก่าจนกว่าจะยืนยันเสร็จ
-    //      ถ้าส่งค่านี้ไปตอนนี้จะไปแข่งกับ setTarget ที่ยังค้างอยู่ และอาจทับการแก้ไขที่ค้างอยู่นั้น
-    //      เงียบๆ ทันทีที่เครื่องโพลคำสั่งเริ่มนี้
-    await queueStart(
-      serverUrl.value,
-      deviceCode.value,
-      targetPending.value !== null ? undefined : (target.value ?? undefined),
-    )
+    await queueStart(serverUrl.value, deviceCode.value, targetReps)
     if (disposed) return
     startPolling()
   } catch (e) {
@@ -241,6 +275,20 @@ async function start() {
       errorMsg.value = 'เชื่อมต่อไม่สำเร็จ ลองใหม่ภายหลัง'
     }
   }
+}
+
+function stepConfirm(delta: number) {
+  confirmValue.value = planConfirmStep(confirmValue.value, delta)
+}
+
+async function confirmStart() {
+  confirmOpen.value = false
+  await commitStart(confirmValue.value)
+}
+
+function cancelConfirm() {
+  confirmOpen.value = false
+  phase.value = 'before'
 }
 
 function attach() {
@@ -310,47 +358,77 @@ onUnmounted(() => {
 <template>
   <main class="page">
     <template v-if="phase === 'before' || phase === 'starting'">
-      <div class="card">
-        <h2>ก่อนเริ่ม ปวดเข่าแค่ไหน?</h2>
-        <PainScale v-model="painBefore" />
-      </div>
-      <div class="target-stepper">
-        <button
-          class="step"
-          aria-label="ลดจำนวนเป้าหมาย"
-          :disabled="targetShown === null || targetShown === 0"
-          @click="stepTarget(-1)"
-        >
-          −
+      <template v-if="confirmOpen">
+        <div class="card">
+          <h2>รอยืนยัน</h2>
+          <div class="target-stepper">
+            <button
+              class="step"
+              aria-label="ลดจำนวนเซ็ต"
+              :disabled="confirmValue === 0"
+              @click="stepConfirm(-1)"
+            >
+              −
+            </button>
+            <span class="target-label">{{ confirmLabel }}</span>
+            <button
+              class="step"
+              aria-label="เพิ่มจำนวนเซ็ต"
+              :disabled="confirmValue === 99"
+              @click="stepConfirm(1)"
+            >
+              +
+            </button>
+          </div>
+        </div>
+        <button class="primary wide" @click="confirmStart">
+          <AppIcon name="check" /> ตกลง
         </button>
-        <span class="target-label">เป้าหมาย {{ targetLabel }}</span>
+        <button class="secondary wide" @click="cancelConfirm">ยกเลิก</button>
+      </template>
+      <template v-else>
+        <div class="card">
+          <h2>ก่อนเริ่ม ปวดเข่าแค่ไหน?</h2>
+          <PainScale v-model="painBefore" />
+        </div>
+        <div class="target-stepper">
+          <button
+            class="step"
+            aria-label="ลดจำนวนเป้าหมาย"
+            :disabled="targetShown === null || targetShown === 0"
+            @click="stepTarget(-1)"
+          >
+            −
+          </button>
+          <span class="target-label">เป้าหมาย {{ targetLabel }}</span>
+          <button
+            class="step"
+            aria-label="เพิ่มจำนวนเป้าหมาย"
+            :disabled="targetShown === null || targetShown === 99"
+            @click="stepTarget(1)"
+          >
+            +
+          </button>
+        </div>
+        <p class="card">สวมอุปกรณ์ให้เรียบร้อย (ดูวิธีใช้ได้ที่เมนู "วิธีใช้เครื่อง") แล้วกดเริ่ม</p>
+        <p v-if="errorMsg" class="error">{{ errorMsg }}</p>
         <button
-          class="step"
-          aria-label="เพิ่มจำนวนเป้าหมาย"
-          :disabled="targetShown === null || targetShown === 99"
-          @click="stepTarget(1)"
+          class="primary wide breathe"
+          :disabled="painBefore === null || phase === 'starting'"
+          @click="start"
         >
-          +
+          <AppIcon name="play" />
+          {{ phase === 'starting' ? 'กำลังสั่งเครื่อง...' : 'สั่งเครื่องเริ่มทำงาน' }}
         </button>
-      </div>
-      <p class="card">สวมอุปกรณ์ให้เรียบร้อย (ดูวิธีใช้ได้ที่เมนู "วิธีใช้เครื่อง") แล้วกดเริ่ม</p>
-      <p v-if="errorMsg" class="error">{{ errorMsg }}</p>
-      <button
-        class="primary wide breathe"
-        :disabled="painBefore === null || phase === 'starting'"
-        @click="start"
-      >
-        <AppIcon name="play" />
-        {{ phase === 'starting' ? 'กำลังสั่งเครื่อง...' : 'สั่งเครื่องเริ่มทำงาน' }}
-      </button>
-      <button
-        v-if="attachAvailable"
-        class="wide"
-        :disabled="painBefore === null || phase === 'starting'"
-        @click="attach"
-      >
-        <AppIcon name="play" /> เข้าร่วมเซสชันที่กำลังทำงานอยู่
-      </button>
+        <button
+          v-if="attachAvailable"
+          class="wide"
+          :disabled="painBefore === null || phase === 'starting'"
+          @click="attach"
+        >
+          <AppIcon name="play" /> เข้าร่วมเซสชันที่กำลังทำงานอยู่
+        </button>
+      </template>
     </template>
 
     <template v-else-if="phase === 'running'">
