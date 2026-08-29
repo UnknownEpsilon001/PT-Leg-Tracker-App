@@ -468,7 +468,7 @@ WavError wavParse(const uint8_t* hdr, size_t hdrLen, uint32_t fileLen, uint32_t 
 powershell -File firmware/tests/run-tests.ps1
 ```
 
-Expected: `29 checks, 0 failures` then `tests passed`, preceded by a `SKIP:` line about `scratch/sounds/start.wav` (Task 2 supplies that file). `-Werror` is on, so any warning is also a failure.
+Expected: `29 checks, 0 failures` then `tests passed`, preceded by a `SKIP:` line about `firmware/.build/sounds/start.wav` (Task 2 supplies that file). `-Werror` is on, so any warning is also a failure.
 
 - [ ] **Step 7: Commit**
 
@@ -578,10 +578,12 @@ Write-Host "done" -ForegroundColor Green
 
 - [ ] **Step 2: Generate a real file and check it parses**
 
-Record or synthesise any short clip as `scratch/raw/start.m4a`, then:
+Generated audio lives under `firmware/.build/`, which `.gitignore` already covers — so nothing here can be committed by accident and no `.gitignore` change is needed.
+
+Record or synthesise any short clip as `firmware/.build/raw/start.m4a`, then:
 
 ```bash
-powershell -File firmware/tools/make-sounds.ps1 -In scratch/raw/start.m4a -Out scratch/sounds/start.wav
+powershell -File firmware/tools/make-sounds.ps1 -In firmware/.build/raw/start.m4a -Out firmware/.build/sounds/start.wav
 ```
 
 Expected: one line reporting duration and byte count, then `done`. A clip over 2.23 s must be **refused with the over-buffer message**, not written — test that too by feeding it a long recording.
@@ -596,7 +598,7 @@ Append to `main()` in `firmware/tests/wav_test.cpp`, before the `printf`:
   // firmware uses, so a tool change that breaks the format fails here rather
   // than on the bench.
   {
-    FILE* f = fopen("scratch/sounds/start.wav", "rb");
+    FILE* f = fopen("firmware/.build/sounds/start.wav", "rb");
     if (f) {
       std::vector<uint8_t> v;
       uint8_t chunk[4096];
@@ -607,7 +609,7 @@ Append to `main()` in `firmware/tests/wav_test.cpp`, before the `printf`:
       check(e == WavError::Ok, "make-sounds.ps1 output is accepted by the parser");
       if (e != WavError::Ok) printf("       parser said: %s\n", wavErrorText(e));
     } else {
-      printf("SKIP: scratch/sounds/start.wav absent; run tools/make-sounds.ps1 to cover this\n");
+      printf("SKIP: firmware/.build/sounds/start.wav absent; run tools/make-sounds.ps1 to cover this\n");
     }
   }
 ```
@@ -632,7 +634,7 @@ Record these, one file each. Content is spoken Thai:
 | `target.wav` | ครบตามเป้าหมายแล้ว |
 
 ```bash
-powershell -File firmware/tools/make-sounds.ps1 -In scratch/raw -Out scratch/sounds
+powershell -File firmware/tools/make-sounds.ps1 -In firmware/.build/raw -Out firmware/.build/sounds
 ```
 
 Copy the four results to `/sounds/` on the SD card. **Do not commit the `.wav` files** — they are card content, not source, and `logo_img.c` is the only place binary media belongs in this repo.

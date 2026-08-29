@@ -176,7 +176,7 @@ int main() {
   // firmware uses, so a tool change that breaks the format fails here rather
   // than on the bench.
   {
-    FILE* f = fopen("scratch/sounds/start.wav", "rb");
+    FILE* f = fopen("firmware/.build/sounds/start.wav", "rb");
     if (f) {
       std::vector<uint8_t> v;
       uint8_t chunk[4096];
@@ -187,7 +187,9 @@ int main() {
       check(e == WavError::Ok, "make-sounds.ps1 output is accepted by the parser");
       if (e != WavError::Ok) printf("       parser said: %s\n", wavErrorText(e));
     } else {
-      printf("SKIP: scratch/sounds/start.wav absent; run tools/make-sounds.ps1 to cover this\n");
+      printf(
+          "SKIP: firmware/.build/sounds/start.wav absent; run tools/make-sounds.ps1 to cover "
+          "this\n");
     }
   }
 
