@@ -468,7 +468,7 @@ WavError wavParse(const uint8_t* hdr, size_t hdrLen, uint32_t fileLen, uint32_t 
 powershell -File firmware/tests/run-tests.ps1
 ```
 
-Expected: `20 checks, 0 failures` then `tests passed`. `-Werror` is on, so any warning is also a failure.
+Expected: `29 checks, 0 failures` then `tests passed`, preceded by a `SKIP:` line about `scratch/sounds/start.wav` (Task 2 supplies that file). `-Werror` is on, so any warning is also a failure.
 
 - [ ] **Step 7: Commit**
 
