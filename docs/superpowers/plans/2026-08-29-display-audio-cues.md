@@ -1120,7 +1120,9 @@ git commit -m "feat(firmware): play WAV cues from the SD card"
 
 - [ ] **Step 1: Add the field to the shared header**
 
-In `firmware/pt-leg-display/settings.h`, inside `struct DeviceSettings`, after `targetReps`:
+Edit **`firmware/pt-leg-controller/settings.h`** — the controller's copy is the source of truth. `sync-shared.ps1` copies controller → display, so an edit made to the display's copy is silently overwritten by the very next sync, and `-Check` then reports "in sync" because both are back to the old version.
+
+Inside `struct DeviceSettings`, after `targetReps`:
 
 ```cpp
   // เปิดเสียงพูดบนบอร์ดจอ — spoken cues on the display board.

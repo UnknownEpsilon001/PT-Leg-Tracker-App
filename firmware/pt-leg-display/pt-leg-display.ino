@@ -64,7 +64,12 @@ static bool uiWifi = false, uiServer = false;
 // [TH] ค่าตั้งค่าล่าสุดที่คอนโทรลเลอร์บอกมา ใช้เติมหน้าตั้งค่า ตั้งต้นด้วยค่าเริ่มต้นไม่ใช่ศูนย์
 //      เพราะถ้าเป็นศูนย์ LVGL จะบีบเป็น 1 และหาก SAVE ก่อนคอนโทรลเลอร์ตอบ อาจเขียนเพดานเวลา 1 วินาที
 //      ทับค่าที่ดีอยู่ ปุ่ม SAVE ถูกกั้นด้วย uiSetSettingsKnown() จนกว่าจะได้ค่าจริง
-static DeviceSettings gLast = {"", "", "", "default", 8, 4, 4, 10, 10, 10};
+// The trailing `true` is soundOn. Leaving the initializer short would
+// value-initialize it to false — sound off by default, from a line that does not
+// mention sound.
+// [TH] ค่า true ตัวท้ายคือ soundOn ถ้าปล่อยให้สั้นกว่าจำนวนฟิลด์ ค่านี้จะถูกตั้งเป็นเท็จโดยปริยาย
+//      กลายเป็นปิดเสียงตั้งแต่ต้น จากบรรทัดที่ไม่ได้พูดถึงเสียงเลย
+static DeviceSettings gLast = {"", "", "", "default", 8, 4, 4, 10, 10, 10, true};
 static bool gSettingsKnown = false;
 static bool gLinkUp = false;
 
@@ -130,6 +135,7 @@ static void onOpenSettings() {
     if (settingsFileLoad(gLast)) {
       gCardSettings = true;
       uiSetDeviceCode(gLast.deviceCode.c_str());
+      audioSetEnabled(gLast.soundOn);  // a card inserted late carries this too — การ์ดที่เพิ่งเสียบก็พาค่านี้มา
       pushSettingsToController(gLast);
       Serial.println("settings: read the card late and pushed it to the controller");
     } else if (gSettingsKnown) {
@@ -201,6 +207,13 @@ static void onLinkSettingsReply(const LinkSettings& s) {
     return;
   }
 
+  // Assigned field by field, never as a whole struct. soundOn is deliberately
+  // absent from LinkSettings, so it survives this only because nothing here
+  // overwrites it — rewriting this as `gLast = built` would silently reset the
+  // user's sound setting on every controller reconnect.
+  // [TH] กำหนดค่าทีละฟิลด์ ไม่ใช่ทั้งโครงสร้าง ค่า soundOn จงใจไม่มีใน LinkSettings
+  //      จึงรอดมาได้เพราะไม่มีอะไรตรงนี้เขียนทับ
+  //      ถ้าเขียนใหม่เป็น gLast = built ค่าเสียงที่ผู้ใช้ตั้งไว้จะถูกล้างทุกครั้งที่คอนโทรลเลอร์เชื่อมต่อใหม่
   gLast.wifiSsid = s.ssid; gLast.wifiPass = s.pass; gLast.serverUrl = s.server;
   gLast.deviceCode = s.code;
   // The absent-field conventions are consumed here too, not just on the
@@ -417,6 +430,7 @@ void setup() {
   //      และค่าที่อ่านได้ตรงนี้เป็นตัวตัดสินว่าจะยึดฝั่งใด
   gCardSettings = settingsFileLoad(gLast);
   Serial.printf("settings source: %s\n", gCardSettings ? "sd card" : "controller nvs");
+  audioSetEnabled(gLast.soundOn);
   if (gCardSettings) uiSetDeviceCode(gLast.deviceCode.c_str());
   uitestBegin();  // no-op unless UI_TEST_HOOK — ไม่ทำอะไรเลยถ้าไม่ได้เปิดโหมดทดสอบ
   uiSetCallbacks(onOpenSettings, onOpenData);
