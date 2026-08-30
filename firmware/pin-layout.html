@@ -217,8 +217,8 @@ a{color:var(--pad)}
   <span class="th">สายเส้นไหน ต่อขาไหน</span>
 </h1>
 <p class="lede">
-  <span class="en">Two ESP32 boards per machine. The <b>controller</b> carries every wire you attach by hand — the motor driver, panel buttons, panel lamps, clock. The <b>display</b> (CYD) has exactly three free wires: two for the UART link and a ground.</span>
-  <span class="th">หนึ่งเครื่องมี ESP32 สองบอร์ด บอร์ด<b>ควบคุม</b>รับสายทุกเส้นที่ต่อเอง ทั้งตัวขับมอเตอร์ ปุ่มหน้าปัด ไฟหน้าปัด และนาฬิกา ส่วนบอร์ด<b>จอ</b> (CYD) เหลือขาว่างให้ต่อแค่สามเส้น คือ UART สองเส้นกับกราวด์</span>
+  <span class="en">Two ESP32 boards per machine. The <b>controller</b> carries every wire you attach by hand — the motor driver, panel buttons, panel lamps, clock. The <b>display</b> (CYD) has exactly four free wires: two for the UART link, a ground, and the speaker.</span>
+  <span class="th">หนึ่งเครื่องมี ESP32 สองบอร์ด บอร์ด<b>ควบคุม</b>รับสายทุกเส้นที่ต่อเอง ทั้งตัวขับมอเตอร์ ปุ่มหน้าปัด ไฟหน้าปัด และนาฬิกา ส่วนบอร์ด<b>จอ</b> (CYD) เหลือขาว่างให้ต่อแค่สี่เส้น คือ UART สองเส้น กราวด์ และลำโพง</span>
 </p>
 
 <!-- ============ SIGNATURE RIG ============ -->
@@ -619,8 +619,15 @@ a{color:var(--pad)}
         <td><span class="en">Controller GPIO 16 (RX)</span><span class="th">ขา 16 (RX) ของบอร์ดควบคุม</span></td></tr>
       <tr><td>GND</td><td><span class="pad ghost">GND</span></td>
         <td><span class="en">Controller GND</span><span class="th">GND ของบอร์ดควบคุม</span></td></tr>
+      <tr><td><span class="en">Speaker</span><span class="th">ลำโพง</span></td><td><span class="pad">GPIO 26</span></td>
+        <td><span class="en">Onboard amp → speaker JST</span><span class="th">วงจรขยายเสียงบนบอร์ด → ขั้วต่อลำโพง</span></td></tr>
       </tbody>
     </table></div>
+
+    <p class="sub" style="margin:8px 0 0">
+      <span class="en"><b>Check for the amplifier before connecting a speaker.</b> Some CYD revisions leave the amp pads empty and wire the speaker JST straight to GPIO 26. With no speaker attached, run <code>dacWrite(26, 128)</code> and measure: GPIO 26 reads about 1.65 V on every board, but the JST should read near 0 V DC if an amp is present. If the JST reads that same 1.65 V there is no amp — an 8 Ω voice coil across a DAC pin is close to a short, and the pin cannot source it. Fit an external PAM8403 or MAX98357A between the pin and the speaker instead. The firmware is identical either way.</span>
+      <span class="th"><b>ตรวจว่ามีวงจรขยายเสียงก่อนต่อลำโพง</b> CYD บางรุ่นไม่ได้ติดตั้งชิปขยายเสียง และต่อขั้วลำโพงเข้ากับขา 26 ตรงๆ ให้ถอดลำโพงออกก่อน แล้วสั่ง <code>dacWrite(26, 128)</code> และวัดแรงดัน ขา 26 จะอ่านได้ราว 1.65 โวลต์ทุกบอร์ด แต่ขั้วลำโพงควรอ่านได้ใกล้ 0 โวลต์ถ้ามีวงจรขยายเสียง ถ้าขั้วลำโพงอ่านได้ 1.65 โวลต์เท่ากัน แปลว่าไม่มีวงจรขยายเสียง ขดลวดลำโพง 8 โอห์มที่ต่อคร่อมขา DAC เกือบเท่ากับการลัดวงจร และขานั้นจ่ายกระแสไม่ไหว ให้ใส่โมดูล PAM8403 หรือ MAX98357A คั่นระหว่างขากับลำโพงแทน เฟิร์มแวร์ใช้ชุดเดียวกันทั้งสองแบบ</span>
+    </p>
 
     <h3><span class="en">Onboard — do not reuse</span><span class="th">ขาที่ใช้อยู่แล้ว — ห้ามใช้ซ้ำ</span></h3>
     <div class="tbl"><table>

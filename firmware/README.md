@@ -236,6 +236,128 @@ it on a PC, and accepted for a clinic LAN.
      โดยยึดค่าจากการ์ดเป็นหลัก แก้รหัสผ่าน WiFi จากคอมพิวเตอร์ได้ และเปลี่ยนบอร์ดคอนโทรลเลอร์
      ได้โดยไม่ต้องพิมพ์ใหม่ รหัสผ่านเก็บเป็นข้อความธรรมดาบนการ์ด ยอมรับได้สำหรับเครือข่ายในคลินิก
 
+## Spoken cues from the card (`/sounds`)
+
+The display board plays a spoken Thai prompt on four events, through the CYD's
+speaker output on GPIO 26. The switch labelled **เสียง** on the settings screen
+turns them off; the state is the `soundOn` key in `/settings.json`.
+
+| File | Spoken | Fires when |
+|---|---|---|
+| `/sounds/boot.wav` | เครื่องพร้อมใช้งาน | End of `setup()`, so hearing it means the whole init path finished |
+| `/sounds/start.wav` | เริ่มการทำงาน | The controller's `running` flag goes false → true |
+| `/sounds/stop.wav` | หยุดการทำงาน | A `done` message with the target unmet, or no target set |
+| `/sounds/target.wav` | ครบตามเป้าหมายแล้ว | A `done` message with the rep target reached |
+
+Stop and target are taken from the one-shot `done` message rather than from the
+`running` flag falling, because this board cannot tell a finished session from a
+dropped link — and a machine that says หยุดการทำงาน every time a jumper glitches
+is worse than one that says nothing. Start has no such message, so it edge-detects
+with two guards: the link must be up, and the first state frame after boot only
+seeds the previous value. Without the second, a display restarted beside a running
+machine announces a start that already happened.
+
+**The one accepted format**, and nothing else: RIFF WAV, uncompressed PCM,
+8-bit unsigned, mono, 22050 Hz, at most 49152 bytes of samples (2.23 s). The rate
+is not a preference — `dac_continuous_config_t::freq_hz` has a 19.6 kHz floor on
+the ESP32 with the default clock source. A file that fails any of these is
+rejected with a serial line naming the file and the field, because a silent
+speaker and a rejected file have to be distinguishable without an oscilloscope.
+
+Produce files with the tool rather than by hand:
+
+```bash
+# one file, or a whole folder at once
+powershell -File firmware/tools/make-sounds.ps1 -In .\raw\start.m4a -Out .\sd\sounds\start.wav
+powershell -File firmware/tools/make-sounds.ps1 -In .\raw -Out .\sd\sounds
+```
+
+It normalises, converts, strips metadata chunks, pads 20 ms of silence at both
+ends, and refuses to write a file over the buffer size. **Loudness is decided
+there or not at all** — there is no gain stage anywhere in the firmware, so a
+quiet recording is a quiet machine and the fix is to re-run the tool, not to
+change a constant.
+
+The padding matters more than it looks. The DAC holds the last code written to
+it, so a clip ending on a loud sample leaves the output there; disabling the
+channel then steps it audibly. Both ends sit at `0x80`, which is silence for
+unsigned 8-bit and the converter's rest value.
+
+Clips are loaded whole into RAM before the first sample is emitted, 4 KB per
+`loop()`, so the card is never read while audio is playing. That is deliberate:
+the stop cue and the `sessions.csv` append are triggered by the same message, and
+streaming would have put an SD read in the middle of the one moment of a session
+anyone is watching.
+
+[TH] บอร์ดจอเล่นเสียงพูดภาษาไทยสี่รายการจากการ์ด ผ่านลำโพงที่ขา 26
+     สวิตช์ "เสียง" บนหน้าตั้งค่าใช้ปิดเสียง โดยเก็บสถานะเป็นคีย์ soundOn ใน /settings.json
+     เสียงหยุดและเสียงครบเป้าหมายมาจากข้อความ done ที่ส่งครั้งเดียวต่อรอบ ไม่ใช่จากสถานะกำลังทำงานที่ตกลง
+     เพราะบอร์ดนี้แยกไม่ออกว่ารอบจบแล้วหรือลิงก์ขาด
+     รูปแบบไฟล์ที่ยอมรับมีแบบเดียว คือ RIFF WAV แบบ PCM 8 บิตไม่มีเครื่องหมาย โมโน 22050 เฮิรตซ์
+     ข้อมูลเสียงไม่เกิน 49152 ไบต์ (2.23 วินาที) ให้สร้างไฟล์ด้วย tools/make-sounds.ps1 ไม่ใช่ทำเอง
+     ความดังถูกกำหนดที่เครื่องมือนั้นที่เดียว เพราะเฟิร์มแวร์ไม่มีการปรับความดังเลย
+     คลิปถูกโหลดเข้าหน่วยความจำจนครบก่อนเล่น การ์ดจึงไม่ถูกอ่านระหว่างมีเสียง
+
+## Host tests (`tests/run-tests.ps1`)
+
+```bash
+# from the repo root
+powershell -File firmware/tests/run-tests.ps1
+```
+
+Compiles `pt-leg-display/wav.cpp` for the PC with `g++` and runs the assertions in
+`tests/wav_test.cpp`. `-Werror` is on.
+
+This covers the WAV header parser and nothing else, which is the honest boundary:
+that file reads bytes and knows nothing about the DAC, the card or LVGL, so it is
+the only part of the audio feature that can be checked without a board. **Do not
+add stubs to widen it** — the result would test the stubs. Everything else is
+covered by the bench checklist below.
+
+If `firmware/.build/sounds/start.wav` exists, the run also feeds a real
+`make-sounds.ps1` output through the same parser the firmware uses, so a change to
+the tool that breaks the format fails here instead of on the bench. Without it the
+run prints a `SKIP:` line and is one check shorter.
+
+[TH] คอมไพล์ wav.cpp บนคอมพิวเตอร์ด้วย g++ แล้วรันชุดทดสอบใน tests/wav_test.cpp
+     ครอบคลุมเฉพาะตัวแยกส่วนหัวไฟล์ WAV เท่านั้น ซึ่งเป็นขอบเขตตามความจริง
+     เพราะไฟล์นั้นอ่านแต่ไบต์ ไม่รู้จัก DAC การ์ด หรือ LVGL
+     ห้ามเพิ่มตัวจำลองเพื่อขยายขอบเขต เพราะจะกลายเป็นการทดสอบตัวจำลองเอง
+     ส่วนที่เหลือใช้รายการตรวจบนโต๊ะแทน
+
+## Audio bench checklist
+
+`UI_TEST_HOOK` cannot hear anything, so every row here needs ears on the bench.
+
+**Do this one first, with no speaker connected.** Some CYD revisions leave the
+amp pads empty and wire the speaker JST straight to GPIO 26. Run `dacWrite(26,
+128)` and measure: the pin reads about 1.65 V on every board, but the JST should
+read near 0 V DC if an amp is present. If the JST reads that same 1.65 V there is
+no amp — do not connect the 8 Ω speaker, fit an external PAM8403 or MAX98357A
+between pin and speaker instead. The firmware is identical either way.
+
+| Check | Passes when |
+|---|---|
+| Touch after `audioBegin()` | Every settings-screen control still responds. Proves the CH1-only channel mask left GPIO 25 alone. |
+| Boot cue | Plays once on a real power cycle, after the UI is up. |
+| Start cue | Fires on the panel START button, once. |
+| Stop cue | Fires on a STOP before the target, once; the target clip does not. |
+| Target cue | With a target of 2, the target clip plays and the stop clip does not. |
+| Target 0 | Target 0, run, press STOP: stop clip, never target. |
+| Link drop | Pull a UART jumper mid-session and reseat it. **No start cue.** |
+| Display reboot | Reset the display while the controller runs. **No start cue.** |
+| Cue against the SD write | Stop cue and the `sessions.csv` append fire together: audio must not stutter **and** the row must still be written. |
+| Back-to-back cues | Start then stop in quick succession: the second interrupts the first cleanly, no noise, no freeze. |
+| Heap | `ESP.getFreeHeap()` after 20 cues equals the value after the first. |
+| Bad file | A 16-bit WAV in place of a good one prints `rejected — not 8-bit` and makes no noise. |
+| No card | Every cue is a no-op; the machine runs normally. |
+| Sound switch | Off silences all cues and survives a power cycle; check `"soundOn": false` in the file on a PC. |
+| Five settings opens | Open and close the settings screen five times with no freeze. The switch row must be built once, in `buildSettings()`. |
+| Pop | No click at the start or end of any clip. |
+
+[TH] โหมด UI_TEST_HOOK ไม่ได้ยินเสียง ทุกข้อในรายการนี้จึงต้องใช้คนฟังที่หน้าเครื่อง
+     ให้ตรวจว่ามีวงจรขยายเสียงหรือไม่ก่อนเป็นข้อแรก โดยยังไม่ต้องต่อลำโพง
+
 ## Thai keyboard
 
 Both on-screen keyboards carry Thai, defined in `pt-leg-display/thai_kb.cpp` and
