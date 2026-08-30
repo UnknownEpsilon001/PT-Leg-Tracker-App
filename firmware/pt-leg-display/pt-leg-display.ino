@@ -37,6 +37,7 @@
 #include "sdlog.h"     // session rows written to the SD card — บันทึกผลแต่ละรอบลงการ์ด
 #include "settingsfile.h"  // /settings.json on the card — ค่าตั้งค่าบนการ์ด
 #include "uitest.h"        // bench-only serial control of the UI — โหมดทดสอบผ่านสาย
+#include "audio.h"         // spoken cues from /sounds on the card — เสียงพูดจากการ์ด
 #include <driver/gpio.h>
 
 // Both drive the USB serial port, so enabling both means two readers fighting
@@ -405,6 +406,11 @@ void setup() {
                 storePatientCount());
   gCardWasPresent = storeCardPresent();  // boot state, so the first tick is not read as an insertion
   sdlogEnsureHeader();
+  // After the card, because a cue reads its clip from it. Safe with no card:
+  // the buffer and the DAC channel do not depend on one.
+  // [TH] อยู่หลังการเปิดการ์ด เพราะเสียงแต่ละรายการอ่านคลิปจากการ์ด
+  //      เรียกได้แม้ไม่มีการ์ด เพราะบัฟเฟอร์และช่องสัญญาณ DAC ไม่ได้ขึ้นกับการ์ด
+  audioBegin();
   // Read before the link comes up: the controller's reply is what triggers
   // reconciliation, and this decides which side of it wins.
   // [TH] อ่านไฟล์ก่อนที่ลิงก์จะพร้อม เพราะการตอบกลับของคอนโทรลเลอร์คือจุดที่เริ่มเทียบค่า
@@ -452,6 +458,7 @@ void loop() {
 #endif
   uint32_t now = millis();
   uiLoop();
+  audioLoop();  // pumps a loading or playing cue — เดินหน้าเสียงที่กำลังโหลดหรือกำลังเล่น
 #if LOOP_DEBUG
   dbgUiMs = millis() - dbgT0;
   uint32_t dbgTPoll = millis();
