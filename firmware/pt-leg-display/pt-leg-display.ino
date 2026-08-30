@@ -53,6 +53,14 @@ static Phase uiPhase = Phase::Idle;
 static uint32_t uiElapsed = 0;
 static uint16_t uiReps = 0;
 static uint16_t uiTarget = 0;
+// Previous value of the running flag, for the start cue's edge. The sentinel
+// matters: the first state frame after boot seeds it without emitting, because a
+// display restarted beside a running machine must not announce a start that
+// already happened.
+// [TH] ค่าก่อนหน้าของสถานะกำลังทำงาน ใช้จับขอบขาขึ้นของเสียงเริ่ม
+//      ค่าพิเศษนี้สำคัญ ข้อความสถานะแรกหลังบูตจะใช้ตั้งค่าเริ่มต้นโดยไม่ส่งเสียง
+//      เพราะจอที่รีสตาร์ตข้างเครื่องที่กำลังทำงานอยู่ ต้องไม่ประกาศการเริ่มที่เกิดไปแล้ว
+static int8_t gPrevRunning = -1;  // -1 = ยังไม่เคยได้รับข้อความสถานะ
 static bool uiWifi = false, uiServer = false;
 
 // Last settings the controller told us about; the settings screen pre-fills from
@@ -276,6 +284,34 @@ static void onLinkDone(const LinkDone& d) {
   Serial.printf("session done: %lus x%u fault=%d saved=%d\n", (unsigned long)r.durationSec,
                 r.reps, r.fault ? 1 : 0, saved ? 1 : 0);
   uiShowFinish(r.patientName.c_str(), r.durationSec, r.reps, r.fault, saved);
+
+  // Stop and target come from `done`, not from the running flag falling.
+  //
+  // This board cannot tell "the session ended" from "the link dropped and the
+  // watchdog cleared the state", and a machine that says หยุดการทำงาน every time
+  // a wire glitches is worse than one that says nothing. `done` is emitted
+  // exactly once per session, is on the retransmit list, and carries the final
+  // rep count — so the split below is decided from the numbers the controller
+  // actually finished with, not from the last snapshot that happened to arrive.
+  // [TH] เสียงหยุดและเสียงครบเป้าหมายมาจากข้อความ done ไม่ใช่จากสถานะกำลังทำงานที่ตกลง
+  //      จอแยกไม่ออกระหว่าง "รอบจบแล้ว" กับ "ลิงก์ขาดจนตัวเฝ้าระวังล้างสถานะ"
+  //      เครื่องที่พูดว่าหยุดการทำงานทุกครั้งที่สายกระตุก แย่กว่าเครื่องที่เงียบ
+  //      ข้อความ done ถูกส่งครั้งเดียวต่อรอบ อยู่ในรายการส่งซ้ำ และพามาทั้งจำนวนครั้งสุดท้าย
+  //      การแยกด้านล่างจึงตัดสินจากตัวเลขที่คอนโทรลเลอร์จบรอบมาจริง ไม่ใช่ภาพสถานะล่าสุดที่บังเอิญมาถึง
+  //
+  // uiTarget is the live target from the state stream. A target of 0 means "run
+  // until STOP", so every end of such a session is a stop, never a target.
+  // [TH] uiTarget คือค่าเป้าหมายสดจากกระแสข้อความสถานะ ค่า 0 แปลว่าทำไปจนกว่าจะกดหยุด
+  //      รอบแบบนั้นจึงจบด้วยเสียงหยุดเสมอ ไม่มีทางเป็นเสียงครบเป้าหมาย
+  //
+  // Adding a fault cue later is one branch here: d.fault is already in hand.
+  // [TH] ถ้าจะเพิ่มเสียงแจ้งความผิดพลาดภายหลัง ก็เพิ่มเงื่อนไขเดียวตรงนี้ เพราะ d.fault มีอยู่แล้ว
+  if (uiTarget != 0 && d.reps >= uiTarget) audioPlay(Cue::Target);
+  else audioPlay(Cue::Stop);
+
+  // The session is over; the next start is a real edge again.
+  // [TH] รอบจบแล้ว การเริ่มครั้งถัดไปจึงนับเป็นขอบขาขึ้นจริงอีกครั้ง
+  gPrevRunning = 0;
 }
 
 // When the last accepted state frame landed. The seconds shown on screen are
@@ -341,6 +377,30 @@ static void onLinkState(const LinkState& s) {
   uiTarget = s.target;
   uiWifi = s.wifi;
   uiServer = s.server;
+
+  // Start has no one-shot message, so it must edge-detect, and both ways that
+  // can go wrong are real.
+  //
+  // gLinkUp: a transition seen while the link is considered down is a reporting
+  // artifact, not a session. Without this, a glitching jumper wire makes the
+  // machine announce a start every time the watchdog clears and refills the
+  // state. Note gLinkUp is recomputed in loop() AFTER gLink.poll() has already
+  // delivered this callback, so it still holds the previous iteration's value —
+  // which is exactly what is wanted here: on the first frame after a link
+  // recovery it is still false, and the spurious start is suppressed. Do not
+  // "fix" that staleness; moving the recompute earlier defeats this guard.
+  //
+  // gPrevRunning < 0: the first frame after boot only seeds the value.
+  // [TH] สถานะเริ่มไม่มีข้อความส่งครั้งเดียวรองรับ จึงต้องจับขอบเอง และพลาดได้จริงสองทาง
+  //      gLinkUp: การเปลี่ยนสถานะที่เห็นตอนลิงก์ถือว่าขาด เป็นผลจากการรายงาน ไม่ใช่รอบการทำงานจริง
+  //      ถ้าไม่มีเงื่อนไขนี้ สายจัมเปอร์ที่สัญญาณกระตุกจะทำให้เครื่องประกาศเริ่มทุกครั้งที่ตัวเฝ้าระวังล้างและเติมสถานะใหม่
+  //      สังเกตว่า gLinkUp ถูกคำนวณใหม่ในลูปหลัง gLink.poll() ส่งข้อความนี้มาแล้ว
+  //      ค่าที่เห็นตรงนี้จึงเป็นค่าของรอบก่อนหน้า ซึ่งเป็นสิ่งที่ต้องการพอดี
+  //      เพราะข้อความแรกหลังลิงก์กลับมาจะยังเห็นเป็นเท็จ และเสียงเริ่มที่ไม่ควรดังจะถูกระงับ
+  //      ห้ามแก้ให้คำนวณเร็วขึ้น เพราะจะทำให้เงื่อนไขนี้ใช้ไม่ได้
+  //      gPrevRunning < 0: ข้อความแรกหลังบูตใช้ตั้งค่าเริ่มต้นเท่านั้น
+  if (gPrevRunning >= 0 && gLinkUp && s.running && gPrevRunning == 0) audioPlay(Cue::Start);
+  gPrevRunning = s.running ? 1 : 0;
 }
 
 // The controller's seconds, carried forward locally between frames.
