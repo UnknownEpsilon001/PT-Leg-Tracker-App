@@ -175,6 +175,7 @@ static void dataSetActive(int i) {
 
 static void onSaveFromUi(const DeviceSettings& s) {
   gLast = s;
+  audioSetEnabled(s.soundOn);  // takes effect now, not on the next boot — มีผลทันที ไม่ต้องรอเปิดเครื่องใหม่
   LinkSettings ls;
   ls.ssid = s.wifiSsid; ls.pass = s.wifiPass; ls.server = s.serverUrl; ls.code = s.deviceCode;
   ls.maxTravel = s.maxTravelSec; ls.lift = s.liftSec; ls.lower = s.lowerSec;

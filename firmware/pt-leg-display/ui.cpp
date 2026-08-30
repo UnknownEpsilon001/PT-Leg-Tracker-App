@@ -520,7 +520,8 @@ void uiUpdateMain(bool running, Phase phase, uint32_t elapsedSec, uint16_t reps,
 //      ตัวจัดการเปรียบเทียบด้วยสตริง จึงต้องนิยามไว้ที่เดียว
 #define SCAN_PLACEHOLDER "(เลือกเครือข่าย)"
 
-static lv_obj_t *scrSettings, *taSsid, *taPass, *taServer, *taCode, *kb, *ddScan, *colSettings;
+static lv_obj_t *scrSettings, *taSsid, *taPass, *taServer, *taCode, *kb, *ddScan, *colSettings,
+    *swSound;
 static lv_obj_t *spinMax, *spinLift, *spinLower, *spinHold, *spinRest, *btnSave, *btnReset;
 static void (*cbSave)(const DeviceSettings&) = nullptr;
 static bool settingsKnown = false;  // has the controller ever sent its settings?
@@ -782,6 +783,16 @@ static void saveClicked(lv_event_t*) {
   s.lowerSec = (uint16_t)lv_spinbox_get_value(spinLower);
   s.restSec = (uint16_t)lv_spinbox_get_value(spinRest);
   s.targetReps = (uint16_t)lv_spinbox_get_value(spinTarget);
+  // Mandatory, not optional. `DeviceSettings s;` above default-constructs its
+  // Strings but leaves every scalar indeterminate — the assignments in this
+  // block are the only reason the others hold real values. A soundOn left
+  // unassigned here is garbage, not false, and it would go straight into gLast,
+  // into /settings.json and into audioSetEnabled.
+  // [TH] บรรทัดนี้จำเป็น ไม่ใช่ทางเลือก การประกาศ DeviceSettings s; ด้านบนสร้างเฉพาะส่วน String
+  //      ส่วนตัวเลขและบูลีนยังไม่มีค่าที่แน่นอน การกำหนดค่าในบล็อกนี้คือเหตุผลเดียวที่ฟิลด์อื่นมีค่าจริง
+  //      ถ้าไม่กำหนด soundOn ตรงนี้ ค่าที่ได้คือค่าขยะ ไม่ใช่ค่าเท็จ
+  //      และจะถูกส่งต่อไปยัง gLast ไปยัง /settings.json และไปยัง audioSetEnabled ทันที
+  s.soundOn = lv_obj_has_state(swSound, LV_STATE_CHECKED);
   if (cbSave) cbSave(s);
   hideKeyboard();
   // Stay only when a card was in the slot and refused the write — that is a
@@ -894,6 +905,36 @@ static lv_obj_t* makeSpinRow(lv_obj_t* parent, const char* label, int val,
   return sp;
 }
 
+// Same geometry as makeSpinRow so the rows line up, with a switch on the right
+// instead of a spinbox and its two buttons.
+// [TH] ขนาดและระยะเท่ากับ makeSpinRow เพื่อให้แถวเรียงตรงกัน
+//      ต่างกันตรงที่ด้านขวาเป็นสวิตช์ ไม่ใช่ช่องตัวเลขกับปุ่มสองปุ่ม
+static lv_obj_t* makeSwitchRow(lv_obj_t* parent, const char* label, bool on) {
+  lv_obj_t* row = lv_obj_create(parent);
+  lv_obj_set_size(row, lv_pct(100), 42);
+  lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(row, 0, 0);
+  lv_obj_set_style_pad_all(row, 0, 0);
+  lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+  // Same reason as makeSpinRow: taps on the row background reach the column's
+  // dismiss handler, while the switch itself keeps its own clicks.
+  // [TH] เหตุผลเดียวกับ makeSpinRow คือให้การแตะพื้นหลังแถวไปถึงตัวจัดการของคอลัมน์
+  //      ส่วนตัวสวิตช์ยังรับการแตะของตัวเองไว้
+  lv_obj_add_flag(row, LV_OBJ_FLAG_EVENT_BUBBLE);
+
+  lv_obj_t* l = lv_label_create(row);
+  lv_obj_set_style_text_font(l, &thai14, 0);
+  lv_obj_set_style_text_color(l, lv_color_hex(COL_MUTED), 0);
+  lv_label_set_text(l, label);
+  lv_obj_align(l, LV_ALIGN_LEFT_MID, 0, 0);
+
+  lv_obj_t* sw = lv_switch_create(row);
+  lv_obj_set_size(sw, 50, 28);
+  lv_obj_align(sw, LV_ALIGN_RIGHT_MID, 0, 0);
+  if (on) lv_obj_add_state(sw, LV_STATE_CHECKED);
+  return sw;
+}
+
 // Built exactly once. Rebuilding it per open leaked ~8.9 KB of LVGL's 48 KB
 // pool every time (screens are not freed when another is loaded), and the fifth
 // open hit LV_ASSERT_MALLOC, whose handler is `while(1)` - a silent hard freeze
@@ -1001,6 +1042,16 @@ static void buildSettings() {
   spinLower = makeSpinRow(col, "ลดลง (วิ)", 7, 1, 20);
   spinRest = makeSpinRow(col, "พัก (วิ)", 10, 1, 60);
   spinTarget = makeSpinRow(col, "จำนวนครั้ง (0=ไม่จำกัด)", 10, 0, 99);
+  // "เสียง" and not "ปิดเสียง": positive sense matches the stored field, and the
+  // word has no vowel stacked over a tone mark, which this LVGL build cannot
+  // shape. Built here, with the rest of the screen — see the note above: this
+  // function runs exactly once, and creating widgets per open is what leaked the
+  // LVGL pool and froze the board on the fifth open.
+  // [TH] ใช้คำว่า "เสียง" ไม่ใช่ "ปิดเสียง" เพราะความหมายเชิงบวกตรงกับค่าที่เก็บไว้
+  //      และคำนี้ไม่มีสระซ้อนกับวรรณยุกต์ ซึ่ง LVGL รุ่นนี้จัดวางให้ไม่ได้
+  //      สร้างไว้ตรงนี้พร้อมกับส่วนอื่นของหน้าจอ ตามหมายเหตุด้านบน ฟังก์ชันนี้ทำงานครั้งเดียวเท่านั้น
+  //      การสร้างวิดเจ็ตใหม่ทุกครั้งที่เปิดคือสาเหตุที่หน่วยความจำ LVGL รั่วและเครื่องค้างตอนเปิดครั้งที่ห้า
+  swSound = makeSwitchRow(col, "เสียง", true);
 
   // The keyboard comes down before the dialog goes up. Both ways out of the
   // dialog return with lv_scr_load(scrSettings) rather than uiOpenSettings, so
@@ -1053,6 +1104,12 @@ void uiOpenSettings(const DeviceSettings& cur) {
   lv_spinbox_set_value(spinHold, cur.holdSec);
   lv_spinbox_set_value(spinLower, cur.lowerSec);
   lv_spinbox_set_value(spinRest, cur.restSec);
+  // Value set here, widget created in buildSettings(). Creating it here instead
+  // is the LVGL pool leak this screen already learned about once.
+  // [TH] ตั้งค่าตรงนี้ แต่สร้างวิดเจ็ตใน buildSettings()
+  //      ถ้าสร้างตรงนี้แทน จะเกิดหน่วยความจำ LVGL รั่วแบบที่หน้าจอนี้เคยเจอมาแล้ว
+  if (cur.soundOn) lv_obj_add_state(swSound, LV_STATE_CHECKED);
+  else lv_obj_clear_state(swSound, LV_STATE_CHECKED);
   // Seeded from uiTargetShown, NOT cur.targetReps. cur is gLast, which only
   // moves on a "settings" reply (boot/hello) — it does not see a live
   // {"t":"target"} round trip, so it can be behind by however long ago the
