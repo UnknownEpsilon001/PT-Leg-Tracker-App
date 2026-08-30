@@ -395,6 +395,26 @@ function Invoke-NativeWithProgress {
             -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath `
             -WindowStyle Hidden -PassThru
 
+        # Touching .Handle here is load-bearing, not defensive. Start-Process
+        # -PassThru hands back a Process object that has not opened a handle to
+        # the child; Windows then reaps the process on exit and .ExitCode reads
+        # back as $null. Since $null -ne 0 is true in PowerShell, the check at the
+        # end of this function threw on every run — a *successful* compile
+        # reported "failed (exit code )" with the value blank, and because that
+        # throw happens before Install-StagedBuild in Invoke-Compile, no build was
+        # ever installed: every compile rebuilt from scratch and -Action upload
+        # refused with "No current build". Reading .Handle once, while the child is
+        # still alive, makes .NET keep the handle and the exit code survives.
+        # [TH] การอ่าน .Handle ตรงนี้จำเป็น ไม่ใช่แค่กันไว้
+        #      Start-Process -PassThru คืนออบเจ็กต์ที่ยังไม่ได้เปิดแฮนเดิลของโพรเซสลูก
+        #      วินโดวส์จึงเก็บกวาดโพรเซสทิ้งเมื่อจบ และ .ExitCode อ่านได้เป็นค่าว่าง
+        #      เนื่องจาก $null -ne 0 เป็นจริงในPowerShell การตรวจท้ายฟังก์ชันนี้จึงโยนข้อผิดพลาดทุกครั้ง
+        #      การคอมไพล์ที่สำเร็จจะรายงานว่า "failed (exit code )" โดยไม่มีตัวเลข
+        #      และเพราะการโยนนั้นเกิดก่อน Install-StagedBuild ใน Invoke-Compile
+        #      จึงไม่มีการติดตั้งผลบิลด์เลย ทุกครั้งต้องคอมไพล์ใหม่ทั้งหมด และ -Action upload จะปฏิเสธ
+        #      การอ่าน .Handle หนึ่งครั้งขณะโพรเซสลูกยังทำงานอยู่ ทำให้ .NET เก็บแฮนเดิลไว้ และรหัสจบงานไม่หายไป
+        $null = $process.Handle
+
         while (-not $process.HasExited) {
             if ($canReadCancelKey) {
                 try {
@@ -433,7 +453,14 @@ function Invoke-NativeWithProgress {
             Stop-NativeProcessTree $process
         } else {
             $process.WaitForExit()
-            $exitCode = $process.ExitCode
+            # Keep the -1 seeded above if the exit code still comes back empty:
+            # assigning $null here is what previously turned every run into a
+            # failure reported with a blank code, which is unactionable.
+            # [TH] ถ้ารหัสจบงานยังอ่านได้เป็นค่าว่าง ให้คงค่า -1 ที่ตั้งไว้ด้านบน
+            #      การกำหนดค่าว่างตรงนี้คือสาเหตุเดิมที่ทำให้ทุกครั้งกลายเป็นความล้มเหลวที่ไม่มีรหัสบอก
+            #      ซึ่งเอาไปแก้อะไรไม่ได้
+            $reported = $process.ExitCode
+            if ($null -ne $reported) { $exitCode = $reported }
         }
     } finally {
         $stopwatch.Stop()
