@@ -343,6 +343,56 @@ arduino-cli upload -p COMx --fqbn "esp32:esp32:esp32:PartitionScheme=huge_app" f
 arduino-cli upload -p COMy --fqbn "esp32:esp32:esp32:PartitionScheme=huge_app" firmware/pt-leg-display
 ```
 
+`flash.ps1` wraps the above and refuses the two mistakes that produce a board
+which looks broken for reasons its own output never explains — a missing
+`PartitionScheme=huge_app`, and a bench switch (`LINK_OVER_USB`, `UI_TEST_HOOK`,
+`BENCH_DEBUG`, `LOOP_DEBUG`) left at 1. It also runs `sync-shared.ps1 -Check`
+first, so a release cannot go out with the two copies of `link.*` drifted.
+
+```powershell
+.\firmware\tools\flash.ps1                    # interactive menu
+.\firmware\tools\flash.ps1 -Action ports      # identify controller/display COM ports
+.\firmware\tools\flash.ps1 -Action compile -Board both
+.\firmware\tools\flash.ps1 -Action upload -Board display
+.\firmware\tools\flash.ps1 -Action auto -Board both # compile changed code, detect ports, upload
+.\firmware\tools\flash.ps1 -Action auto -Board both -DryRun -Port COM4 -DisplayPort COM5
+.\firmware\tools\flash.ps1 -Action auto -Board controller -Erase # erase, build if needed, upload
+.\firmware\tools\flash.ps1 -Check             # guards only, flash nothing
+.\firmware\tools\flash.ps1 -Action auto -Board both -Port COM4 -DisplayPort COM5
+```
+
+Full-auto mode stores each build and its source hash under ignored
+`firmware/.build/`. If that board's code and required build configuration have
+not changed and every required build artifact still matches its saved SHA-256,
+it skips compilation and uploads the current binary. It identifies this
+machine's controller by its CP210x USB bridge and the CYD display by its
+CH340/CH9102 bridge. Ports are checked before compiling and checked again before
+uploading so an unplug or COM-port move stops the run. Explicit `-Port` and
+`-DisplayPort` values override automatic selection, but a port whose known role
+is the opposite board is rejected. Use `-AllowPortRoleMismatch` only when a
+replacement board intentionally uses a different USB bridge. Missing,
+duplicate, and ambiguous matches stop rather than guessing. `-SkipGuards`
+permits a bench build on purpose, `-DryRun` performs no erase or upload, and
+`-NoCompile` remains an alias for `-Action upload`.
+
+When run without arguments, the interactive menu stays open until **Exit** is
+selected. Board selection also uses numbers: `1` controller, `2` display/CYD,
+or `3` both. A missing/unplugged board, invalid choice, or failed action prints a
+short `Not completed` message and returns to the menu, so the board can be
+connected and the action retried. Explicit command-line actions remain suitable
+for automation: they print one concise error and return a non-zero exit code
+instead of looping forever.
+
+Compile, erase, and upload operations show a PowerShell progress bar. Compile
+percentage is explicitly approximate because Arduino CLI does not report a true
+percentage; upload uses esptool's real write percentage when it is available.
+Compiles run in a separate staging directory. Pressing **Ctrl+C** stops the
+compiler process tree, deletes the incomplete staging build, keeps the previous
+verified build cache byte-for-byte, and returns to the interactive menu. Source
+files are never modified by cancellation. Interrupting an erase or upload cannot
+be made electrically atomic: the script stops cleanly, but the board may contain
+incomplete firmware and must be erased/uploaded again before use.
+
 ## Erase the flash when the partition scheme changes
 
 If a board boot-loops with `No bootable app partitions in the partition table`,
@@ -520,8 +570,9 @@ built and documented around.
 `pinMode(OUTPUT)`. A pin leaves reset as a high-Z input, and `pinMode(OUTPUT)`
 makes it drive whatever the output register holds — LOW. The board fitted here
 is active-low, so LOW is *energized* and mode-then-write would flick a lamp on
-at every boot, or close the master cut relay and connect motor power — which is
-what that relay exists to keep disconnected.
+at every boot. The BTS7960's three inputs are active-HIGH so LOW is already safe
+there, but they are written first anyway, so the rule is one rule rather than
+two.
 
 There is deliberately **no power-on lamp test**. Idle is the boot state, so
 yellow comes on and stays on — that is not a lamp test and must not become one:
@@ -530,8 +581,8 @@ at power-up would read as the machine starting by itself, the one impression it
 must never give. Test the lamps by starting a session.
 
 `LED_ACTIVE_LOW` is **set** in `config.h`, because the lamps are two more
-channels of the same active-low relay board the master motor cut is on
-(`MASTER_ACTIVE_LOW` is set for the same reason). It covers **both** lamps. Clear it only for a board
+channels of the one active-low relay board left on the machine — the two lamps
+are now its only load. It covers **both** lamps. Clear it only for a board
 that energizes on HIGH, and **check this before first power-up**: backwards,
 green is lit whenever the machine is idle and yellow while it is working, which
 is the dangerous way round.
@@ -541,62 +592,6 @@ kept for green. GPIO 32 is the pin the retired TOP limit switch freed — it is 
 a strapping pin and does not glitch at boot the way 0/2/5/12/15 can, and nothing
 else reads it or reserves it.
 
-## The safety nets, and what each one actually covers
-
-The limit switches are gone, and with them went the nets that depended on
-knowing where the leg was — a wiring-fault check on two switches closed at once,
-a bottom-switch-only-if-it-was-clear-at-the-start belief, and an Idle-can-lower
-path keyed off that belief. What is left is smaller and does not pretend to know
-the leg's position: it bounds how long the motor can be driven, and it makes
-sure every stop and every recovery drives the same bounded descent whether or
-not that descent actually gets the leg to the bottom.
-
-**1. Break-before-make, plus a 50 ms dead time.** `actuator.cpp` is the only
-file that touches the motor pins. It always zeroes the idle half-bridge before
-raising the driving one, and on a direction reversal it cuts the drive dead,
-waits `DEADTIME_MS`, and drives the new direction from `actuatorTick()`. The
-wait matters because commanding a reversal apart is not the same as it being
-apart: a STOP press during a lift goes from UP to SafeLower's DOWN in a single
-loop iteration, and without the wait a loaded, still-turning motor is slammed
-into reverse in the microseconds between two writes. The BTS7960 survives that;
-the gearbox and the leg on it are what the dead time protects. The same wait
-covers a reversal that catches a soft stop part-way down — a fade is not a
-substitute for it. The relay-era hazard it replaced was contacts that had not
-released yet; the mechanism is the same, the reason is now mechanical.
-
-**2. The travel cap, enforced twice.** `actuatorTick()` checks it every loop,
-and an `esp_timer` one-shot armed on every energize cuts the drive **and opens
-the master relay** from the timer task if the loop does not get there. It opens
-the relay because a cap trip is the one moment where a stroke that merely ran
-long and a shorted output FET look identical from inside the firmware, and the
-relay is the only cut that covers both. The loop-side check alone was not a
-second net: the failures that make a stroke run long — a network call blocking
-for its timeout, a long flash write — are the same failures that stop the check
-running. The timer covers a blocked loop, and it runs on the other core so it
-survives one. It does **not** cover a panic (neither core runs) and it is
-delayed, not defeated, by a flash erase, which stalls both CPUs. If it cannot be
-created at boot, `setup()` prints `cap timer missing, the hardware backstop is
-OFF` — that message means the machine is down to net-1 only. This is now the
-*only* way a FAULT is entered: `forceFault()` is called only when the cap trips
-outside a safe-lower, so a FAULT always means a LIFT or a LOWER ran too long,
-never a travel timeout against a switch that no longer exists.
-
-**3. A fault does not trap the leg.** Both START and STOP drive a lowering out
-of a latched Fault — SafeLower for `lowerSec`, the same bounded stroke as any
-other descent. STOP clears the latch once that lowering finishes and the machine
-lands in Idle; START queues a fresh session behind it, so the descent runs first
-and the new LIFT begins right after. Neither is refused by a Fault, and neither
-drives the actuator further in the direction that may have caused it — descents
-only ever command DOWN. The lowering reports nothing of its own: the session was
-already recorded when it faulted, and a second report would put a duplicate row
-on the card.
-
-There is no confirmation that the descent actually reached the bottom — with the
-limit switches gone the firmware has no way to check, which is stated plainly in
-`config.h`: a slipping belt, a jammed actuator and a clean stroke all look
-identical to this firmware, "the motor was driven for `lowerSec`". A recovery
-that does not really clear whatever jammed the actuator is indistinguishable, to
-the firmware, from one that does; both simply run `lowerSec` and land in Idle.
 ## The motor drive
 
 The two motor relays are gone; a **BTS7960** H-bridge drives the motor through
@@ -642,25 +637,76 @@ down. The cost of the full cap is stated plainly in `actuator.cpp`: a stroke
 plus a *stranded* fade can drive for up to twice `capMs` before the backstop
 lands, where the relay build had one.
 
-**The master cut relay.** GPIO 33, in series with the bridge's motor supply. A
-relay contact fails open, a MOSFET fails shorted, and a shorted high-side FET
-drives the motor with the firmware unable to stop it — on a machine with a
-patient's leg loaded, that is the failure mode worth keeping a relay for.
+**There is no firmware-controlled cut in the motor supply.** A relay on GPIO 33
+was designed and then dropped, and the reason is worth keeping: the machine
+already has a panel **emergency stop** that opens the whole 12 V feed — motor
+rail, panel lamps and the controller itself, all together.
 
-It follows the *session*, not the stroke: `applyActuator()` feeds it
-`gSession.running()` every loop, so it closes when a session starts and opens
-when one ends or faults. Two contact operations per session rather than two per
-rep — about 40 a day at twenty sessions, which keeps a ~100k-operation relay
-alive for years, the same argument the panel lamps are built on.
+That button strictly dominates what the relay could do. Both cover a shorted
+high-side MOSFET, which no amount of firmware can stop, because it drives the
+motor from `B+` regardless of what `EN` and the PWM pins say. Only the button
+also covers a panic in *this* firmware — a relay driven by the firmware cannot
+open when the firmware is the thing that died. The cost is that it is manual and
+needs an operator present, which is already the rule this machine runs under and
+is stated in `config.h`.
 
-It is never made or broken under load. Closing it starts nothing: the first
-stroke still waits out `DEADTIME_MS` for the contacts to settle, and `request()`
-refuses to emit any PWM at all while the relay is open — that refusal is what
-makes it a cut rather than a suggestion. Opening it is deferred until the drive
-is genuinely at zero, so a soft stop is never truncated. The one exception is
-the cap timer's callback, which opens it immediately — but only after the enable
-pin has already killed the bridge, so those contacts break a dead circuit too.
+So GPIO 33 is free, the machine is down to two relay channels (the two lamps),
+and everything `actuator.cpp` does to stop the motor is a signal-level cut: `EN`
+LOW plus both PWM channels at zero.
 
+## The safety nets, and what each one actually covers
+
+The limit switches are gone, and with them went the nets that depended on
+knowing where the leg was — a wiring-fault check on two switches closed at once,
+a bottom-switch-only-if-it-was-clear-at-the-start belief, and an Idle-can-lower
+path keyed off that belief. What is left is smaller and does not pretend to know
+the leg's position: it bounds how long the motor can be driven, and it makes
+sure every stop and every recovery drives the same bounded descent whether or
+not that descent actually gets the leg to the bottom.
+
+**1. Break-before-make, plus a 50 ms dead time.** `actuator.cpp` is the only
+file that touches the motor pins. It always zeroes the idle half-bridge before
+raising the driving one, and on a direction reversal it cuts the drive dead,
+waits `DEADTIME_MS`, and drives the new direction from `actuatorTick()`. The
+wait matters because commanding a reversal apart is not the same as it being
+apart: a STOP press during a lift goes from UP to SafeLower's DOWN in a single
+loop iteration, and without the wait a loaded, still-turning motor is slammed
+into reverse in the microseconds between two writes. The BTS7960 survives that;
+the gearbox and the leg on it are what the dead time protects. The same wait
+covers a reversal that catches a soft stop part-way down — a fade is not a
+substitute for it. The relay-era hazard it replaced was contacts that had not
+released yet; the mechanism is the same, the reason is now mechanical.
+
+**2. The travel cap, enforced twice.** `actuatorTick()` checks it every loop,
+and an `esp_timer` one-shot armed on every energize cuts the drive from the
+timer task if the loop does not get there. The loop-side check alone was not a
+second net: the failures that make a stroke run long — a network call blocking
+for its timeout, a long flash write — are the same failures that stop the check
+running. The timer covers a blocked loop, and it runs on the other core so it
+survives one. It does **not** cover a panic (neither core runs) and it is
+delayed, not defeated, by a flash erase, which stalls both CPUs. If it cannot be
+created at boot, `setup()` prints `cap timer missing, the hardware backstop is
+OFF` — that message means the machine is down to net-1 only. This is now the
+*only* way a FAULT is entered: `forceFault()` is called only when the cap trips
+outside a safe-lower, so a FAULT always means a LIFT or a LOWER ran too long,
+never a travel timeout against a switch that no longer exists.
+
+**3. A fault does not trap the leg.** Both START and STOP drive a lowering out
+of a latched Fault — SafeLower for `lowerSec`, the same bounded stroke as any
+other descent. STOP clears the latch once that lowering finishes and the machine
+lands in Idle; START queues a fresh session behind it, so the descent runs first
+and the new LIFT begins right after. Neither is refused by a Fault, and neither
+drives the actuator further in the direction that may have caused it — descents
+only ever command DOWN. The lowering reports nothing of its own: the session was
+already recorded when it faulted, and a second report would put a duplicate row
+on the card.
+
+There is no confirmation that the descent actually reached the bottom — with the
+limit switches gone the firmware has no way to check, which is stated plainly in
+`config.h`: a slipping belt, a jammed actuator and a clean stroke all look
+identical to this firmware, "the motor was driven for `lowerSec`". A recovery
+that does not really clear whatever jammed the actuator is indistinguishable, to
+the firmware, from one that does; both simply run `lowerSec` and land in Idle.
 That is why the machine must not run unattended with a leg loaded on it — the
 actuator's energize cap is the only backstop left.
 
@@ -740,11 +786,12 @@ patient-facing machine it recovers instead of appearing bricked.
   active-HIGH and LOW is the safe level on each; there is no `RELAY_ACTIVE_LOW`
   for the motor any more. There are no limit switches — travel is timed by
   `liftSec`/`lowerSec`, both editable and capped by `maxTravelSec`.
-- Master cut relay: GPIO 33, in series with the BTS7960's motor supply, one more
-  channel of the same active-low board as the lamps (`MASTER_ACTIVE_LOW`).
+- Emergency stop: a panel button that opens the whole 12 V supply — motor rail,
+  lamps and the controller together. It is the machine's only hardware cut and
+  the only thing that stops a shorted output FET. Not wired to any GPIO.
 - Panel buttons: START GPIO 25, STOP GPIO 26. Momentary, INPUT_PULLUP, other
   side to GND; both normally-open (`BTN_START_NC` / `BTN_STOP_NC`, both `0` in
-  `config.h`). There are no free GPIOs left on this board.
+  `config.h`). GPIO 33 is free — nothing reads it and nothing reserves it.
 - Panel lamps: green GPIO 23, yellow GPIO 32, each a 12 V lamp through its own
   relay. Green lit while a session is in progress, yellow while idle, **both**
   lit for a latched FAULT — one lamp in each normal state, never blinking. The
