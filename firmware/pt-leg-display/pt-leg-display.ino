@@ -433,6 +433,11 @@ void setup() {
   gLink.onSettingsReply = onLinkSettingsReply;
   gLink.onDone = onLinkDone;
   gLink.sendHello();  // ask controller for current settings + state
+  // Last, so hearing it means the whole init path finished — not merely that the
+  // DAC came up. It is the cheapest end-to-end self-test this board has.
+  // [TH] วางไว้ท้ายสุด การได้ยินเสียงนี้จึงแปลว่าขั้นตอนเริ่มระบบผ่านครบ
+  //      ไม่ใช่แค่ว่า DAC ทำงาน เป็นการทดสอบตั้งแต่ต้นจนจบที่ถูกที่สุดของบอร์ดนี้
+  audioPlay(Cue::Boot);
 }
 
 #if LOOP_DEBUG
