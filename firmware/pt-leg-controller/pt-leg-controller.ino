@@ -145,6 +145,17 @@ static bool gTargetDirty = false;
 
 static void onLinkSettings(const LinkSettings& s) {
   DeviceSettings d;
+  // Carried forward, not taken from the wire: soundOn belongs to the display and
+  // is deliberately absent from LinkSettings. `d` is a local, so its scalars are
+  // indeterminate until assigned — leaving this one out would put a garbage bool
+  // into every copy of `d`, harmless only for as long as nothing on this board
+  // reads it.
+  // [TH] ค่านี้ยกมาจากของเดิม ไม่ได้รับมาจากสาย เพราะ soundOn เป็นของบอร์ดจอ
+  //      และจงใจไม่มีอยู่ใน LinkSettings
+  //      ตัวแปร d เป็นตัวแปรเฉพาะที่ ค่าตัวเลขและบูลีนจึงยังไม่แน่นอนจนกว่าจะกำหนด
+  //      ถ้าไม่กำหนดค่านี้ จะมีค่าขยะติดไปกับสำเนาของ d ทุกชุด
+  //      ซึ่งไม่เป็นอันตรายเฉพาะตราบใดที่ยังไม่มีโค้ดบนบอร์ดนี้อ่านมัน
+  d.soundOn = gSettings.soundOn;
   d.wifiSsid = s.ssid; d.wifiPass = s.pass; d.serverUrl = s.server;
   d.deviceCode = s.code;
   // A zero means "this field was not sent", not "zero seconds" — the same
