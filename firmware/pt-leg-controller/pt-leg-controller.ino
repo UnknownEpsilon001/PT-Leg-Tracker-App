@@ -93,20 +93,6 @@ static void applyActuator() {
     case Phase::Fault: actuatorOff(); break;  // instant — ตัดทันที
     default: actuatorSoftOff(); break;        // Idle, Hold, Rest — ผ่อนกำลังลง
   }
-  // The master cut relay follows the session, not the stroke: closed for the
-  // whole of a session and open the rest of the time, so it switches twice a
-  // session instead of twice a rep. running() is already "the actuator may move",
-  // which is the exact question this relay answers in hardware — and it is false
-  // for a latched Fault, so a fault physically disconnects motor power rather
-  // than only commanding zero. Called every loop, which is also what retries the
-  // open that actuatorArm() defers until a fade has finished.
-  // [TH] รีเลย์ตัดหลักทำตามรอบการทำงาน ไม่ใช่ตามจังหวะการเคลื่อนที่
-  //      ปิดวงจรตลอดทั้งรอบและเปิดวงจรในเวลาที่เหลือ จึงตัดต่อสองครั้งต่อรอบ ไม่ใช่สองครั้งต่อการทำหนึ่งครั้ง
-  //      ค่า running() มีความหมายว่า "ชุดขับเคลื่อนอาจเคลื่อนที่" อยู่แล้ว
-  //      ซึ่งเป็นคำถามเดียวกับที่รีเลย์ตัวนี้ตอบในระดับฮาร์ดแวร์
-  //      และเป็นเท็จเมื่อค้างสถานะผิดพลาด ความผิดพลาดจึงตัดไฟมอเตอร์ออกจริง ไม่ใช่แค่สั่งกำลังเป็นศูนย์
-  //      เรียกทุกลูป ซึ่งเป็นสิ่งที่ทำให้การเปิดวงจรที่ actuatorArm() หน่วงไว้รอการผ่อนกำลังจบได้ลองใหม่ด้วย
-  actuatorArm(gSession.running());
 }
 
 static void applySettings(const DeviceSettings& s) {
@@ -372,7 +358,7 @@ static void debugTick(uint32_t nowMs, bool startEdge, bool stopEdge) {
 #endif
 
 void setup() {
-  actuatorBegin();  // safety first — ตัดกำลังขับและเปิดวงจรรีเลย์ตัดหลักก่อนเป็นอันดับแรกเพื่อความปลอดภัย
+  actuatorBegin();  // safety first — ตัดกำลังขับก่อนเป็นอันดับแรกเพื่อความปลอดภัย
   buttonsBegin();
   panelLampsBegin();  // lamps dark before anything can drive them — ให้หลอดดับไว้ก่อนที่อะไรจะมาสั่งได้
   rtcBegin();  // absent chip is fine: epochs just read 0 — ไม่มีชิปก็ไม่เป็นไร เวลาจะเป็น 0
