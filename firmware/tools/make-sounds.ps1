@@ -70,8 +70,40 @@ function Convert-One([string]$src, [string]$dst) {
     & ffmpeg $ffArgs
     if ($LASTEXITCODE -ne 0) { throw "ffmpeg failed on $src" }
 
-    $size = (Get-Item $dst).Length
-    $samples = $size - 44
+    # Read the real data chunk length rather than assuming the header is 44
+    # bytes. The firmware measures the chunk, so file-size-minus-44 was a
+    # different quantity that only happens to agree while ffmpeg emits a bare
+    # header — the parser walks chunks precisely because that is not guaranteed,
+    # and a disagreement would show up as a file this script blessed and the
+    # device rejected as too long.
+    # [TH] อ่านความยาวชังก์ข้อมูลจริง แทนการเดาว่าส่วนหัวยาว 44 ไบต์
+    #      เฟิร์มแวร์วัดจากชังก์ ส่วนการเอาขนาดไฟล์ลบ 44 เป็นคนละค่ากัน
+    #      ที่บังเอิญตรงกันเฉพาะตอนที่ ffmpeg เขียนส่วนหัวเปล่าๆ
+    #      ตัวแยกฝั่งเฟิร์มแวร์ไล่อ่านชังก์ก็เพราะเรื่องนี้ไม่ได้รับประกัน
+    #      ถ้าไม่ตรงกันจะกลายเป็นไฟล์ที่สคริปต์นี้บอกว่าผ่านแต่เครื่องปฏิเสธว่ายาวเกิน
+    $bytes = [System.IO.File]::ReadAllBytes($dst)
+    if ($bytes.Length -lt 12 -or
+        [System.Text.Encoding]::ASCII.GetString($bytes, 0, 4) -ne "RIFF" -or
+        [System.Text.Encoding]::ASCII.GetString($bytes, 8, 4) -ne "WAVE") {
+        Remove-Item $dst -Force
+        throw "ffmpeg produced something that is not a RIFF/WAVE file for $src"
+    }
+    $samples = -1
+    $p = 12
+    while ($p + 8 -le $bytes.Length) {
+        $id = [System.Text.Encoding]::ASCII.GetString($bytes, $p, 4)
+        $sz = [System.BitConverter]::ToUInt32($bytes, $p + 4)
+        if ($id -eq "data") { $samples = $sz; break }
+        # Chunks are word-aligned: an odd size carries a pad byte not counted in
+        # the size field, exactly as wav.cpp handles it.
+        # [TH] ชังก์เรียงตามขอบคำ ขนาดที่เป็นเลขคี่จะมีไบต์เติมที่ไม่นับรวมในช่องขนาด
+        #      ตรงกับที่ wav.cpp จัดการไว้
+        $p = $p + 8 + $sz + ($sz % 2)
+    }
+    if ($samples -lt 0) {
+        Remove-Item $dst -Force
+        throw "no data chunk in the file ffmpeg produced for $src"
+    }
     $seconds = [math]::Round($samples / $rate, 2)
     if ($samples -gt $MaxBytes) {
         Remove-Item $dst -Force
