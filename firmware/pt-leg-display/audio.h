@@ -31,17 +31,38 @@ enum class Cue {
 // [TH] จองบัฟเฟอร์และสร้างช่องสัญญาณ DAC เรียกได้แม้ไม่มีการ์ดในช่อง
 void audioBegin();
 
-// Called every loop(). Does at most one 4 KB card read or one non-blocking DMA
-// write per call, so it must never hold the loop for more than about a
-// millisecond — LVGL and the link poll share it.
-// [TH] เรียกทุกลูป ต่อหนึ่งครั้งจะอ่านการ์ดไม่เกิน 4 กิโลไบต์ หรือเขียน DMA แบบไม่รอหนึ่งครั้ง
-//      จึงต้องไม่ยึดลูปไว้เกินราวหนึ่งมิลลิวินาที เพราะ LVGL และการอ่านลิงก์ใช้ลูปเดียวกัน
+// Called every loop(). A steady-state call does at most one 4 KB card read or
+// one non-blocking DMA write, both cheap.
+//
+// The exception is the tick that starts a cue: that one also opens the file,
+// reads its header and seeks, which on a slow card is tens of milliseconds. That
+// work is here rather than in audioPlay() deliberately — audioPlay runs inside a
+// link callback, where the same delay sat in the UART receive path and, for the
+// stop cue, on the same pass as the sessions.csv append. It is the one call that
+// can exceed a millisecond, and LOOP_DEBUG times it separately so it shows up as
+// audio rather than as LVGL.
+// [TH] เรียกทุกลูป ในสภาวะปกติจะอ่านการ์ดไม่เกิน 4 กิโลไบต์ หรือเขียน DMA แบบไม่รอหนึ่งครั้ง
+//      ซึ่งทั้งสองอย่างใช้เวลาน้อย
+//      ข้อยกเว้นคือรอบที่เริ่มเสียงใหม่ รอบนั้นจะเปิดไฟล์ อ่านส่วนหัว และเลื่อนตำแหน่งด้วย
+//      ซึ่งบนการ์ดที่ช้าใช้เวลาหลายสิบมิลลิวินาที
+//      งานส่วนนี้อยู่ตรงนี้แทนที่จะอยู่ใน audioPlay() โดยตั้งใจ
+//      เพราะ audioPlay ทำงานอยู่ในคอลแบ็กของลิงก์ ความหน่วงเดียวกันจะไปอยู่ในเส้นทางรับ UART
+//      และสำหรับเสียงหยุด จะตกอยู่รอบเดียวกับการเขียน sessions.csv
+//      นี่เป็นการเรียกเดียวที่เกินหนึ่งมิลลิวินาทีได้ และโหมด LOOP_DEBUG จับเวลาแยกไว้
+//      จะได้แสดงเป็นเวลาของเสียง ไม่ใช่ของ LVGL
 void audioLoop();
 
-// Requests a cue. The newest request wins: one already loading or playing is
-// abandoned, because the event that just happened is the one worth hearing.
-// [TH] ขอเล่นเสียงหนึ่งรายการ คำขอล่าสุดชนะเสมอ รายการที่กำลังโหลดหรือเล่นอยู่จะถูกยกเลิก
+// Requests a cue and returns immediately — it records the request and touches
+// neither the card nor the DAC. The next audioLoop() does that work.
+//
+// The newest request wins: one already loading or playing is abandoned, because
+// the event that just happened is the one worth hearing. Two requests inside a
+// single poll batch collapse to the later one.
+// [TH] ขอเล่นเสียงหนึ่งรายการแล้วคืนค่าทันที ฟังก์ชันนี้แค่บันทึกคำขอไว้
+//      ไม่แตะทั้งการ์ดและ DAC งานเหล่านั้นทำใน audioLoop() รอบถัดไป
+//      คำขอล่าสุดชนะเสมอ รายการที่กำลังโหลดหรือเล่นอยู่จะถูกยกเลิก
 //      เพราะเหตุการณ์ที่เพิ่งเกิดคือเรื่องที่ควรได้ยิน
+//      คำขอสองครั้งในรอบ poll เดียวกันจะเหลือเพียงครั้งหลัง
 void audioPlay(Cue c);
 
 // From the settings screen. Off drops requests inside audioPlay(), before any

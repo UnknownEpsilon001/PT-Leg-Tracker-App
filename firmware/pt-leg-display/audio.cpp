@@ -10,12 +10,35 @@
 // 48 KB is 2.23 s at 22050 Hz, which covers every prompt in /sounds. The clip is
 // loaded whole before a single sample is emitted, so the card is never read
 // while audio is playing — see the design doc for why streaming was rejected.
-// Keep this in step with -MaxBytes in tools/make-sounds.ps1.
+// tests/run-tests.ps1 asserts this equals -MaxBytes in tools/make-sounds.ps1;
+// a comment alone was not keeping the two in step.
 // [TH] 48 กิโลไบต์คือ 2.23 วินาทีที่ 22050 เฮิรตซ์ ครอบคลุมทุกข้อความใน /sounds
 //      คลิปถูกโหลดจนครบก่อนเล่นตัวอย่างแรก การ์ดจึงไม่เคยถูกอ่านระหว่างมีเสียง
 //      ดูเหตุผลที่ไม่เลือกวิธีอ่านไปเล่นไปได้ในเอกสารออกแบบ
-//      ค่านี้ต้องตรงกับ -MaxBytes ใน tools/make-sounds.ps1
+//      สคริปต์ tests/run-tests.ps1 ตรวจว่าค่านี้ตรงกับ -MaxBytes ใน tools/make-sounds.ps1
+//      เพราะลำพังคอมเมนต์ไม่พอที่จะทำให้สองค่านี้ตรงกัน
 static constexpr size_t AUDIO_BUF_BYTES = 48u * 1024u;
+
+// The degrade ladder, written out rather than computed. Halving inside the loop
+// condition silently lost the last tier: 48 -> 24 -> 12, and 12 fails a
+// `>= 16 KB` guard, so the 16 KB step the design documents was never attempted
+// and a heap that could hold 16 KB got no audio at all.
+// [TH] บันไดลดขนาด เขียนเป็นตารางแทนการคำนวณ
+//      การหารสองในเงื่อนไขของลูปทำให้ขั้นสุดท้ายหายไปเงียบๆ คือ 48 -> 24 -> 12
+//      และ 12 ไม่ผ่านเงื่อนไข ">= 16 กิโลไบต์" ขั้น 16 กิโลไบต์ที่เอกสารออกแบบระบุไว้จึงไม่เคยถูกลอง
+//      หน่วยความจำที่พอสำหรับ 16 กิโลไบต์เลยไม่ได้เสียงเลย
+static constexpr size_t AUDIO_BUF_TIERS[] = {AUDIO_BUF_BYTES, 24u * 1024u, 16u * 1024u};
+
+// The first tier IS the advertised cap. Spelling 48 KB again here instead would
+// let the ladder's top tier drift away from AUDIO_BUF_BYTES while run-tests.ps1
+// — which greps for AUDIO_BUF_BYTES — kept reporting agreement with the tool,
+// which is the exact drift that check exists to catch.
+// [TH] ขั้นแรกคือค่าเพดานที่ประกาศไว้ ถ้าเขียนเลข 48 กิโลไบต์ซ้ำตรงนี้
+//      ขั้นบนสุดของบันไดจะเลื่อนออกจาก AUDIO_BUF_BYTES ได้
+//      ขณะที่ run-tests.ps1 ซึ่งค้นหา AUDIO_BUF_BYTES ยังรายงานว่าตรงกับเครื่องมืออยู่
+//      ซึ่งเป็นความไม่ตรงกันแบบเดียวกับที่การตรวจนั้นมีไว้เพื่อจับ
+static_assert(AUDIO_BUF_TIERS[0] == AUDIO_BUF_BYTES,
+              "the largest buffer tier must equal the cap make-sounds.ps1 enforces");
 
 // One card read per audioLoop() call. Small enough not to hold the loop, large
 // enough that a 48 KB clip is resident in about a dozen iterations.
@@ -23,9 +46,9 @@ static constexpr size_t AUDIO_BUF_BYTES = 48u * 1024u;
 //      เล็กพอที่จะไม่ยึดลูปไว้ และใหญ่พอให้คลิป 48 กิโลไบต์โหลดครบในราวสิบกว่ารอบ
 static constexpr size_t CHUNK_BYTES = 4096;
 
-// Idle ──audioPlay()──▶ Loading ──buffer full──▶ Playing ──drained──▶ Idle
-// [TH] ว่าง ──ขอเล่น──▶ กำลังโหลด ──โหลดครบ──▶ กำลังเล่น ──เล่นจบ──▶ ว่าง
-enum class AudioState { Idle, Loading, Playing };
+// Idle ──audioPlay()──▶ Opening ──file parsed──▶ Loading ──full──▶ Playing ──drained──▶ Idle
+// [TH] ว่าง ──ขอเล่น──▶ กำลังเปิดไฟล์ ──อ่านส่วนหัวแล้ว──▶ กำลังโหลด ──ครบ──▶ กำลังเล่น ──จบ──▶ ว่าง
+enum class AudioState { Idle, Opening, Loading, Playing };
 
 static uint8_t* gBuf = nullptr;
 static size_t gBufCap = 0;
@@ -33,10 +56,13 @@ static dac_continuous_handle_t gDac = nullptr;
 static bool gEnabled = true;
 
 static AudioState gState = AudioState::Idle;
+static Cue gPendingCue = Cue::Boot;
+static bool gHasPending = false;
 static File gFile;
 static uint32_t gWant = 0;        // ไบต์ที่ต้องโหลดทั้งหมด — total bytes to load
 static uint32_t gHave = 0;        // โหลดมาแล้ว — bytes loaded so far
 static uint32_t gSent = 0;        // ส่งให้ DAC แล้ว — bytes handed to the DAC
+static uint32_t gPlayStart = 0;   // เวลาที่เริ่มเล่น — when Playing began, for the stall guard
 static uint32_t gDrainStart = 0;  // เวลาที่เริ่มรอคิว DMA ให้หมด — when the drain wait began
 static bool gDacOn = false;
 
@@ -61,14 +87,12 @@ static const char* cuePath(Cue c) {
 // Best-effort by design. On a natural end the queue has already drained and this
 // write lands. On an interrupted cue the queue may still be full, the write is
 // dropped, and the small step that follows is masked by the replacement clip
-// starting immediately — which is the only reason a 20 ms timeout is acceptable
-// in a function reached from audioLoop().
+// starting immediately.
 // [TH] ปิดโดยทิ้งค่า 0x80 ไว้เสมอ ตัวแปลงจะค้างค่าสุดท้ายที่ได้รับ
 //      ถ้าปิดตอนที่ค่ายังดังอยู่ เอาต์พุตจะกระโดดจนได้ยินเป็นเสียงป๊อก
 //      ส่วน 0x80 คือความเงียบของรูปแบบ 8 บิตไม่มีเครื่องหมาย และเป็นค่าพักของตัวแปลง
 //      ตั้งใจให้เป็นแบบทำเท่าที่ทำได้ ตอนจบตามปกติคิวว่างแล้วจึงเขียนสำเร็จ
-//      ตอนถูกขัดจังหวะคิวอาจยังเต็ม การเขียนจะถูกทิ้ง และการกระโดดเล็กน้อยที่ตามมา
-//      จะถูกกลบด้วยคลิปใหม่ที่เริ่มทันที ซึ่งเป็นเหตุผลเดียวที่ยอมให้รอ 20 มิลลิวินาทีในเส้นทางนี้ได้
+//      ตอนถูกขัดจังหวะคิวอาจยังเต็ม การเขียนจะถูกทิ้ง และการกระโดดเล็กน้อยที่ตามมาจะถูกกลบด้วยคลิปใหม่
 static void dacOff() {
   if (!gDacOn) return;
   uint8_t rest = 0x80;
@@ -83,25 +107,23 @@ static void stopAll() {
   dacOff();
   gState = AudioState::Idle;
   gWant = gHave = gSent = 0;
+  gPlayStart = 0;
   gDrainStart = 0;
 }
 
 void audioBegin() {
-  // Halve until it fits, the way the LVGL draw buffer does in ui.cpp. Unlike the
-  // draw buffer this never restarts the chip: a machine that cannot play sounds
-  // is a machine that works, and rebooting over it would turn a missing
-  // convenience into an outage.
-  // [TH] ลดขนาดลงครึ่งหนึ่งจนกว่าจะจองได้ เหมือนบัฟเฟอร์วาดภาพของ LVGL ใน ui.cpp
-  //      ต่างกันตรงที่ตรงนี้ไม่รีบูตชิป เครื่องที่เล่นเสียงไม่ได้ยังเป็นเครื่องที่ใช้งานได้
+  // Try each tier in turn. Unlike the LVGL draw buffer in ui.cpp this never
+  // restarts the chip: a machine that cannot play sounds is a machine that
+  // works, and rebooting over it would turn a missing convenience into an outage.
+  // [TH] ไล่ลองทีละขั้น ต่างจากบัฟเฟอร์วาดภาพของ LVGL ใน ui.cpp ตรงที่ไม่รีบูตชิป
+  //      เครื่องที่เล่นเสียงไม่ได้ยังเป็นเครื่องที่ใช้งานได้
   //      การรีบูตเพราะเรื่องนี้จะเปลี่ยนของอำนวยความสะดวกที่ขาดไปให้กลายเป็นเครื่องล่ม
-  size_t want = AUDIO_BUF_BYTES;
-  while (want >= 16u * 1024u && !gBuf) {
-    gBuf = (uint8_t*)malloc(want);
+  for (size_t i = 0; i < sizeof(AUDIO_BUF_TIERS) / sizeof(AUDIO_BUF_TIERS[0]); ++i) {
+    gBuf = (uint8_t*)malloc(AUDIO_BUF_TIERS[i]);
     if (gBuf) {
-      gBufCap = want;
+      gBufCap = AUDIO_BUF_TIERS[i];
       break;
     }
-    want /= 2;
   }
   if (!gBuf) {
     Serial.println("audio: no heap for the playback buffer, cues are off");
@@ -126,6 +148,15 @@ void audioBegin() {
   esp_err_t err = dac_continuous_new_channels(&cfg, &gDac);
   if (err != ESP_OK) {
     gDac = nullptr;
+    // Give the buffer back. audioReady() is false from here on, so it could never
+    // be used again, and holding tens of kilobytes of a ~227 KB budget for the
+    // life of the boot can push the LVGL draw buffer into its own degrade path.
+    // [TH] คืนหน่วยความจำบัฟเฟอร์ เพราะ audioReady() จะเป็นเท็จตลอดไป จึงไม่มีทางได้ใช้อีก
+    //      การกันไว้หลายสิบกิโลไบต์จากงบราว 227 กิโลไบต์ตลอดการทำงาน
+    //      อาจดันให้บัฟเฟอร์วาดภาพของ LVGL ต้องลดขนาดลงตามไปด้วย
+    free(gBuf);
+    gBuf = nullptr;
+    gBufCap = 0;
     Serial.printf("audio: dac_continuous_new_channels failed (%d), cues are off\n", (int)err);
     return;
   }
@@ -134,20 +165,37 @@ void audioBegin() {
                 (double)gBufCap / (double)WAV_RATE);
 }
 
+// Records the request and returns. The card work happens in audioLoop().
+//
+// This runs inside a link callback, under gLink.poll(): opening a file, reading
+// its header and seeking took tens of milliseconds on a slow card, and for the
+// stop cue that landed on the same pass as the sessions.csv append. Deferring
+// costs one loop iteration of latency and keeps the UART receive path short.
+// [TH] แค่บันทึกคำขอแล้วคืนค่า งานที่แตะการ์ดไปทำใน audioLoop()
+//      ฟังก์ชันนี้ถูกเรียกจากคอลแบ็กของลิงก์ซึ่งอยู่ใต้ gLink.poll()
+//      การเปิดไฟล์ อ่านส่วนหัว และเลื่อนตำแหน่ง ใช้เวลาหลายสิบมิลลิวินาทีบนการ์ดที่ช้า
+//      และสำหรับเสียงหยุด งานนั้นตกอยู่รอบเดียวกับการเขียน sessions.csv
+//      การเลื่อนไปทำทีหลังแลกด้วยความหน่วงหนึ่งรอบลูป และทำให้เส้นทางรับ UART สั้นเข้าไว้
 void audioPlay(Cue c) {
   if (!gEnabled || !audioReady()) return;
+  // Newest wins, including over a request made earlier in this same poll batch.
+  // [TH] คำขอล่าสุดชนะเสมอ รวมถึงชนะคำขอที่เพิ่งเกิดในรอบ poll เดียวกัน
+  gPendingCue = c;
+  gHasPending = true;
+}
 
+// Opens the pending cue and gets as far as the first sample. Returns false and
+// reports why if the file cannot be used.
+// [TH] เปิดไฟล์ของเสียงที่ขอไว้ แล้วเตรียมจนถึงตัวอย่างเสียงแรก
+//      ถ้าใช้ไฟล์นั้นไม่ได้จะคืนค่าเท็จพร้อมบอกเหตุผล
+static bool beginCue(Cue c) {
   const char* path = cuePath(c);
-  if (!path) return;
-
-  // A newer cue abandons whatever is in flight, including mid-clip.
-  // [TH] คำขอใหม่ยกเลิกรายการที่ค้างอยู่ รวมถึงตอนที่เล่นไปได้ครึ่งเดียว
-  stopAll();
+  if (!path) return false;
 
   File f = SD.open(path, FILE_READ);
   if (!f) {
     Serial.printf("audio: %s could not be opened\n", path);
-    return;
+    return false;
   }
 
   uint8_t hdr[WAV_SCAN_BYTES];
@@ -161,13 +209,13 @@ void audioPlay(Cue c) {
     //      โดยไม่ต้องใช้ออสซิลโลสโคป
     Serial.printf("audio: %s rejected — %s\n", path, wavErrorText(e));
     f.close();
-    return;
+    return false;
   }
 
   if (!f.seek(info.dataOffset)) {
     Serial.printf("audio: %s could not seek to the samples\n", path);
     f.close();
-    return;
+    return false;
   }
 
   gFile = f;
@@ -175,16 +223,28 @@ void audioPlay(Cue c) {
   gHave = 0;
   gSent = 0;
   gState = AudioState::Loading;
+  return true;
 }
 
 void audioLoop() {
+  // A pending request is serviced first, so a newer cue cuts an older one off
+  // here — in loop context — rather than inside the link callback.
+  // [TH] คำขอที่ค้างอยู่ถูกจัดการก่อน เสียงใหม่จึงตัดเสียงเก่าตรงนี้ซึ่งอยู่ในบริบทของลูป
+  //      ไม่ใช่ในคอลแบ็กของลิงก์
+  if (gHasPending) {
+    gHasPending = false;
+    stopAll();
+    if (!beginCue(gPendingCue)) stopAll();
+    return;
+  }
+
   if (gState == AudioState::Idle) return;
 
   if (gState == AudioState::Loading) {
     size_t take = gWant - gHave;
     if (take > CHUNK_BYTES) take = CHUNK_BYTES;
-    int got = gFile.read(gBuf + gHave, take);
-    if (got <= 0) {
+    size_t got = gFile.read(gBuf + gHave, take);
+    if (got == 0) {
       // The header promised more than the card gave. Play nothing rather than
       // whatever the buffer's tail happens to hold.
       // [TH] ส่วนหัวบอกว่ามีมากกว่าที่การ์ดให้มาจริง ให้ไม่เล่นเลย
@@ -204,22 +264,32 @@ void audioLoop() {
       return;
     }
     gDacOn = true;
+    gPlayStart = millis();
     gState = AudioState::Playing;
     return;
   }
 
-  // Playing. A timeout of 0 makes this a partial, non-blocking write: it takes
-  // what fits in the DMA descriptors and reports how much, and the rest waits
-  // for the next loop() rather than stalling LVGL here. Most calls write nothing
-  // and return ESP_ERR_TIMEOUT, because the queue only frees a descriptor every
-  // ~46 ms while loop() runs far faster than that — which is why a timeout is
-  // an ordinary outcome here and not a failure.
-  // [TH] กำลังเล่น การตั้งเวลารอเป็น 0 ทำให้เป็นการเขียนแบบไม่รอและอาจไม่ครบ
-  //      คือรับเท่าที่ตัวอธิบาย DMA ว่างแล้วบอกว่ารับไปเท่าไร ที่เหลือรอลูปถัดไป
-  //      แทนที่จะยึด LVGL ไว้ตรงนี้
-  //      การเรียกส่วนใหญ่จะเขียนไม่ได้เลยและคืนค่า ESP_ERR_TIMEOUT
-  //      เพราะคิวว่างทีละช่องทุกราว 46 มิลลิวินาที ขณะที่ลูปทำงานเร็วกว่านั้นมาก
-  //      การหมดเวลาตรงนี้จึงเป็นเรื่องปกติ ไม่ใช่ความผิดพลาด
+  // Playing. Every other wait in this firmware is bounded — the link watchdog at
+  // 2.5 s, the travel cap — and this one has to be too. ESP_ERR_TIMEOUT is the
+  // ordinary outcome here (the queue frees a descriptor about every 46 ms while
+  // loop() runs far faster), so a stalled DMA is indistinguishable from normal
+  // operation except by the clock: without this guard it would sit in Playing
+  // forever with the channel enabled, driving the amplifier into a hiss that
+  // only a reboot clears.
+  // [TH] กำลังเล่น การรอทุกอย่างในเฟิร์มแวร์นี้มีเพดานเวลา ทั้งตัวเฝ้าระวังลิงก์ 2.5 วินาที
+  //      และเพดานเวลาเดินทาง ตรงนี้ก็ต้องมีเช่นกัน
+  //      ค่า ESP_ERR_TIMEOUT เป็นผลลัพธ์ปกติของที่นี่ เพราะคิวว่างทีละช่องทุกราว 46 มิลลิวินาที
+  //      ขณะที่ลูปทำงานเร็วกว่านั้นมาก DMA ที่ค้างจึงดูเหมือนการทำงานปกติ แยกได้ด้วยเวลาเท่านั้น
+  //      ถ้าไม่มีเงื่อนไขนี้ จะค้างอยู่ในสถานะกำลังเล่นตลอดไปโดยเปิดช่องสัญญาณไว้
+  //      แล้วขับวงจรขยายเสียงจนมีเสียงซ่าที่แก้ได้ด้วยการรีบูตเท่านั้น
+  uint32_t expectedMs = (uint32_t)(((uint64_t)gWant * 1000ull) / WAV_RATE);
+  if ((uint32_t)(millis() - gPlayStart) > expectedMs * 3u + 1000u) {
+    Serial.printf("audio: playback stalled after %u of %u bytes, giving up\n", (unsigned)gSent,
+                  (unsigned)gWant);
+    stopAll();
+    return;
+  }
+
   if (gSent < gWant) {
     size_t loaded = 0;
     esp_err_t err = dac_continuous_write(gDac, gBuf + gSent, gWant - gSent, &loaded, 0);
