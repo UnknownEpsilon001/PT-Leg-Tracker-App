@@ -534,13 +534,24 @@ static uint32_t dbgWindowMs = 0;     // start of this window — เวลาเ
 void loop() {
 #if LOOP_DEBUG
   uint32_t dbgT0 = millis();
-  uint32_t dbgUiMs = 0, dbgPollMs = 0, dbgDrawMs = 0, dbgSdMs = 0;
+  uint32_t dbgUiMs = 0, dbgPollMs = 0, dbgDrawMs = 0, dbgSdMs = 0, dbgAudioMs = 0;
 #endif
   uint32_t now = millis();
   uiLoop();
-  audioLoop();  // pumps a loading or playing cue — เดินหน้าเสียงที่กำลังโหลดหรือกำลังเล่น
 #if LOOP_DEBUG
   dbgUiMs = millis() - dbgT0;
+  uint32_t dbgTAudio = millis();
+#endif
+  // Timed separately from uiLoop. Folded in with it, a 4 KB card read during a
+  // cue's load phase was billed to LVGL — and this instrumentation exists to
+  // find loop stalls, so a mislabelled millisecond sends the next investigation
+  // to the wrong file.
+  // [TH] จับเวลาแยกจาก uiLoop ถ้ารวมไว้ด้วยกัน การอ่านการ์ด 4 กิโลไบต์ตอนโหลดเสียง
+  //      จะถูกนับเป็นเวลาของ LVGL และเครื่องมือนี้มีไว้หาจุดที่ลูปค้าง
+  //      มิลลิวินาทีที่ติดป้ายผิดจึงพาการตรวจสอบครั้งถัดไปไปผิดไฟล์
+  audioLoop();  // pumps a loading or playing cue — เดินหน้าเสียงที่กำลังโหลดหรือกำลังเล่น
+#if LOOP_DEBUG
+  dbgAudioMs = millis() - dbgTAudio;
   uint32_t dbgTPoll = millis();
 #endif
   gLink.poll();
@@ -685,9 +696,10 @@ void loop() {
   uint32_t dbgIter = millis() - dbgT0;
   if (dbgIter > dbgMaxIterMs) dbgMaxIterMs = dbgIter;
   if (dbgIter >= LOOP_DEBUG_SLOW_MS)
-    Serial.printf("[loop %lu] SLOW iter=%lums ui=%lu poll=%lu draw=%lu sd=%lu\n",
+    Serial.printf("[loop %lu] SLOW iter=%lums ui=%lu audio=%lu poll=%lu draw=%lu sd=%lu\n",
                   (unsigned long)millis(), (unsigned long)dbgIter, (unsigned long)dbgUiMs,
-                  (unsigned long)dbgPollMs, (unsigned long)dbgDrawMs, (unsigned long)dbgSdMs);
+                  (unsigned long)dbgAudioMs, (unsigned long)dbgPollMs, (unsigned long)dbgDrawMs,
+                  (unsigned long)dbgSdMs);
   // The summary is what answers the question. frames≈4/s with a small gap means
   // the link is healthy and the stutter is in the UI; frames far below 4 or a gap
   // in the seconds means the data never arrived and the UI is only reporting it.
