@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <string>
 #include <vector>
 
 static int failures = 0;
@@ -81,8 +82,18 @@ static WavError run(const std::vector<uint8_t>& v, WavInfo& out, uint32_t maxDat
   return wavParse(v.data(), n, (uint32_t)v.size(), maxData, out);
 }
 
-int main() {
+// argv[1], when given, is the repository root. run-tests.ps1 passes it so the
+// generated-file check below does not depend on the process working directory:
+// resolved against the cwd it silently turned into a SKIP whenever the suite was
+// run from anywhere but the repo root, and still exited 0.
+// [TH] argv[1] คือรากของที่เก็บโค้ด สคริปต์ run-tests.ps1 ส่งค่านี้มาให้
+//      เพื่อไม่ให้การตรวจไฟล์ที่สร้างขึ้นด้านล่างขึ้นกับไดเรกทอรีปัจจุบันของโพรเซส
+//      ถ้าอ้างอิงจากไดเรกทอรีปัจจุบัน การตรวจนั้นจะกลายเป็นการข้ามแบบเงียบๆ
+//      ทุกครั้งที่รันชุดทดสอบจากที่อื่นที่ไม่ใช่รากของที่เก็บโค้ด และยังคืนค่า 0 ว่าผ่าน
+int main(int argc, char** argv) {
   WavInfo info{};
+  std::string root = (argc > 1) ? argv[1] : ".";
+  if (!root.empty() && root.back() != '/' && root.back() != '\\') root += '/';
 
   // A canonical 44-byte-header file is accepted, and the offsets point at the
   // samples rather than at the header.
@@ -176,7 +187,8 @@ int main() {
   // firmware uses, so a tool change that breaks the format fails here rather
   // than on the bench.
   {
-    FILE* f = fopen("firmware/.build/sounds/start.wav", "rb");
+    std::string generated = root + "firmware/.build/sounds/start.wav";
+    FILE* f = fopen(generated.c_str(), "rb");
     if (f) {
       std::vector<uint8_t> v;
       uint8_t chunk[4096];
@@ -187,9 +199,7 @@ int main() {
       check(e == WavError::Ok, "make-sounds.ps1 output is accepted by the parser");
       if (e != WavError::Ok) printf("       parser said: %s\n", wavErrorText(e));
     } else {
-      printf(
-          "SKIP: firmware/.build/sounds/start.wav absent; run tools/make-sounds.ps1 to cover "
-          "this\n");
+      printf("SKIP: %s absent; run tools/make-sounds.ps1 to cover this\n", generated.c_str());
     }
   }
 

@@ -39,6 +39,34 @@ $compilerArgs = @("-std=c++17", "-Wall", "-Wextra", "-Werror", "-O1") + $sources
 & $Compiler $compilerArgs
 if ($LASTEXITCODE -ne 0) { throw "compile failed" }
 
-& $exe
+# The buffer cap is stated in two places that must agree: the firmware rejects a
+# clip larger than AUDIO_BUF_BYTES, and the tool refuses to write one larger than
+# -MaxBytes. Comments in both files asked for that and nothing enforced it, so a
+# change to one would only surface on the bench as a file the tool blessed and
+# the device rejected.
+# [TH] ค่าเพดานขนาดบัฟเฟอร์ถูกเขียนไว้สองที่และต้องตรงกัน
+#      เฟิร์มแวร์ปฏิเสธคลิปที่ใหญ่กว่า AUDIO_BUF_BYTES ส่วนเครื่องมือไม่ยอมเขียนไฟล์ที่ใหญ่กว่า -MaxBytes
+#      เดิมมีแค่คอมเมนต์ขอไว้ในสองไฟล์โดยไม่มีอะไรบังคับ
+#      การแก้ค่าฝั่งเดียวจึงไปโผล่ตอนทดสอบบนโต๊ะ เป็นไฟล์ที่เครื่องมือบอกว่าผ่านแต่เครื่องปฏิเสธ
+$audioCpp = Get-Content (Join-Path $here "..\pt-leg-display\audio.cpp") -Raw
+$toolPs1 = Get-Content (Join-Path $here "..\tools\make-sounds.ps1") -Raw
+if ($audioCpp -notmatch 'AUDIO_BUF_BYTES\s*=\s*(\d+)u?\s*\*\s*(\d+)u?') {
+    throw "could not find AUDIO_BUF_BYTES in audio.cpp"
+}
+$fw = [int]$Matches[1] * [int]$Matches[2]
+if ($toolPs1 -notmatch '\$MaxBytes\s*=\s*(\d+)') {
+    throw "could not find the -MaxBytes default in make-sounds.ps1"
+}
+$tool = [int]$Matches[1]
+if ($fw -ne $tool) {
+    throw "buffer cap mismatch: audio.cpp AUDIO_BUF_BYTES=$fw but make-sounds.ps1 -MaxBytes=$tool"
+}
+Write-Host "buffer cap agrees: $fw bytes" -ForegroundColor Green
+
+# The repo root is passed so the generated-file check resolves independently of
+# where this script was invoked from.
+# [TH] ส่งรากของที่เก็บโค้ดเข้าไปด้วย เพื่อให้การตรวจไฟล์ที่สร้างขึ้นไม่ขึ้นกับตำแหน่งที่เรียกสคริปต์นี้
+$repoRoot = (Resolve-Path (Join-Path $here "..\..")).Path
+& $exe $repoRoot
 if ($LASTEXITCODE -ne 0) { throw "tests failed" }
 Write-Host "tests passed" -ForegroundColor Green
