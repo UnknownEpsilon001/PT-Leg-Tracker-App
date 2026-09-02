@@ -864,16 +864,25 @@ static void spinUp(lv_event_t* e) {
 // value through lv_spinbox_increment/decrement, so it needs its own -/+ keys.
 // One row per setting keeps the touch targets big enough to hit on a resistive
 // panel.
-static lv_obj_t* makeSpinRow(lv_obj_t* parent, const char* label, int val,
-                             int lo, int hi) {
+// A settings row: full width, fixed height, muted label on the left, and the
+// caller's control on the right. Shared so the geometry and the tap-bubbling
+// contract below are stated once — the spinbox and switch rows have to line up,
+// and a change made to only one of two copies would break that silently.
+// [TH] แถวของหน้าตั้งค่า กว้างเต็ม สูงคงที่ ป้ายสีจางอยู่ซ้าย ส่วนตัวควบคุมของผู้เรียกอยู่ขวา
+//      แยกออกมาใช้ร่วมกันเพื่อให้ขนาดและกติกาการส่งต่อการแตะด้านล่างถูกเขียนไว้ที่เดียว
+//      แถวช่องตัวเลขกับแถวสวิตช์ต้องเรียงตรงกัน การแก้เพียงสำเนาเดียวจากสองชุดจะทำให้เพี้ยนแบบเงียบๆ
+static lv_obj_t* makeRow(lv_obj_t* parent, const char* label) {
   lv_obj_t* row = lv_obj_create(parent);
   lv_obj_set_size(row, lv_pct(100), 42);
   lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
   lv_obj_set_style_border_width(row, 0, 0);
   lv_obj_set_style_pad_all(row, 0, 0);
   lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
-  // Let taps on the row's own background reach the column's dismiss handler. The
-  // -/+ buttons are children without this flag, so their clicks stay theirs.
+  // Let taps on the row's own background reach the column's dismiss handler.
+  // Controls added by the caller are children without this flag, so their clicks
+  // stay theirs.
+  // [TH] ให้การแตะพื้นหลังของแถวไปถึงตัวจัดการปิดแป้นพิมพ์ของคอลัมน์
+  //      ตัวควบคุมที่ผู้เรียกเพิ่มเข้ามาเป็นลูกที่ไม่มีแฟล็กนี้ การแตะจึงยังเป็นของมันเอง
   lv_obj_add_flag(row, LV_OBJ_FLAG_EVENT_BUBBLE);
 
   lv_obj_t* l = lv_label_create(row);
@@ -881,6 +890,12 @@ static lv_obj_t* makeSpinRow(lv_obj_t* parent, const char* label, int val,
   lv_obj_set_style_text_color(l, lv_color_hex(COL_MUTED), 0);
   lv_label_set_text(l, label);
   lv_obj_align(l, LV_ALIGN_LEFT_MID, 0, 0);
+  return row;
+}
+
+static lv_obj_t* makeSpinRow(lv_obj_t* parent, const char* label, int val,
+                             int lo, int hi) {
+  lv_obj_t* row = makeRow(parent, label);
 
   lv_obj_t* sp = lv_spinbox_create(row);
   lv_spinbox_set_range(sp, lo, hi);
@@ -905,28 +920,11 @@ static lv_obj_t* makeSpinRow(lv_obj_t* parent, const char* label, int val,
   return sp;
 }
 
-// Same geometry as makeSpinRow so the rows line up, with a switch on the right
-// instead of a spinbox and its two buttons.
-// [TH] ขนาดและระยะเท่ากับ makeSpinRow เพื่อให้แถวเรียงตรงกัน
-//      ต่างกันตรงที่ด้านขวาเป็นสวิตช์ ไม่ใช่ช่องตัวเลขกับปุ่มสองปุ่ม
+// Same row as the spinboxes, with a switch on the right instead of a spinbox and
+// its two buttons.
+// [TH] ใช้แถวเดียวกับช่องตัวเลข ต่างกันตรงที่ด้านขวาเป็นสวิตช์ ไม่ใช่ช่องตัวเลขกับปุ่มสองปุ่ม
 static lv_obj_t* makeSwitchRow(lv_obj_t* parent, const char* label, bool on) {
-  lv_obj_t* row = lv_obj_create(parent);
-  lv_obj_set_size(row, lv_pct(100), 42);
-  lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
-  lv_obj_set_style_border_width(row, 0, 0);
-  lv_obj_set_style_pad_all(row, 0, 0);
-  lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
-  // Same reason as makeSpinRow: taps on the row background reach the column's
-  // dismiss handler, while the switch itself keeps its own clicks.
-  // [TH] เหตุผลเดียวกับ makeSpinRow คือให้การแตะพื้นหลังแถวไปถึงตัวจัดการของคอลัมน์
-  //      ส่วนตัวสวิตช์ยังรับการแตะของตัวเองไว้
-  lv_obj_add_flag(row, LV_OBJ_FLAG_EVENT_BUBBLE);
-
-  lv_obj_t* l = lv_label_create(row);
-  lv_obj_set_style_text_font(l, &thai14, 0);
-  lv_obj_set_style_text_color(l, lv_color_hex(COL_MUTED), 0);
-  lv_label_set_text(l, label);
-  lv_obj_align(l, LV_ALIGN_LEFT_MID, 0, 0);
+  lv_obj_t* row = makeRow(parent, label);
 
   lv_obj_t* sw = lv_switch_create(row);
   lv_obj_set_size(sw, 50, 28);
