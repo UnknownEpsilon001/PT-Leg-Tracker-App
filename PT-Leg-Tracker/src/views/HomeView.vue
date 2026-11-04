@@ -35,33 +35,19 @@ onMounted(async () => {
     <h1>สวัสดี คุณ{{ store.profile?.name }}</h1>
     <p v-if="appContent" class="sub">{{ appContent.homeSubtitle }}</p>
     <div v-if="!quizStore.hasTaken('pre')" class="card banner">
-      <p>ก่อนเริ่มใช้งาน ทำแบบทดสอบก่อนใช้งานสั้น ๆ ก่อนนะคะ</p>
+      <p>ก่อนเริ่มใช้งาน ทำแบบทดสอบก่อนใช้งานสั้น ๆ ก่อน</p>
       <button class="primary" @click="$router.push({ name: 'quiz', params: { quizId: 'pre' } })">
         <AppIcon name="clipboard" /> ทำแบบทดสอบก่อนใช้งาน
       </button>
     </div>
     <BigButton
-      class="stagger"
-      style="--i: 0"
       icon="book-open"
       label="ความรู้เกี่ยวกับเรื่องข้อเข่าเสื่อมและการออกกำลังกายต้นขา"
       to="knowledge"
     />
-    <BigButton
-      class="stagger"
-      style="--i: 1"
-      icon="wrench"
-      label="วิธีใช้เครื่องบริหารเข่า"
-      to="guide"
-    />
-    <BigButton
-      class="stagger"
-      style="--i: 2"
-      icon="activity"
-      label="เริ่มออกกำลังกาย"
-      to="session"
-    />
-    <BigButton class="stagger" style="--i: 3" icon="bar-chart" label="บันทึกของฉัน" to="records" />
+    <BigButton icon="wrench" label="วิธีใช้เครื่องบริหารเข่า" to="guide" />
+    <BigButton class="primary" icon="activity" label="เริ่มออกกำลังกาย" to="session" />
+    <BigButton icon="bar-chart" label="บันทึกของฉัน" to="records" />
     <button class="settings-link" @click="$router.push({ name: 'settings' })">
       <AppIcon name="settings" /> ตั้งค่า
     </button>
@@ -71,9 +57,9 @@ onMounted(async () => {
 <style scoped>
 .logo {
   display: block;
-  width: 11rem;
-  max-width: 60%;
-  margin: 0 auto 0.75rem;
+  width: 9rem;
+  max-width: 50%;
+  margin: 0.5rem auto 1.25rem;
 }
 
 @media (prefers-reduced-motion: no-preference) {
@@ -93,26 +79,33 @@ onMounted(async () => {
   }
 }
 
-.sub {
-  margin-bottom: 1.5rem;
-  color: #57534e;
+h1 {
+  font-size: 1.6rem;
 }
 
-.error {
-  color: #b91c1c;
-  font-weight: 600;
+.sub {
+  margin: 0.25rem 0 1.5rem;
+  color: var(--c-muted);
 }
 
 .settings-link {
   width: 100%;
-  margin-top: 1rem;
-  border: none;
+  margin-top: 0.75rem;
+  border-color: transparent;
   background: transparent;
   color: var(--c-primary-dark);
-  text-decoration: underline;
 }
 
 .banner {
-  border-color: var(--c-primary);
+  border-bottom: 1px solid var(--c-border);
+  margin-bottom: 1.25rem;
+}
+
+.banner p {
+  margin-bottom: 0.75rem;
+}
+
+.banner button {
+  width: 100%;
 }
 </style>

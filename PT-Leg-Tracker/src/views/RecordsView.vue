@@ -51,41 +51,71 @@ function mins(sec: number) {
 
 <template>
   <main class="page">
-    <div class="card">
-      <h2>สัปดาห์นี้ออกกำลังกาย {{ thisWeekCount }} ครั้ง</h2>
-    </div>
+    <h2 class="week">สัปดาห์นี้ออกกำลังกาย {{ thisWeekCount }} ครั้ง</h2>
 
     <div class="card" v-if="painPoints.length >= 2">
       <h2>ระดับความปวดหลังออกกำลังกาย (0-10)</h2>
       <TrendChart :points="painPoints" :max="10" />
     </div>
 
-    <h2>ประวัติการออกกำลังกาย</h2>
+    <h2 class="section">ประวัติการออกกำลังกาย</h2>
     <p v-if="sorted.length === 0" class="card">ยังไม่มีบันทึก เริ่มออกกำลังกายครั้งแรกได้เลย</p>
-    <div
-      v-for="(r, i) in sorted"
-      :key="r.id"
-      class="card row stagger"
-      :style="{ '--i': Math.min(i, 8) }"
-    >
-      <span>{{ fmt(r.date) }}</span>
-      <span>{{ r.durationSec !== null ? mins(r.durationSec) + ' นาที' : 'บันทึกอาการ' }}</span>
-      <span v-if="r.painAfter !== undefined">ปวด {{ r.painAfter }}/10</span>
-      <span v-else>—</span>
-      <span class="src"><AppIcon :name="r.source === 'device' ? 'wifi' : 'pencil'" /></span>
-    </div>
+    <ul v-else class="card history">
+      <li v-for="r in sorted" :key="r.id" class="row">
+        <span class="meta">
+          <span class="date">{{ fmt(r.date) }}</span>
+          <span>{{ r.durationSec !== null ? mins(r.durationSec) + ' นาที' : 'บันทึกอาการ' }}</span>
+          <span v-if="r.painAfter !== undefined">ปวด {{ r.painAfter }}/10</span>
+          <span v-else>—</span>
+        </span>
+        <span class="src"><AppIcon :name="r.source === 'device' ? 'wifi' : 'pencil'" /></span>
+      </li>
+    </ul>
   </main>
 </template>
 
 <style scoped>
+.week {
+  font-size: 1.4rem;
+  margin-bottom: 1rem;
+}
+
+.section {
+  margin: 1.25rem 0 0.25rem;
+}
+
+/* [TH] ประวัติเป็นรายการเดียว คั่นแต่ละแถวด้วยเส้น */
+/* History is one list with a rule between rows. */
+.history {
+  list-style: none;
+  padding-block: 0;
+}
+
 .row {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 0.5rem;
+  gap: 0.75rem;
+  padding: 0.75rem 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 0.75rem;
+}
+
+.row + .row {
+  border-top: 1px solid var(--c-border);
+}
+
+.date {
+  font-weight: 600;
 }
 
 .src {
   font-size: 1.2rem;
+  color: var(--c-muted);
 }
 </style>

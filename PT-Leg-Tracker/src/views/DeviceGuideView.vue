@@ -142,9 +142,4 @@ onUnmounted(() => {
   border-radius: 0.75rem;
   background: #000;
 }
-
-.error {
-  color: #b91c1c;
-  font-weight: 600;
-}
 </style>

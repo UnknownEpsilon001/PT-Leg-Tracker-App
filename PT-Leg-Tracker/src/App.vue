@@ -34,23 +34,28 @@ watchEffect(() => {
 
 <style scoped>
 .topbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
   display: flex;
   align-items: center;
   gap: 0.75rem;
-  padding: 0.75rem 1rem;
-  background: var(--c-primary);
-  color: #fff;
+  padding: 0.5rem 1rem 0.5rem 0.5rem;
+  background: var(--c-card);
+  border-bottom: 1px solid var(--c-border);
 }
 
 .topbar h1 {
-  font-size: 1.2rem;
-  color: #fff;
+  font-size: 1.15rem;
+  font-weight: 600;
+  overflow-wrap: anywhere;
 }
 
 .back {
+  flex-shrink: 0;
   background: transparent;
-  border: none;
-  color: #fff;
-  font-size: 1rem;
+  border-color: transparent;
+  color: var(--c-primary-dark);
+  padding: 0.5rem 0.5rem 0.5rem 0.25rem;
 }
 </style>

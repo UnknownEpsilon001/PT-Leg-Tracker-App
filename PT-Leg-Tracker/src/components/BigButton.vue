@@ -10,7 +10,7 @@ const router = useRouter()
 
 <template>
   <button class="big" @click="router.push({ name: props.to })">
-    <span class="icon-wrap"><AppIcon :name="icon" /></span>
+    <span class="icon"><AppIcon :name="icon" /></span>
     <span class="label">{{ label }}</span>
   </button>
 </template>
@@ -18,14 +18,14 @@ const router = useRouter()
 <style scoped>
 .big {
   width: 100%;
-  min-height: 5.5rem;
+  min-height: 4.5rem;
   display: flex;
   align-items: center;
   justify-content: flex-start;
-  gap: 1rem;
-  padding: 1rem 1.25rem;
-  margin-bottom: 0.75rem;
-  font-size: 1.2rem;
+  gap: 0.875rem;
+  padding: 0.75rem 1rem;
+  margin-bottom: 0.625rem;
+  font-size: 1.1rem;
   font-weight: 600;
   text-align: left;
 }
@@ -37,16 +37,14 @@ const router = useRouter()
   line-height: 1.35;
 }
 
-.icon-wrap {
+.icon {
   display: flex;
   flex-shrink: 0;
-  align-items: center;
-  justify-content: center;
-  width: 3rem;
-  height: 3rem;
-  border-radius: 0.75rem;
-  background: color-mix(in srgb, var(--c-primary) 12%, white);
-  color: var(--c-primary-dark);
-  font-size: 1.5rem;
+  color: var(--c-primary);
+  font-size: 1.4rem;
+}
+
+.big.primary .icon {
+  color: #fff;
 }
 </style>

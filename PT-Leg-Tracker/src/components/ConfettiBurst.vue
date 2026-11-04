@@ -17,7 +17,7 @@ onMounted(() => {
   el.width = window.innerWidth
   el.height = window.innerHeight
   const ctx = el.getContext('2d')!
-  const colors = ['#24395e', '#8c2f39', '#c6ccd6', '#e3b341']
+  const colors = ['#0d6b65', '#7cc4b8', '#d9ebe8', '#e3b341']
   const parts = Array.from({ length: 120 }, () => ({
     x: el.width / 2,
     y: el.height * 0.35,

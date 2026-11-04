@@ -48,6 +48,15 @@ async function submit() {
 </template>
 
 <style scoped>
+h1 {
+  margin-top: 1rem;
+}
+
+h1 + p {
+  color: var(--c-muted);
+  margin-bottom: 1.25rem;
+}
+
 label {
   display: block;
   margin-bottom: 1rem;
@@ -55,7 +64,6 @@ label {
 }
 
 .error {
-  color: #b91c1c;
   margin-bottom: 0.75rem;
 }
 

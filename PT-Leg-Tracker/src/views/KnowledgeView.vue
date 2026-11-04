@@ -49,11 +49,6 @@ h2 {
   margin: 1rem 0 0.5rem;
 }
 
-.error {
-  color: #b91c1c;
-  font-weight: 600;
-}
-
 .item {
   width: 100%;
   text-align: left;
