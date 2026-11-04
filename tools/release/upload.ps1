@@ -56,7 +56,10 @@ function Assert-PortRole([string]$role, [string]$port) {
 # [TH] ถ้าเจอชิปชนิดเดียวกันสองตัว แยกไม่ออกว่าตัวไหนคือบอร์ดจริง จึงหยุดแทนการเดา
 function Resolve-Port([string]$role) {
     if ($explicit[$role]) { Assert-PortRole $role $explicit[$role]; return $explicit[$role] }
-    $found = Find-Ports $vids[$role]
+    # @() again here: a one-item result comes back from the function as a bare
+    # string, and "COM8"[0] is "C"
+    # [TH] ต้องครอบ @() อีกครั้ง ผลลัพธ์รายการเดียวจะกลับมาเป็นสตริงเปล่า และ "COM8"[0] คือ "C"
+    $found = @(Find-Ports $vids[$role])
     if ($found.Count -gt 1) {
         $flag = if ($role -eq "controller") { "-ControllerPort" } else { "-DisplayPort" }
         throw "More than one $role board found ($($found -join ', ')). Unplug the extra one or pass $flag."
