@@ -1,23 +1,47 @@
 #pragma once
 #include <stdint.h>
 
-// ตัวขับมอเตอร์/รีเลย์ (แอกชูเอเตอร์) ของอุปกรณ์กายภาพบำบัดขา
-// เป็นจุดเดียวที่รับผิดชอบความปลอดภัยของการจ่ายไฟรีเลย์
-// Actuator (relay) driver — the single owner of relay safety.
+// ตัวขับมอเตอร์ (แอกชูเอเตอร์) ของอุปกรณ์กายภาพบำบัดขา ใช้โมดูลสะพานเอช BTS7960
+// เป็นจุดเดียวที่รับผิดชอบความปลอดภัยของการขับมอเตอร์
+// Actuator driver for the BTS7960 H-bridge — the single owner of motor safety.
 
 enum ActState { ACT_OFF, ACT_UP, ACT_DOWN };  // สถานะ: ปิด / ยกขึ้น / ลดลง
 
 // Safety invariants enforced here and nowhere else:
-// - UP and DOWN are never energized at the same time (break-before-make).
-// - actuatorBegin() forces both relays off and must be the first hardware
-//   call in setup().
+// - UP and DOWN are never driven at the same time (break-before-make).
+// - actuatorBegin() forces the drive dead, and must be the first hardware call
+//   in setup().
+// - Ramping is a comfort feature, never a safety one: every emergency path
+//   (fault, energize cap, live reversal, boot) cuts the drive instantly.
 // [TH] ข้อกำหนดความปลอดภัยที่บังคับใช้ที่ไฟล์นี้เท่านั้น:
-//  - ห้ามจ่ายไฟรีเลย์ "ขึ้น" และ "ลง" พร้อมกัน (ตัดก่อนต่อ = break-before-make)
-//  - actuatorBegin() บังคับรีเลย์ดับทั้งคู่ และต้องเป็นคำสั่งฮาร์ดแวร์แรกใน setup()
+//  - ห้ามขับ "ขึ้น" และ "ลง" พร้อมกัน (ตัดก่อนต่อ = break-before-make)
+//  - actuatorBegin() บังคับให้กำลังขับดับ และต้องเป็นคำสั่งฮาร์ดแวร์แรกใน setup()
+//  - การไล่กำลังขับมีไว้เพื่อความนุ่มนวล ไม่ใช่เพื่อความปลอดภัย
+//    ทุกเส้นทางฉุกเฉิน (ความผิดพลาด เพดานเวลา การกลับทิศขณะขับอยู่ การเปิดเครื่อง) ตัดกำลังขับทันที
 void actuatorBegin();
 void actuatorUp();
 void actuatorDown();
+// Immediate stop. The drive is killed in the same call, with no ramp — this is
+// what a fault and every other emergency path calls, and what applyActuator()
+// re-asserts every loop in a phase that must not move.
+// [TH] หยุดทันที กำลังขับถูกตัดในการเรียกครั้งเดียวโดยไม่ไล่ลง
+//      เป็นสิ่งที่ความผิดพลาดและทุกเส้นทางฉุกเฉินเรียกใช้
+//      และเป็นสิ่งที่ applyActuator() สั่งซ้ำทุกลูปในสถานะที่ต้องไม่เคลื่อนที่
 void actuatorOff();
+// Normal stop: fade the drive out over MOTOR_RAMP_MS instead of dropping it.
+// Only for a stroke that ended because it was supposed to (Lift -> Hold,
+// Lower -> Rest, the bottom of a safe-lower). Never for a fault. Identical to
+// actuatorOff() once the fade has finished, so it is safe to call every loop.
+// [TH] การหยุดตามปกติ: ค่อยๆ ผ่อนกำลังขับลงภายในเวลา MOTOR_RAMP_MS แทนการตัดทิ้ง
+//      ใช้เฉพาะการเคลื่อนที่ที่จบเพราะถึงเวลาของมันเอง
+//      (ยกขึ้น -> ค้าง, ลดลง -> พัก, และตอนถึงพื้นของการลดขาเพื่อหยุด) ห้ามใช้กับความผิดพลาด
+//      เมื่อผ่อนจนสุดแล้วจะเหมือน actuatorOff() ทุกประการ จึงเรียกซ้ำทุกลูปได้ปลอดภัย
+void actuatorSoftOff();
+// Hold-to-move at MOTOR_JOG_DUTY for manual positioning. ACT_OFF fades out.
+// Call every loop while the operator holds the button; it is idempotent.
+// [TH] กดค้างเพื่อขยับที่กำลังขับ MOTOR_JOG_DUTY ใช้จัดตำแหน่งขาด้วยมือ
+//      ค่า ACT_OFF จะค่อยๆ ผ่อนกำลังลง เรียกทุกลูปตราบที่ผู้ใช้ยังกดค้าง เรียกซ้ำได้ปลอดภัย
+void actuatorJog(ActState dir);
 ActState actuatorState();
 // Restart the energize clock without changing direction. Call on a phase change
 // that begins a new stroke in the same direction as the last one (Lower ->
@@ -50,3 +74,11 @@ bool actuatorTakeCapTrip();
 //      ซึ่งเป็นจุดเสียหายจุดเดียวที่ตัวจับเวลานี้มีไว้กำจัด
 //      actuatorBegin() ทำงานก่อนที่พอร์ตอนุกรมจะเปิด setup() จึงเป็นคนรายงานเมื่อมองเห็นได้แล้ว
 bool actuatorCapTimerReady();
+// Whether both LEDC channels attached. False means the motor cannot be driven at
+// all — the machine will time out every stroke and fault, with nothing having
+// moved. Reported by setup() for the same reason the cap timer is: this runs
+// before Serial is open.
+// [TH] ช่อง LEDC ทั้งสองช่องถูกผูกกับขาสำเร็จหรือไม่
+//      ถ้าเป็นเท็จ จะขับมอเตอร์ไม่ได้เลย เครื่องจะหมดเวลาทุกจังหวะแล้วขึ้นความผิดพลาดโดยไม่มีอะไรขยับ
+//      ให้ setup() เป็นคนรายงานด้วยเหตุผลเดียวกับตัวจับเวลาเพดานเวลา คือฟังก์ชันนี้ทำงานก่อนพอร์ตอนุกรมจะเปิด
+bool actuatorPwmReady();

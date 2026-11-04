@@ -26,6 +26,7 @@ void settingsFileDefaults(DeviceSettings& s) {
   s.holdSec = 10;
   s.restSec = 10;
   s.targetReps = 10;
+  s.soundOn = true;
 }
 
 // Values a person typed into a text editor get the same range the spinboxes on
@@ -102,6 +103,12 @@ static bool loadFrom(const char* path, DeviceSettings& s, bool quarantine) {
   out.holdSec = clampU16(d["holdSec"] | (uint16_t)10, 1, 60, "holdSec");
   out.restSec = clampU16(d["restSec"] | (uint16_t)10, 1, 60, "restSec");
   out.targetReps = clampU16(d["targetReps"] | (uint16_t)10, 0, 99, "targetReps");
+  // No clamp: a bool read through ArduinoJson's default operator is already
+  // total, and an absent key means an older card, which should arrive with
+  // sound on rather than silently mute.
+  // [TH] ไม่ต้องบีบช่วงค่า เพราะค่าบูลีนที่อ่านผ่านตัวดำเนินการค่าตั้งต้นของ ArduinoJson ครอบคลุมอยู่แล้ว
+  //      คีย์ที่หายไปแปลว่าเป็นการ์ดรุ่นเก่า ซึ่งควรมาพร้อมเสียงเปิด ไม่ใช่เงียบไปเฉยๆ
+  out.soundOn = d["soundOn"] | true;
 
   s = out;
   return true;
@@ -173,6 +180,7 @@ bool settingsFileSave(const DeviceSettings& s) {
   d["holdSec"] = s.holdSec;
   d["restSec"] = s.restSec;
   d["targetReps"] = s.targetReps;
+  d["soundOn"] = s.soundOn;
 
   // Written to a temp file and renamed over the real one. A card pulled during
   // the write then costs the new settings, never the old ones — the alternative

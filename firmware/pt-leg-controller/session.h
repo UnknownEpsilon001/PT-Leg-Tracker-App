@@ -22,8 +22,8 @@
 enum class Phase { Idle, Lift, Hold, Lower, Rest, SafeLower, Fault, Confirm };
 
 struct CycleCfg {
-  uint32_t liftMs;       // เวลาที่รีเลย์ยกขึ้นจ่ายไฟต่อหนึ่งจังหวะ
-  uint32_t lowerMs;      // เวลาที่รีเลย์ลดลงจ่ายไฟต่อหนึ่งจังหวะ
+  uint32_t liftMs;       // เวลาที่ขับมอเตอร์ยกขึ้นต่อหนึ่งจังหวะ
+  uint32_t lowerMs;      // เวลาที่ขับมอเตอร์ลดลงต่อหนึ่งจังหวะ
   uint32_t holdMs;       // เวลาค้างตอนยกสุด
   uint32_t restMs;       // เวลาพักตอนลงสุด
   uint32_t maxTravelMs;  // ceiling liftMs/lowerMs are clamped to — เพดานที่ใช้จำกัดสองค่าแรก
@@ -164,7 +164,7 @@ class SessionSM {
   void requestStop(uint32_t nowMs);
 
   void forceFault(uint32_t nowMs);   // external safety trip (actuator cap)
-                                     // [TH] บังคับเข้าสถานะผิดพลาดจากภายนอก (เพดานเวลารีเลย์)
+                                     // [TH] บังคับเข้าสถานะผิดพลาดจากภายนอก (เพดานเวลาจ่ายไฟ)
 
   // Drop a start queued behind a recovery lowering, without touching the
   // lowering itself. For a genuine actuator-cap trip that lands mid-SafeLower
@@ -254,6 +254,21 @@ class SessionSM {
     return ph == Phase::Idle ? cfg.targetReps : sessionTargetReps;
   }
 
+  // A manual jog moved the leg to somewhere this firmware cannot know, which is
+  // the same state a power cut mid-stroke leaves behind — so it is recorded the
+  // same way, and the next START lowers in full before it lifts.
+  // [TH] การขยับเองด้วยมือพาขาไปอยู่ตำแหน่งที่เฟิร์มแวร์นี้ไม่มีทางรู้
+  //      ซึ่งเป็นสถานะเดียวกับที่ไฟดับกลางจังหวะทิ้งไว้ จึงบันทึกด้วยวิธีเดียวกัน
+  //      และปุ่ม START ครั้งถัดไปจะลดขาลงเต็มระยะก่อนยกขึ้น
+  void markLegMoved() { legPositionUnknown = true; }
+
+  // Idle -> a full-length SafeLower -> Idle, quietly: no session, no stopped
+  // edge, no rep change. For leaving jog mode with the leg wherever the operator
+  // left it. A no-op in any other phase.
+  // [TH] ว่าง -> ลดขาเต็มระยะ -> ว่าง แบบเงียบ ไม่มีรอบ ไม่มีสัญญาณหยุด ไม่แตะจำนวนครั้ง
+  //      ใช้ตอนออกจากโหมดขยับเอง ซึ่งขาอาจค้างอยู่ตรงไหนก็ได้ ในสถานะอื่นไม่ทำอะไร
+  void lowerFromIdle(uint32_t nowMs);
+
   void tick(uint32_t nowMs);
   // Confirm does not count as a session: the actuator is untouched and nothing
   // is committed until confirmStart(). This answer is load-bearing well beyond
@@ -301,9 +316,9 @@ class SessionSM {
   bool finalFaulted() const { return finalFault; }
   // One-shot: a new stroke has begun that may drive the same direction as the
   // last one, so the actuator's energize clock has to be restarted. Read once per
-  // loop, before the relays are commanded.
+  // loop, before the motor is commanded.
   // [TH] อ่านได้ครั้งเดียว: มีการเคลื่อนที่ครั้งใหม่ที่อาจสั่งไปทางเดิม ต้องเริ่มจับเวลาการจ่ายไฟใหม่
-  //      อ่านหนึ่งครั้งต่อลูป ก่อนสั่งรีเลย์
+  //      อ่านหนึ่งครั้งต่อลูป ก่อนสั่งมอเตอร์
   bool takeStrokeRenewEdge();
 
  private:

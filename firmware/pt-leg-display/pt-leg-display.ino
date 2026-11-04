@@ -12,6 +12,23 @@
 #define LINK_OVER_USB 0
 #endif
 
+// Bench aid: time the loop and the arriving link frames, to tell a display that
+// stalls apart from a link that starves. The screen showing 1-3-6 instead of
+// 1-2-3 can mean either, and they need opposite fixes. Prints a slow-iteration
+// line whenever one pass exceeds LOOP_DEBUG_SLOW_MS with a breakdown of where
+// the time went, plus a once-a-second summary of frames received and the
+// longest gap between them. Off for real hardware; enable per-build:
+//   --build-property compiler.cpp.extra_flags=-DLOOP_DEBUG=1 --clean
+// [TH] โหมดทดสอบ: จับเวลาลูปและข้อความที่เข้ามา เพื่อแยกว่าจอค้างเอง หรือข้อมูลไม่มาถึง
+//      หน้าจอที่นับ 1-3-6 แทน 1-2-3 เกิดได้จากทั้งสองสาเหตุ ซึ่งต้องแก้คนละทาง
+//      จะพิมพ์เมื่อลูปรอบใดใช้เวลาเกินค่าที่ตั้ง พร้อมบอกว่าเวลาหมดไปกับส่วนไหน
+//      และสรุปทุกหนึ่งวินาทีว่ารับข้อความได้กี่ครั้ง และเว้นช่วงนานสุดเท่าไร
+//      ใช้เฉพาะตอนทดสอบ ห้าม commit ทั้งค่าเปิดไว้
+#ifndef LOOP_DEBUG
+#define LOOP_DEBUG 0
+#endif
+#define LOOP_DEBUG_SLOW_MS 300
+
 #include "ui.h"
 #include "link.h"
 #include "session.h"   // Phase enum for uiUpdateMain — ใช้ enum Phase
@@ -20,6 +37,9 @@
 #include "sdlog.h"     // session rows written to the SD card — บันทึกผลแต่ละรอบลงการ์ด
 #include "settingsfile.h"  // /settings.json on the card — ค่าตั้งค่าบนการ์ด
 #include "uitest.h"        // bench-only serial control of the UI — โหมดทดสอบผ่านสาย
+#include "audio.h"         // spoken cues from /sounds on the card — เสียงพูดจากการ์ด
+#include <driver/gpio.h>
+#include <esp_heap_caps.h>
 
 // Both drive the USB serial port, so enabling both means two readers fighting
 // over the same bytes and neither working.
@@ -31,6 +51,7 @@
 Link gLink;  // ลิงก์ UART ไปยังคอนโทรลเลอร์
 static bool uiRunning = false;
 static Phase uiPhase = Phase::Idle;
+static bool uiJog = false;  // controller's panel jog mode — โหมดขยับเองที่หน้าปัด
 static uint32_t uiElapsed = 0;
 static uint16_t uiReps = 0;
 static uint16_t uiTarget = 0;
@@ -45,7 +66,12 @@ static bool uiWifi = false, uiServer = false;
 // [TH] ค่าตั้งค่าล่าสุดที่คอนโทรลเลอร์บอกมา ใช้เติมหน้าตั้งค่า ตั้งต้นด้วยค่าเริ่มต้นไม่ใช่ศูนย์
 //      เพราะถ้าเป็นศูนย์ LVGL จะบีบเป็น 1 และหาก SAVE ก่อนคอนโทรลเลอร์ตอบ อาจเขียนเพดานเวลา 1 วินาที
 //      ทับค่าที่ดีอยู่ ปุ่ม SAVE ถูกกั้นด้วย uiSetSettingsKnown() จนกว่าจะได้ค่าจริง
-static DeviceSettings gLast = {"", "", "", "default", 8, 4, 4, 10, 10, 10};
+// The trailing `true` is soundOn. Leaving the initializer short would
+// value-initialize it to false — sound off by default, from a line that does not
+// mention sound.
+// [TH] ค่า true ตัวท้ายคือ soundOn ถ้าปล่อยให้สั้นกว่าจำนวนฟิลด์ ค่านี้จะถูกตั้งเป็นเท็จโดยปริยาย
+//      กลายเป็นปิดเสียงตั้งแต่ต้น จากบรรทัดที่ไม่ได้พูดถึงเสียงเลย
+static DeviceSettings gLast = {"", "", "", "default", 8, 4, 4, 10, 10, 10, true};
 static bool gSettingsKnown = false;
 static bool gLinkUp = false;
 
@@ -111,6 +137,7 @@ static void onOpenSettings() {
     if (settingsFileLoad(gLast)) {
       gCardSettings = true;
       uiSetDeviceCode(gLast.deviceCode.c_str());
+      audioSetEnabled(gLast.soundOn);  // a card inserted late carries this too — การ์ดที่เพิ่งเสียบก็พาค่านี้มา
       pushSettingsToController(gLast);
       Serial.println("settings: read the card late and pushed it to the controller");
     } else if (gSettingsKnown) {
@@ -150,6 +177,7 @@ static void dataSetActive(int i) {
 
 static void onSaveFromUi(const DeviceSettings& s) {
   gLast = s;
+  audioSetEnabled(s.soundOn);  // takes effect now, not on the next boot — มีผลทันที ไม่ต้องรอเปิดเครื่องใหม่
   LinkSettings ls;
   ls.ssid = s.wifiSsid; ls.pass = s.wifiPass; ls.server = s.serverUrl; ls.code = s.deviceCode;
   ls.maxTravel = s.maxTravelSec; ls.lift = s.liftSec; ls.lower = s.lowerSec;
@@ -182,6 +210,13 @@ static void onLinkSettingsReply(const LinkSettings& s) {
     return;
   }
 
+  // Assigned field by field, never as a whole struct. soundOn is deliberately
+  // absent from LinkSettings, so it survives this only because nothing here
+  // overwrites it — rewriting this as `gLast = built` would silently reset the
+  // user's sound setting on every controller reconnect.
+  // [TH] กำหนดค่าทีละฟิลด์ ไม่ใช่ทั้งโครงสร้าง ค่า soundOn จงใจไม่มีใน LinkSettings
+  //      จึงรอดมาได้เพราะไม่มีอะไรตรงนี้เขียนทับ
+  //      ถ้าเขียนใหม่เป็น gLast = built ค่าเสียงที่ผู้ใช้ตั้งไว้จะถูกล้างทุกครั้งที่คอนโทรลเลอร์เชื่อมต่อใหม่
   gLast.wifiSsid = s.ssid; gLast.wifiPass = s.pass; gLast.serverUrl = s.server;
   gLast.deviceCode = s.code;
   // The absent-field conventions are consumed here too, not just on the
@@ -243,22 +278,137 @@ static void onLinkDone(const LinkDone& d) {
   Serial.printf("session done: %lus x%u fault=%d saved=%d\n", (unsigned long)r.durationSec,
                 r.reps, r.fault ? 1 : 0, saved ? 1 : 0);
   uiShowFinish(r.patientName.c_str(), r.durationSec, r.reps, r.fault, saved);
+
+  // Stop and target come from `done`, not from the running flag falling.
+  //
+  // This board cannot tell "the session ended" from "the link dropped and the
+  // watchdog cleared the state", and a machine that says หยุดการทำงาน every time
+  // a wire glitches is worse than one that says nothing. `done` is emitted
+  // exactly once per session, is on the retransmit list, and carries the final
+  // rep count — so the split below is decided from the numbers the controller
+  // actually finished with, not from the last snapshot that happened to arrive.
+  // [TH] เสียงหยุดและเสียงครบเป้าหมายมาจากข้อความ done ไม่ใช่จากสถานะกำลังทำงานที่ตกลง
+  //      จอแยกไม่ออกระหว่าง "รอบจบแล้ว" กับ "ลิงก์ขาดจนตัวเฝ้าระวังล้างสถานะ"
+  //      เครื่องที่พูดว่าหยุดการทำงานทุกครั้งที่สายกระตุก แย่กว่าเครื่องที่เงียบ
+  //      ข้อความ done ถูกส่งครั้งเดียวต่อรอบ อยู่ในรายการส่งซ้ำ และพามาทั้งจำนวนครั้งสุดท้าย
+  //      การแยกด้านล่างจึงตัดสินจากตัวเลขที่คอนโทรลเลอร์จบรอบมาจริง ไม่ใช่ภาพสถานะล่าสุดที่บังเอิญมาถึง
+  //
+  // uiTarget is the live target from the state stream. A target of 0 means "run
+  // until STOP", so every end of such a session is a stop, never a target.
+  // [TH] uiTarget คือค่าเป้าหมายสดจากกระแสข้อความสถานะ ค่า 0 แปลว่าทำไปจนกว่าจะกดหยุด
+  //      รอบแบบนั้นจึงจบด้วยเสียงหยุดเสมอ ไม่มีทางเป็นเสียงครบเป้าหมาย
+  //
+  // Adding a fault cue later is one branch here: d.fault is already in hand.
+  // [TH] ถ้าจะเพิ่มเสียงแจ้งความผิดพลาดภายหลัง ก็เพิ่มเงื่อนไขเดียวตรงนี้ เพราะ d.fault มีอยู่แล้ว
+  if (uiTarget != 0 && d.reps >= uiTarget) audioPlay(Cue::Target);
+  else audioPlay(Cue::Stop);
 }
 
+// When the last accepted state frame landed. The seconds shown on screen are
+// counted locally from it, so a run of rejected frames does not freeze the
+// clock — see uiElapsedNow().
+// [TH] เวลาที่ได้รับสถานะที่ผ่านการตรวจสอบล่าสุด วินาทีที่แสดงบนจอนับต่อเองจากจุดนี้
+//      ช่วงที่ข้อความถูกปฏิเสธติดกันหลายครั้งนาฬิกาบนจอจึงไม่ค้าง ดู uiElapsedNow()
+static uint32_t uiElapsedRxMs = 0;
+// The controller reports running with a clock that does not advance in two
+// states: the safe-lower recovery that precedes a start out of a latched fault
+// (which is not a session and has no elapsed time of its own), and a latched
+// FAULT, where the value is frozen at what it was when the fault hit. Counting
+// locally through either produces a screen that climbs, gets snapped back by the
+// next frame, and climbs again — 0-1-0-1-0-1-2-0... So the local clock is only
+// allowed to run while the controller's own is seen to move.
+// [TH] มีสองสถานะที่คอนโทรลเลอร์รายงานว่ากำลังทำงานแต่เวลาไม่เดิน
+//      อย่างแรกคือช่วงลดขาเพื่อกู้สถานการณ์ก่อนเริ่มรอบจากสถานะผิดพลาดที่ค้างอยู่
+//      ซึ่งไม่ใช่รอบการทำงานจึงไม่มีเวลาของตัวเอง อย่างที่สองคือสถานะผิดพลาดที่ค้างอยู่
+//      ซึ่งค่าเวลาถูกแช่ไว้ที่ค่าตอนเกิดเหตุ
+//      ถ้านับต่อเองในสองสถานะนี้ จอจะไต่ขึ้นแล้วถูกดึงกลับด้วยข้อความถัดไป แล้วไต่ใหม่
+//      กลายเป็น 0-1-0-1-0-1-2-0... จึงให้นาฬิกาบนจอเดินได้เฉพาะตอนที่เห็นว่าเวลาฝั่งคอนโทรลเลอร์เดินจริง
+static bool uiElapsedMoving = false;
+
 static void onLinkState(const LinkState& s) {
+  // Resync the local clock only when the controller has really diverged.
+  //
+  // The wire carries whole seconds, truncated: a frame reading 3 can arrive when
+  // the true elapsed is 3.9, so a clock started from it runs up to a second
+  // behind and the next frame drags it forward again. Snapping on every frame
+  // makes that visible as a stall followed by a skip — 1-2-3, pause, 4-5. Inside
+  // one second the local count is as accurate as the message, so it keeps its
+  // own phase; a gap of 2 s or more is a real divergence (a long run of rejected
+  // frames, or a session that restarted) and is taken from the controller.
+  // [TH] ปรับเทียบนาฬิกาบนจอเฉพาะตอนที่ค่าจากคอนโทรลเลอร์ต่างไปจริงๆ
+  //      ค่าที่ส่งมาเป็นวินาทีเต็มแบบตัดเศษทิ้ง ข้อความที่บอกว่า 3 อาจมาถึงตอนที่เวลาจริงคือ 3.9
+  //      นาฬิกาที่เริ่มนับจากค่านั้นจึงช้าได้ถึงหนึ่งวินาที แล้วข้อความถัดไปก็ดึงกลับไปข้างหน้า
+  //      ถ้าปรับตามทุกข้อความจะเห็นเป็นการค้างแล้วกระโดด คือ 1-2-3 หยุด แล้ว 4-5
+  //      ภายในหนึ่งวินาที การนับบนจอแม่นเท่ากับตัวข้อความอยู่แล้ว จึงให้รักษาจังหวะของตัวเองไว้
+  //      ส่วนที่ต่างกันตั้งแต่ 2 วินาทีขึ้นไปถือว่าต่างกันจริง
+  //      (ข้อความถูกปฏิเสธติดกันนาน หรือรอบเริ่มใหม่) กรณีนั้นให้ยึดค่าจากคอนโทรลเลอร์
+  uint32_t now = millis();
+  uint32_t shown = (uiRunning && uiElapsedMoving && uiElapsedRxMs != 0)
+                       ? uiElapsed + (uint32_t)((int32_t)(now - uiElapsedRxMs) / 1000)
+                       : uiElapsed;
+  // A value that changed proves the controller's clock is running; one that has
+  // not changed for over 1.5 s says it is held, and holding is a real state here
+  // rather than a gap in the link — the link's own gaps are covered by the 2.5 s
+  // watchdog above.
+  // [TH] ค่าที่เปลี่ยนไปเป็นหลักฐานว่านาฬิกาฝั่งคอนโทรลเลอร์เดินอยู่
+  //      ค่าที่ไม่เปลี่ยนเกิน 1.5 วินาทีแปลว่าเวลาถูกแช่ไว้ ซึ่งเป็นสถานะจริงของเครื่อง
+  //      ไม่ใช่ช่วงที่ลิงก์ขาด เพราะช่วงที่ลิงก์ขาดมีตัวเฝ้าระวัง 2.5 วินาทีด้านบนดูแลอยู่แล้ว
+  if (s.elapsed != uiElapsed) uiElapsedMoving = true;
+  else if (uiElapsedRxMs != 0 && (int32_t)(now - uiElapsedRxMs) > 1500) uiElapsedMoving = false;
+  bool diverged = !s.running || !uiRunning || uiElapsedRxMs == 0 || !uiElapsedMoving ||
+                  s.elapsed > shown + 1 || shown > s.elapsed + 1;
+  if (diverged) {
+    uiElapsed = s.elapsed;
+    uiElapsedRxMs = now;
+  }
   uiRunning = s.running;
   uiPhase = (Phase)s.phase;
-  uiElapsed = s.elapsed;
   uiReps = s.reps;
   uiTarget = s.target;
   uiWifi = s.wifi;
   uiServer = s.server;
+  uiJog = s.jog;
+}
+
+// The start cue, from the controller's one-shot `started` message. It used to be
+// guessed from `running` rising in the state stream, but `running` is already
+// true through a recovery lowering and through a jog-exit lowering that is no
+// session at all, so the guess could not tell a start from a lowering.
+// [TH] เสียงเริ่ม มาจากข้อความ started ที่คอนโทรลเลอร์ส่งครั้งเดียว
+//      เดิมเดาจากสถานะกำลังทำงานที่เปลี่ยนเป็นจริง แต่สถานะนั้นเป็นจริงอยู่แล้วตลอดการลดขากู้สถานการณ์
+//      และตลอดการลดขาตอนออกจากโหมดขยับเองซึ่งไม่ใช่รอบการทำงานเลย การเดาจึงแยกการเริ่มออกจากการลดขาไม่ได้
+static void onLinkStarted() { audioPlay(Cue::Start); }
+
+// The controller's seconds, carried forward locally between frames.
+//
+// The link drops a real share of its frames — the checksum rejects roughly half
+// of them on the bench wiring, and a run of consecutive rejects leaves the
+// screen with nothing new for a second or two, which reads as a clock that
+// stalls and then skips (1-2-3 ... 5). The controller remains the authority:
+// every accepted frame resets both the value and its timestamp, so this only
+// fills the gaps and can never drift more than the gap itself.
+//
+// Free-running is bounded by the link watchdog above: past 2.5 s of silence
+// gLinkUp goes false and the screen stops presenting the state as live, so this
+// cannot keep counting against a machine that has actually stopped.
+// [TH] วินาทีของฝั่งคอนโทรลเลอร์ นับต่อเองบนจอในช่วงระหว่างข้อความ
+//      สายลิงก์ทำข้อความหายจริงพอสมควร ค่าตรวจสอบปฏิเสธราวครึ่งหนึ่งบนสายที่ใช้ทดสอบ
+//      ถ้าถูกปฏิเสธติดกันหลายครั้ง จอจะไม่มีค่าใหม่ราวหนึ่งถึงสองวินาที
+//      ซึ่งเห็นเป็นนาฬิกาที่ค้างแล้วกระโดด (1-2-3 ... 5)
+//      ฝั่งคอนโทรลเลอร์ยังเป็นเจ้าของค่าจริง ทุกข้อความที่ผ่านการตรวจสอบจะรีเซ็ตทั้งค่าและเวลาที่รับ
+//      ตรงนี้แค่เติมช่วงที่ขาด จึงคลาดเคลื่อนได้ไม่เกินความยาวของช่วงที่ขาดนั้น
+//      การนับต่อเองถูกจำกัดด้วยตัวเฝ้าระวังลิงก์ด้านบน ถ้าเงียบเกิน 2.5 วินาที gLinkUp จะเป็นเท็จ
+//      จอจะเลิกแสดงว่าสถานะยังสด จึงนับต่อไปเรื่อยๆ กับเครื่องที่หยุดไปแล้วไม่ได้
+static uint32_t uiElapsedNow(uint32_t now) {
+  if (!uiRunning || !uiElapsedMoving || uiElapsedRxMs == 0) return uiElapsed;
+  return uiElapsed + (uint32_t)((int32_t)(now - uiElapsedRxMs) / 1000);
 }
 
 // The operator's -/+ taps on the main screen go straight to the controller, live
 // — not through settings, which is deferred to the end of the session.
 // [TH] การกดปุ่ม -/+ ที่หน้าหลักส่งตรงไปคอนโทรลเลอร์ทันที ไม่ผ่านเส้นทางค่าตั้งค่าที่รอจนจบรอบ
 static void onTargetChanged(uint16_t reps) { gLink.sendTarget(reps); }
+static void onJogExitTapped() { gLink.sendJogExit(); }
 
 // The confirm screen's own -/+ taps, mirrored to the controller the same
 // immediate way as onTargetChanged just above — see ui.cpp's confirmStep().
@@ -288,8 +438,46 @@ void setup() {
   //      สายไม่ดี ไฟตก หรือเฟิร์มแวร์ผิดพลาด ซึ่งแก้คนละทางกันหมด
   //      1 คือเปิดเครื่องปกติ 3 คือกดรีเซ็ต 4 คือ watchdog 5 คือโปรแกรมพัง 9 คือไฟตก
   Serial.printf("pt-leg-display boot (reset reason %d)\n", (int)esp_reset_reason());
-  Serial2.begin(115200, SERIAL_8N1, 22, 27);  // UART to controller (CYD free pins) — สาย UART ไปคอนโทรลเลอร์ (ขาว่างของ CYD)
-  uiBegin();
+  // 19200, matching the controller. The link needs under 500 B/s, and a wider
+  // bit is sampled further from its edges — the cheapest noise margin there is
+  // on jumper wire. Both ends must match; flash them together.
+  // [TH] ใช้ 19200 ให้ตรงกับฝั่งคอนโทรลเลอร์ สายนี้ใช้ไม่ถึง 500 ไบต์ต่อวินาที
+  //      บิตที่กว้างขึ้นจะถูกอ่านที่จุดห่างจากขอบมากขึ้น เป็นการเพิ่มความทนต่อสัญญาณรบกวนที่ถูกที่สุดบนสายจัมเปอร์
+  //      ทั้งสองฝั่งต้องตั้งค่าเท่ากัน ต้องแฟลชพร้อมกัน
+  Serial2.begin(19200, SERIAL_8N1, 22, 27);  // UART to controller (CYD free pins) — สาย UART ไปคอนโทรลเลอร์ (ขาว่างของ CYD)
+  // Hold RX high while the controller is idle. Measured on this board: a
+  // floating GPIO 22 prefixed every incoming frame with 25-32 bytes of 0xFF,
+  // which failed the JSON parse and left this screen showing idle through a
+  // whole running session. link.cpp now trims the junk; this stops most of it
+  // being generated. An external 10k to 3V3 is the stronger fix.
+  // [TH] ดึงขารับให้เป็นลอจิกสูงตอนที่คอนโทรลเลอร์ไม่ได้ส่ง
+  //      วัดได้บนบอร์ดนี้: ขา 22 ที่ลอยทำให้ทุกข้อความมีไบต์ 0xFF นำหน้า 25-32 ตัว
+  //      ซึ่งแปลง JSON ไม่ผ่าน จอจึงค้างที่หน้าว่างตลอดรอบที่เครื่องทำงานอยู่
+  //      ตอนนี้ link.cpp ตัดขยะให้แล้ว ส่วนนี้ช่วยไม่ให้เกิดขยะตั้งแต่ต้น
+  //      ถ้ายังมีอยู่ ให้ใส่ตัวต้านทาน 10 กิโลโอห์มไป 3.3V จะแน่นอนกว่า
+  gpio_set_pull_mode(GPIO_NUM_22, GPIO_PULLUP_ONLY);
+  // Three large heap claims, in this order on purpose: the SD mount, the 48 KB
+  // audio buffer, then the 48 KB LVGL draw buffer. Each needs one contiguous
+  // block, and the ESP32 has only one region big enough for more than one of
+  // them. Measured on the board:
+  //  - LVGL first: audio fell to its 24 KB tier and rejected every cue > 1.11 s.
+  //  - audio, LVGL, then SD: the mount failed ("sd card: absent") with 114 KB
+  //    free. Most likely the FAT driver's file table (~25 KB, one block) no
+  //    longer fit; mounted first it takes ~28 KB of the big block, as the
+  //    "largest free block" lines below show.
+  // The screen and the card are on separate SPI ports (USE_HSPI_PORT in
+  // TFT_eSPI_User_Setup.h), so this order costs the card nothing.
+  // The SD mount is the smallest and the one whose failure costs the most (no
+  // roster, no logging, no cues), so it goes first; LVGL goes last because it is
+  // the only one with a degrade ladder that keeps the screen working.
+  // [TH] การจองหน่วยความจำก้อนใหญ่สามรายการเรียงลำดับนี้โดยตั้งใจ: เมานต์การ์ด บัฟเฟอร์เสียง 48 KB แล้วบัฟเฟอร์วาดภาพ LVGL 48 KB
+  //      แต่ละรายการต้องได้หน่วยความจำก้อนเดียวติดกัน และ ESP32 มีบริเวณที่ใหญ่พอสำหรับมากกว่าหนึ่งรายการอยู่บริเวณเดียว
+  //      วัดบนบอร์ดจริง: จองจอก่อน บัฟเฟอร์เสียงตกไปขั้น 24 KB และปฏิเสธเสียงทุกอันที่ยาวเกิน 1.11 วินาที
+  //      จองเสียงกับจอก่อนการ์ด การเมานต์ล้มเหลวทั้งที่ว่าง 114 KB เพราะตารางไฟล์ของไดรเวอร์ FAT (~25 KB ก้อนเดียว) ไม่พอที่
+  //      การ์ดใช้น้อยที่สุดและเสียหายมากที่สุดถ้าล้มเหลว (ไม่มีทะเบียน ไม่มีบันทึก ไม่มีเสียง) จึงไปก่อน
+  //      LVGL ไปท้ายสุดเพราะเป็นรายการเดียวที่มีขั้นลดขนาดซึ่งยังทำให้จอใช้งานได้
+  Serial.printf("heap: largest free block %u before the sd mount\n",
+                (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
   // A missing or unreadable card is not an error worth stopping for: the roster
   // is empty, sessions ring-buffer, and the machine still runs.
   // [TH] ไม่มีการ์ดหรืออ่านการ์ดไม่ได้ ไม่ถือเป็นข้อผิดพลาดที่ต้องหยุดเครื่อง
@@ -298,12 +486,15 @@ void setup() {
                 storePatientCount());
   gCardWasPresent = storeCardPresent();  // boot state, so the first tick is not read as an insertion
   sdlogEnsureHeader();
+  audioBegin();  // prints its own largest-block figure — พิมพ์ขนาดก้อนใหญ่สุดเอง
+  uiBegin();
   // Read before the link comes up: the controller's reply is what triggers
   // reconciliation, and this decides which side of it wins.
   // [TH] อ่านไฟล์ก่อนที่ลิงก์จะพร้อม เพราะการตอบกลับของคอนโทรลเลอร์คือจุดที่เริ่มเทียบค่า
   //      และค่าที่อ่านได้ตรงนี้เป็นตัวตัดสินว่าจะยึดฝั่งใด
   gCardSettings = settingsFileLoad(gLast);
   Serial.printf("settings source: %s\n", gCardSettings ? "sd card" : "controller nvs");
+  audioSetEnabled(gLast.soundOn);
   if (gCardSettings) uiSetDeviceCode(gLast.deviceCode.c_str());
   uitestBegin();  // no-op unless UI_TEST_HOOK — ไม่ทำอะไรเลยถ้าไม่ได้เปิดโหมดทดสอบ
   uiSetCallbacks(onOpenSettings, onOpenData);
@@ -311,6 +502,7 @@ void setup() {
   uiSetSettingsSaved(onSaveFromUi);
   uiSetTargetChanged(onTargetChanged);
   uiSetConfirmCallbacks(onConfirmSets, onConfirmDecision);
+  uiSetJogExit(onJogExitTapped);
   Serial.printf("controller link on %s\n", LINK_OVER_USB ? "USB (bench)" : "Serial2");
 #if LINK_OVER_USB
   gLink.begin(&Serial);
@@ -320,13 +512,72 @@ void setup() {
   gLink.onState = onLinkState;
   gLink.onSettingsReply = onLinkSettingsReply;
   gLink.onDone = onLinkDone;
+  gLink.onStarted = onLinkStarted;
   gLink.sendHello();  // ask controller for current settings + state
+  // Last, so hearing it means the whole init path finished — not merely that the
+  // DAC came up. It is the cheapest end-to-end self-test this board has.
+  // [TH] วางไว้ท้ายสุด การได้ยินเสียงนี้จึงแปลว่าขั้นตอนเริ่มระบบผ่านครบ
+  //      ไม่ใช่แค่ว่า DAC ทำงาน เป็นการทดสอบตั้งแต่ต้นจนจบที่ถูกที่สุดของบอร์ดนี้
+  audioPlay(Cue::Boot);
 }
 
+#if LOOP_DEBUG
+// Counters for the once-a-second summary. A "frame" here is any message the link
+// accepted, spotted by lastRxMs() moving — the display has no per-message hook,
+// and for this question the message type does not matter, only that bytes made
+// it through intact.
+// [TH] ตัวนับสำหรับสรุปทุกหนึ่งวินาที นับ "ข้อความ" จากการที่ค่าเวลารับล่าสุดขยับ
+//      เพราะฝั่งจอไม่มีจุดต่อรายข้อความ และคำถามนี้ไม่สนใจชนิดข้อความ
+//      สนใจแค่ว่ามีข้อมูลผ่านเข้ามาครบถ้วนหรือไม่
+static uint32_t dbgPrevRx = 0;       // last lastRxMs() seen — ค่าเวลารับล่าสุดที่เห็นรอบก่อน
+static uint32_t dbgLastFrameMs = 0;  // when the previous frame landed — เวลาที่ข้อความก่อนหน้ามาถึง
+static uint16_t dbgFrames = 0;       // frames this window — จำนวนข้อความในช่วงนี้
+static uint32_t dbgMaxGapMs = 0;     // longest quiet stretch — ช่วงเงียบที่ยาวที่สุด
+static uint32_t dbgMaxIterMs = 0;    // slowest iteration this window — รอบที่ช้าที่สุด
+static uint32_t dbgWindowMs = 0;     // start of this window — เวลาเริ่มช่วง
+#endif
+
 void loop() {
+#if LOOP_DEBUG
+  uint32_t dbgT0 = millis();
+  uint32_t dbgUiMs = 0, dbgPollMs = 0, dbgDrawMs = 0, dbgSdMs = 0, dbgAudioMs = 0;
+#endif
   uint32_t now = millis();
   uiLoop();
+#if LOOP_DEBUG
+  dbgUiMs = millis() - dbgT0;
+  uint32_t dbgTAudio = millis();
+#endif
+  // Timed separately from uiLoop. Folded in with it, a 4 KB card read during a
+  // cue's load phase was billed to LVGL — and this instrumentation exists to
+  // find loop stalls, so a mislabelled millisecond sends the next investigation
+  // to the wrong file.
+  // [TH] จับเวลาแยกจาก uiLoop ถ้ารวมไว้ด้วยกัน การอ่านการ์ด 4 กิโลไบต์ตอนโหลดเสียง
+  //      จะถูกนับเป็นเวลาของ LVGL และเครื่องมือนี้มีไว้หาจุดที่ลูปค้าง
+  //      มิลลิวินาทีที่ติดป้ายผิดจึงพาการตรวจสอบครั้งถัดไปไปผิดไฟล์
+  audioLoop();  // pumps a loading or playing cue — เดินหน้าเสียงที่กำลังโหลดหรือกำลังเล่น
+#if LOOP_DEBUG
+  dbgAudioMs = millis() - dbgTAudio;
+  uint32_t dbgTPoll = millis();
+#endif
   gLink.poll();
+#if LOOP_DEBUG
+  dbgPollMs = millis() - dbgTPoll;
+  // A frame is only counted once: lastRxMs() holds its arrival time, so a value
+  // that has not moved means nothing new was parsed this pass.
+  // [TH] นับข้อความละครั้งเดียว ค่าเวลารับล่าสุดคือเวลาที่ข้อความมาถึง
+  //      ถ้าค่ายังเท่าเดิมแปลว่ารอบนี้ไม่มีข้อความใหม่ที่อ่านได้
+  uint32_t dbgRx = gLink.lastRxMs();
+  if (dbgRx != dbgPrevRx) {
+    if (dbgLastFrameMs != 0) {
+      uint32_t gap = dbgRx - dbgLastFrameMs;
+      if (gap > dbgMaxGapMs) dbgMaxGapMs = gap;
+    }
+    dbgLastFrameMs = dbgRx;
+    dbgPrevRx = dbgRx;
+    dbgFrames++;
+  }
+#endif
 
   // The controller sends state at ~4 Hz. Nothing for 2.5 s means the link is
   // gone and the cached state is stale, so the UI must stop presenting it as
@@ -348,7 +599,14 @@ void loop() {
   static uint32_t lastUi = 0, lastPing = 0, lastHello = 0;
   if (now - lastUi >= 250) {  // [TH] รีเฟรชหน้าจอ ~4 ครั้ง/วินาที
     lastUi = now;
-    uiUpdateMain(uiRunning, uiPhase, uiElapsed, uiReps, uiTarget, uiWifi, uiServer, gLinkUp);
+#if LOOP_DEBUG
+    uint32_t dbgTDraw = millis();
+#endif
+    uiUpdateMain(uiRunning, uiPhase, uiElapsedNow(now), uiReps, uiTarget, uiWifi, uiServer, gLinkUp,
+                 uiJog);
+#if LOOP_DEBUG
+    dbgDrawMs = millis() - dbgTDraw;
+#endif
     // Phase::Confirm is deliberately excluded from `running` on the
     // controller (session.h there), so uiUpdateMain's own running-based
     // screen switch above never shows this one — it has to be driven off the
@@ -401,6 +659,9 @@ void loop() {
   static uint32_t lastSd = 0;
   if (now - lastSd > 5000) {
     lastSd = now;
+#if LOOP_DEBUG
+    uint32_t dbgTSd = millis();
+#endif
     // Unconditional, where this used to run only with rows waiting or no card
     // mounted. With a card in the slot and nothing to write, the whole block was
     // skipped, so a card swapped on an idle machine was never noticed: the
@@ -458,8 +719,57 @@ void loop() {
       gActiveName = "";
     }
     gCardWasPresent = cardNow;
+#if LOOP_DEBUG
+    dbgSdMs = millis() - dbgTSd;
+#endif
   }
   uitestPoll();  // no-op unless UI_TEST_HOOK — ไม่ทำอะไรเลยถ้าไม่ได้เปิดโหมดทดสอบ
+#if LOOP_DEBUG
+  // Printed before the delay, so the number is the work this pass did rather
+  // than the pacing that follows it.
+  // [TH] พิมพ์ก่อนหน่วงเวลา ตัวเลขจะได้เป็นเวลาที่ใช้ทำงานจริงของรอบนี้ ไม่รวมการหน่วง
+  uint32_t dbgIter = millis() - dbgT0;
+  if (dbgIter > dbgMaxIterMs) dbgMaxIterMs = dbgIter;
+  if (dbgIter >= LOOP_DEBUG_SLOW_MS)
+    Serial.printf("[loop %lu] SLOW iter=%lums ui=%lu audio=%lu poll=%lu draw=%lu sd=%lu\n",
+                  (unsigned long)millis(), (unsigned long)dbgIter, (unsigned long)dbgUiMs,
+                  (unsigned long)dbgAudioMs, (unsigned long)dbgPollMs, (unsigned long)dbgDrawMs,
+                  (unsigned long)dbgSdMs);
+  // The summary is what answers the question. frames≈4/s with a small gap means
+  // the link is healthy and the stutter is in the UI; frames far below 4 or a gap
+  // in the seconds means the data never arrived and the UI is only reporting it.
+  // [TH] บรรทัดสรุปคือคำตอบของคำถามนี้ ถ้ารับได้ราว 4 ครั้ง/วินาที และเว้นช่วงสั้น
+  //      แปลว่าลิงก์ปกติ อาการกระตุกอยู่ที่การแสดงผล
+  //      ถ้ารับได้น้อยกว่านั้นมาก หรือเว้นช่วงเป็นวินาที แปลว่าข้อมูลไม่มาถึง จอแค่รายงานตามที่ได้รับ
+  if (millis() - dbgWindowMs >= 1000) {
+    dbgWindowMs = millis();
+    Serial.printf(
+        "[loop %lu] frames=%u maxgap=%lums maxiter=%lums link=%d elapsed=%lus lines=%lu bad=%lu "
+        "unknown=%lu trimmed=%lu crcbad=%lu nocrc=%lu dupes=%lu retries=%lu txdrop=%lu\n",
+        (unsigned long)dbgWindowMs, (unsigned)dbgFrames, (unsigned long)dbgMaxGapMs,
+        (unsigned long)dbgMaxIterMs, gLinkUp ? 1 : 0, (unsigned long)uiElapsed,
+        (unsigned long)gLink.rxLines, (unsigned long)gLink.rxBad, (unsigned long)gLink.rxUnknown,
+        (unsigned long)gLink.rxTrimmed, (unsigned long)gLink.rxCrcBad,
+        (unsigned long)gLink.rxNoCrc, (unsigned long)gLink.rxDupes,
+        (unsigned long)gLink.txRetries, (unsigned long)gLink.txDropped);
+    // Printed as hex alongside the text: a line that looks plausible on screen
+    // can still carry a flipped bit, and only the byte values show it.
+    // [TH] พิมพ์ทั้งข้อความและค่าฐานสิบหก บรรทัดที่ดูเหมือนปกติอาจมีบิตเพี้ยนอยู่
+    //      ซึ่งเห็นได้จากค่าไบต์เท่านั้น
+    if (gLink.rxLastBad.length()) {
+      Serial.printf("[loop %lu] badline text=[%s]\n", (unsigned long)dbgWindowMs,
+                    gLink.rxLastBad.c_str());
+      Serial.printf("[loop %lu] badline hex=", (unsigned long)dbgWindowMs);
+      for (size_t i = 0; i < gLink.rxLastBad.length() && i < 48; i++)
+        Serial.printf("%02X ", (uint8_t)gLink.rxLastBad[i]);
+      Serial.println();
+      gLink.rxLastBad = "";
+    }
+    dbgFrames = 0;
+    dbgMaxGapMs = 0;
+    dbgMaxIterMs = 0;
+  }
+#endif
   delay(2);
 }
 

@@ -18,6 +18,7 @@ import { usePainLogStore } from './stores/painlog'
 import { useSettingsStore } from './stores/settings'
 import { syncNow } from './lib/api'
 import { syncAlarmFromSettings } from './lib/alarm'
+import { installTapSound } from './lib/tapSound'
 
 const app = createApp(App)
 app.use(createPinia())
@@ -36,6 +37,7 @@ await settingsStore.hydrate()
 
 app.use(router)
 app.mount('#app')
+installTapSound()  // เสียงกดปุ่ม
 
 // [TH] ปุ่มย้อนกลับของ Android: ที่หน้าแรก/ลงทะเบียนให้ย่อแอป หน้าอื่นให้ถอยกลับ
 void CapacitorApp.addListener('backButton', () => {

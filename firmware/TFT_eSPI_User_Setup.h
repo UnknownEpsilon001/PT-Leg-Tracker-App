@@ -6,6 +6,13 @@
 #define TFT_MOSI 13
 #define TFT_SCLK 14
 #define TFT_CS 15
+// The screen gets its own SPI peripheral. Left on TFT_eSPI's default VSPI it
+// shared the SD card's bus (store.cpp, SPIClass(VSPI) on 18/19/23), and the
+// MISO input routing belonged to whichever began last: with the SD card mounted
+// before the screen, every file read after uiBegin() returned junk.
+// [TH] ให้จอใช้ SPI แยกของตัวเอง ถ้าใช้ VSPI ตามค่าเริ่มต้นจะใช้บัสร่วมกับการ์ด SD
+//      และขา MISO จะเป็นของฝ่ายที่เริ่มทีหลัง เมานต์การ์ดก่อนจอแล้ว การอ่านไฟล์หลัง uiBegin() จะได้ขยะ
+#define USE_HSPI_PORT
 #define TFT_DC 2
 #define TFT_RST -1
 #define TFT_BL 21

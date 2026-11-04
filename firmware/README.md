@@ -1,13 +1,15 @@
-# PT Leg Device Firmware
+# Smart OA Knee — Device Firmware
 
 Two ESP32s per machine:
 
 | Sketch | Board | Job |
 |---|---|---|
-| `pt-leg-controller/` | plain ESP32 dev board (`esp32:esp32:esp32`) | relays, timed motion state machine, panel buttons + lamps, Wi-Fi + server client, NVS settings |
+| `pt-leg-controller/` | plain ESP32 dev board (`esp32:esp32:esp32`) | BTS7960 motor drive, timed motion state machine, panel buttons + lamps, Wi-Fi + server client, NVS settings |
 | `pt-leg-display/` | ESP32-2432S028R "Cheap Yellow Display" (`esp32:esp32:esp32`) | LVGL touch UI only |
 
-They talk over UART (115200 8N1, cross-wired RX↔TX + common GND). Protocol:
+They talk over UART (19200 8N1, cross-wired RX↔TX + common GND, each line
+checksummed — **flash both boards together when the protocol changes**).
+Protocol:
 `link-protocol.md`.
 
 Spec: `../docs/superpowers/specs/2026-07-19-esp32-firmware-design.md`
@@ -226,13 +228,153 @@ Three things caught us on the bench, all of them things a clinic tech would hit:
 | Card pulled mid-save | New values go to `/settings.tmp`; the previous file is moved to `/settings.old.json` and only deleted once the new one holds its name, so a settings file always exists |
 | Interrupted save found at boot | `/settings.old.json` is loaded and renamed back — the save is lost, the configuration is not |
 | Card swapped while running | The new card's file is read the next time the settings screen opens |
-| Out-of-range value in the file | Clamped to the settings screen's own limits (`maxTravelSec` 1-20, `liftSec`/`lowerSec` 1-`maxTravelSec`, `holdSec`/`restSec` 1-60, `targetReps` 0-99) and logged, because `maxTravelSec` is the relay safety cap and `liftSec`/`lowerSec` are what actually time the travel |
+| Out-of-range value in the file | Clamped to the settings screen's own limits (`maxTravelSec` 1-20, `liftSec`/`lowerSec` 1-`maxTravelSec`, `holdSec`/`restSec` 1-60, `targetReps` 0-99) and logged, because `maxTravelSec` is the motor safety cap and `liftSec`/`lowerSec` are what actually time the travel |
 
 The Wi-Fi password is plaintext on removable media. That is inherent to editing
 it on a PC, and accepted for a clinic LAN.
 [TH] ค่าตั้งค่าเก็บสองที่: ไฟล์ JSON บนการ์ด SD ของจอ และ NVS ของคอนโทรลเลอร์
      โดยยึดค่าจากการ์ดเป็นหลัก แก้รหัสผ่าน WiFi จากคอมพิวเตอร์ได้ และเปลี่ยนบอร์ดคอนโทรลเลอร์
      ได้โดยไม่ต้องพิมพ์ใหม่ รหัสผ่านเก็บเป็นข้อความธรรมดาบนการ์ด ยอมรับได้สำหรับเครือข่ายในคลินิก
+
+## Spoken cues from the card (`/sounds`)
+
+The display board plays a spoken Thai prompt on four events, through the CYD's
+speaker output on GPIO 26. The switch labelled **เสียง** on the settings screen
+turns them off; the state is the `soundOn` key in `/settings.json`.
+
+| File | Spoken | Fires when |
+|---|---|---|
+| `/sounds/boot.wav` | เครื่องพร้อมใช้งาน | End of `setup()`, so hearing it means the whole init path finished |
+| `/sounds/start.wav` | เริ่มการทำงาน | The controller's one-shot `started` message, when a session's lift begins |
+| `/sounds/stop.wav` | หยุดการทำงาน | A `done` message with the target unmet, or no target set |
+| `/sounds/target.wav` | ครบตามเป้าหมายแล้ว | A `done` message with the rep target reached |
+
+Stop and target are taken from the one-shot `done` message rather than from the
+`running` flag falling, because this board cannot tell a finished session from a
+dropped link — and a machine that says หยุดการทำงาน every time a jumper glitches
+is worse than one that says nothing. Start has no such message, so it edge-detects
+with two guards: the link must be up, and the first state frame after boot only
+seeds the previous value. Without the second, a display restarted beside a running
+machine announces a start that already happened.
+
+**The one accepted format**, and nothing else: RIFF WAV, uncompressed PCM,
+8-bit unsigned, mono, 22050 Hz, at most 49152 bytes of samples (2.23 s). The rate
+is not a preference — `dac_continuous_config_t::freq_hz` has a 19.6 kHz floor on
+the ESP32 with the default clock source. A file that fails any of these is
+rejected with a serial line naming the file and the field, because a silent
+speaker and a rejected file have to be distinguishable without an oscilloscope.
+
+Produce files with the tool rather than by hand:
+
+```bash
+# one file, or a whole folder at once
+powershell -File firmware/tools/make-sounds.ps1 -In .\raw\start.m4a -Out .\sd\sounds\start.wav
+powershell -File firmware/tools/make-sounds.ps1 -In .\raw -Out .\sd\sounds
+```
+
+The four shipped cues in `firmware/sd/sounds/` come from `make-cues.py`: a short
+UI effect from `assets/soundeffectthatifound/UI Sound/`, then the phrase spoken
+by the `th-TH-PremwadeeNeural` voice. To put them on the card, plug the card
+into the PC and double-click `load-sounds.cmd` at the repo root
+(`firmware/tools/load-sounds.ps1`): it finds the card, refuses anything that is
+not FAT32, copies the folder to `/sounds` and checks each copy by hash.
+To rebuild them (needs ffmpeg, `pip install edge-tts` and internet; the phrases
+go to Microsoft's online TTS):
+
+```bash
+python firmware/tools/make-cues.py                          # female voice
+python firmware/tools/make-cues.py --voice th-TH-NiwatNeural  # male voice
+```
+
+It passes its mix through `make-sounds.ps1`, so the checks below still apply.
+
+`make-sounds.ps1` normalises, converts, strips metadata chunks, pads 20 ms of silence at both
+ends, and refuses to write a file over the buffer size. **Loudness is decided
+there or not at all** — there is no gain stage anywhere in the firmware, so a
+quiet recording is a quiet machine and the fix is to re-run the tool, not to
+change a constant.
+
+The padding matters more than it looks. The DAC holds the last code written to
+it, so a clip ending on a loud sample leaves the output there; disabling the
+channel then steps it audibly. Both ends sit at `0x80`, which is silence for
+unsigned 8-bit and the converter's rest value.
+
+Clips are loaded whole into RAM before the first sample is emitted, 4 KB per
+`loop()`, so the card is never read while audio is playing. That is deliberate:
+the stop cue and the `sessions.csv` append are triggered by the same message, and
+streaming would have put an SD read in the middle of the one moment of a session
+anyone is watching.
+
+[TH] บอร์ดจอเล่นเสียงพูดภาษาไทยสี่รายการจากการ์ด ผ่านลำโพงที่ขา 26
+     สวิตช์ "เสียง" บนหน้าตั้งค่าใช้ปิดเสียง โดยเก็บสถานะเป็นคีย์ soundOn ใน /settings.json
+     เสียงหยุดและเสียงครบเป้าหมายมาจากข้อความ done ที่ส่งครั้งเดียวต่อรอบ ไม่ใช่จากสถานะกำลังทำงานที่ตกลง
+     เพราะบอร์ดนี้แยกไม่ออกว่ารอบจบแล้วหรือลิงก์ขาด
+     รูปแบบไฟล์ที่ยอมรับมีแบบเดียว คือ RIFF WAV แบบ PCM 8 บิตไม่มีเครื่องหมาย โมโน 22050 เฮิรตซ์
+     ข้อมูลเสียงไม่เกิน 49152 ไบต์ (2.23 วินาที) ให้สร้างไฟล์ด้วย tools/make-sounds.ps1 ไม่ใช่ทำเอง
+     ความดังถูกกำหนดที่เครื่องมือนั้นที่เดียว เพราะเฟิร์มแวร์ไม่มีการปรับความดังเลย
+     คลิปถูกโหลดเข้าหน่วยความจำจนครบก่อนเล่น การ์ดจึงไม่ถูกอ่านระหว่างมีเสียง
+
+## Host tests (`tests/run-tests.ps1`)
+
+```bash
+# from the repo root
+powershell -File firmware/tests/run-tests.ps1
+```
+
+Compiles `pt-leg-display/wav.cpp` for the PC with `g++` and runs the assertions in
+`tests/wav_test.cpp`. `-Werror` is on.
+
+This covers the WAV header parser and nothing else, which is the honest boundary:
+that file reads bytes and knows nothing about the DAC, the card or LVGL, so it is
+the only part of the audio feature that can be checked without a board. **Do not
+add stubs to widen it** — the result would test the stubs. Everything else is
+covered by the bench checklist below.
+
+If `firmware/.build/sounds/start.wav` exists, the run also feeds a real
+`make-sounds.ps1` output through the same parser the firmware uses, so a change to
+the tool that breaks the format fails here instead of on the bench. Without it the
+run prints a `SKIP:` line and is one check shorter.
+
+[TH] คอมไพล์ wav.cpp บนคอมพิวเตอร์ด้วย g++ แล้วรันชุดทดสอบใน tests/wav_test.cpp
+     ครอบคลุมเฉพาะตัวแยกส่วนหัวไฟล์ WAV เท่านั้น ซึ่งเป็นขอบเขตตามความจริง
+     เพราะไฟล์นั้นอ่านแต่ไบต์ ไม่รู้จัก DAC การ์ด หรือ LVGL
+     ห้ามเพิ่มตัวจำลองเพื่อขยายขอบเขต เพราะจะกลายเป็นการทดสอบตัวจำลองเอง
+     ส่วนที่เหลือใช้รายการตรวจบนโต๊ะแทน
+
+## Audio bench checklist
+
+`UI_TEST_HOOK` cannot hear anything, so every row here needs ears on the bench.
+
+**Do this one first, with no speaker connected.** Some CYD revisions leave the
+amp pads empty and wire the speaker JST straight to GPIO 26. Run `dacWrite(26,
+128)` and measure: the pin reads about 1.65 V on every board, but the JST should
+read near 0 V DC if an amp is present. If the JST reads that same 1.65 V there is
+no amp — do not connect the 8 Ω speaker, fit an external PAM8403 or MAX98357A
+between pin and speaker instead. The firmware is identical either way.
+
+| Check | Passes when |
+|---|---|
+| Touch after `audioBegin()` | Every settings-screen control still responds. Proves the CH1-only channel mask left GPIO 25 alone. |
+| Boot cue | Plays once on a real power cycle, after the UI is up. |
+| Start cue | Fires on the panel START button, once. |
+| Stop cue | Fires on a STOP before the target, once; the target clip does not. |
+| Target cue | With a target of 2, the target clip plays and the stop clip does not. |
+| Target 0 | Target 0, run, press STOP: stop clip, never target. |
+| Start after a stop | Run, STOP, wait for the leg to come down, START again: the start cue plays every time, including the first START after a boot or a jog (which lowers first; the cue comes when the lift begins). |
+| Jog exit | Leave jog by holding both buttons: the leg lowers, and no start cue plays. |
+| Link drop | Pull a UART jumper mid-session and reseat it. **No start cue.** |
+| Display reboot | Reset the display while the controller runs. **No start cue.** |
+| Cue against the SD write | Stop cue and the `sessions.csv` append fire together: audio must not stutter **and** the row must still be written. |
+| Back-to-back cues | Start then stop in quick succession: the second interrupts the first cleanly, no noise, no freeze. |
+| Heap | `ESP.getFreeHeap()` after 20 cues equals the value after the first. |
+| Bad file | A 16-bit WAV in place of a good one prints `rejected — not 8-bit` and makes no noise. |
+| No card | Every cue is a no-op; the machine runs normally. |
+| Sound switch | Off silences all cues and survives a power cycle; check `"soundOn": false` in the file on a PC. |
+| Five settings opens | Open and close the settings screen five times with no freeze. The switch row must be built once, in `buildSettings()`. |
+| Pop | No click at the start or end of any clip. |
+
+[TH] โหมด UI_TEST_HOOK ไม่ได้ยินเสียง ทุกข้อในรายการนี้จึงต้องใช้คนฟังที่หน้าเครื่อง
+     ให้ตรวจว่ามีวงจรขยายเสียงหรือไม่ก่อนเป็นข้อแรก โดยยังไม่ต้องต่อลำโพง
 
 ## Thai keyboard
 
@@ -340,6 +482,56 @@ design never uses — both boards are flashed over USB.
 arduino-cli upload -p COMx --fqbn "esp32:esp32:esp32:PartitionScheme=huge_app" firmware/pt-leg-controller
 arduino-cli upload -p COMy --fqbn "esp32:esp32:esp32:PartitionScheme=huge_app" firmware/pt-leg-display
 ```
+
+`flash.ps1` wraps the above and refuses the two mistakes that produce a board
+which looks broken for reasons its own output never explains — a missing
+`PartitionScheme=huge_app`, and a bench switch (`LINK_OVER_USB`, `UI_TEST_HOOK`,
+`BENCH_DEBUG`, `LOOP_DEBUG`) left at 1. It also runs `sync-shared.ps1 -Check`
+first, so a release cannot go out with the two copies of `link.*` drifted.
+
+```powershell
+.\firmware\tools\flash.ps1                    # interactive menu
+.\firmware\tools\flash.ps1 -Action ports      # identify controller/display COM ports
+.\firmware\tools\flash.ps1 -Action compile -Board both
+.\firmware\tools\flash.ps1 -Action upload -Board display
+.\firmware\tools\flash.ps1 -Action auto -Board both # compile changed code, detect ports, upload
+.\firmware\tools\flash.ps1 -Action auto -Board both -DryRun -Port COM4 -DisplayPort COM5
+.\firmware\tools\flash.ps1 -Action auto -Board controller -Erase # erase, build if needed, upload
+.\firmware\tools\flash.ps1 -Check             # guards only, flash nothing
+.\firmware\tools\flash.ps1 -Action auto -Board both -Port COM4 -DisplayPort COM5
+```
+
+Full-auto mode stores each build and its source hash under ignored
+`firmware/.build/`. If that board's code and required build configuration have
+not changed and every required build artifact still matches its saved SHA-256,
+it skips compilation and uploads the current binary. It identifies this
+machine's controller by its CP210x USB bridge and the CYD display by its
+CH340/CH9102 bridge. Ports are checked before compiling and checked again before
+uploading so an unplug or COM-port move stops the run. Explicit `-Port` and
+`-DisplayPort` values override automatic selection, but a port whose known role
+is the opposite board is rejected. Use `-AllowPortRoleMismatch` only when a
+replacement board intentionally uses a different USB bridge. Missing,
+duplicate, and ambiguous matches stop rather than guessing. `-SkipGuards`
+permits a bench build on purpose, `-DryRun` performs no erase or upload, and
+`-NoCompile` remains an alias for `-Action upload`.
+
+When run without arguments, the interactive menu stays open until **Exit** is
+selected. Board selection also uses numbers: `1` controller, `2` display/CYD,
+or `3` both. A missing/unplugged board, invalid choice, or failed action prints a
+short `Not completed` message and returns to the menu, so the board can be
+connected and the action retried. Explicit command-line actions remain suitable
+for automation: they print one concise error and return a non-zero exit code
+instead of looping forever.
+
+Compile, erase, and upload operations show a PowerShell progress bar. Compile
+percentage is explicitly approximate because Arduino CLI does not report a true
+percentage; upload uses esptool's real write percentage when it is available.
+Compiles run in a separate staging directory. Pressing **Ctrl+C** stops the
+compiler process tree, deletes the incomplete staging build, keeps the previous
+verified build cache byte-for-byte, and returns to the interactive menu. Source
+files are never modified by cancellation. Interrupting an erase or upload cannot
+be made electrically atomic: the script stops cleanly, but the board may contain
+incomplete firmware and must be erased/uploaded again before use.
 
 ## Erase the flash when the partition scheme changes
 
@@ -450,11 +642,10 @@ finishes; from IDLE it zeroes the rep count instead — the job the retired RESE
 button used to do. The debug build prints `EDGE STOP` followed by the phase(s)
 that follow.
 
-Both lamps are the out-of-band readout for the whole bench run: green lit while a
+The lamps are the out-of-band readout for the whole bench run: green lit while a
 session is in progress (including a recovery lowering out of FAULT), yellow lit
-otherwise, and both lit for a latched FAULT. Neither blinks, so the only thing to
-watch is that exactly one is lit outside a fault, and that they swap at the phase
-boundaries and nowhere else. Details in
+otherwise, and blinking for jog mode and a latched FAULT. Outside those two,
+watch that they swap at the phase boundaries and nowhere else. Details in
 [The panel lamps](#the-panel-lamps) below.
 
 `firmware/tools/button-bench.ps1` walks that test as a pass/fail checklist: it
@@ -494,67 +685,179 @@ suspicion; until then a starting press prints
 
 ## The panel lamps
 
-Two 12 V lamps, each switched by its own mechanical relay: green on **GPIO 23**,
-yellow on **GPIO 32**. Exactly one is lit in each of the two normal states, and
-both are lit for a fault:
+Two 12 V lamps on **one changeover relay**, driven from **GPIO 23**: green on the
+relay's NO contact, yellow on NC. The bench machine's second relay channel (the
+old yellow on GPIO 32) died, so both lamps moved onto one channel. The contact
+lights exactly one lamp at any moment:
 
 | Lamps | Means |
 | ----- | ----- |
-| Green only  | a session is in progress and the actuator may move — keep clear |
-| Yellow only | idle; nothing will move on its own |
-| **Both lit** | a latched FAULT — the relays are off, but the leg may be raised |
+| Green  | a session is in progress and the actuator may move — keep clear |
+| Yellow | idle; nothing will move on its own |
+| **Blinking** green/yellow, 1 s | jog mode, or a latched FAULT — motor cut, leg may be raised |
 
 Green is lit on `SessionSM::running()` — LIFT, HOLD, LOWER, REST **and** the
-safe-lower — plus a latched FAULT; yellow is lit whenever the machine is not
-running, plus that same FAULT. So green still answers "may it move" on its own,
-and the both-lit combination is unmistakably abnormal without anything blinking.
-
-A fault used to read plain yellow, identical to an ordinary idle. That is fine
-when a CYD is attached, and wrong without one: on a machine running standalone
+safe-lower, including the lowering that ends jog mode. Jog and a latched FAULT
+blink, so neither reads as an ordinary idle. On a machine running without a CYD
 the panel is the only indicator there is, and an operator reading "ready" on a
 machine that faulted with the leg raised is the one impression this panel must
-not give. It costs two extra contact operations per fault, not a blink, so the
-relay-life argument for never blinking is untouched. What a fault *is* is still
-diagnosed on the CYD, the serial log and the card row.
+not give. What a fault *is* is still diagnosed on the CYD, the serial log and
+the card row. With two relays a fault lit both lamps instead; one changeover
+contact cannot do that.
 
-**Why there is no blinking.** The relay makes every state change a contact
-operation and an audible click. A 5 Hz fault blink is 18,000 operations an hour,
-which retires a ~100k-operation relay in about six hours of one latched fault —
-and an idle heartbeat would grind it down while the machine sat doing nothing at
-all. Solid states cost four operations per session across the pair (both lamps,
-each switching on and off once): at twenty sessions a day that is still roughly
-three and a half years. An earlier version of this file specified 2.5 Hz / 5 Hz /
-heartbeat patterns; those were written for a 3.3 V LED driven straight off the pin
-and do not survive contact with a relay.
+**Keep green on NO.** A relay that is off — controller unpowered, resetting,
+browned out — then shows yellow. Green on NC would light "may move" on a dead
+controller.
 
-If the lamps are ever moved onto MOSFETs or SSRs the constraint disappears and
-patterns become free again — but the semantics above are the ones the panel is
-built and documented around.
+**What blinking costs.** Every toggle is a contact operation and a click. At
+`LAMP_BLINK_HALF_MS` 500 that is 7,200 operations an hour. Jog is short, so it is
+nothing there. A fault blinks until STOP clears it, so a fault left latched
+overnight is about 50k operations, half the life of a ~100k-operation relay.
+That trade was chosen deliberately; solid green and yellow still cost two
+operations per session. If the lamps ever move onto MOSFETs or SSRs the cost
+disappears.
 
 `panelLampsBegin()` and `actuatorBegin()` both write the level **before**
 `pinMode(OUTPUT)`. A pin leaves reset as a high-Z input, and `pinMode(OUTPUT)`
 makes it drive whatever the output register holds — LOW. The board fitted here
 is active-low, so LOW is *energized* and mode-then-write would flick a lamp on
-at every boot, or close both motor relays at once — the pair break-before-make
-exists to keep apart.
+at every boot. The BTS7960's three inputs are active-HIGH so LOW is already safe
+there, but they are written first anyway, so the rule is one rule rather than
+two.
 
 There is deliberately **no power-on lamp test**. Idle is the boot state, so
 yellow comes on and stays on — that is not a lamp test and must not become one:
-the panel is specified to show exactly one lamp at all times, and a green flash
-at power-up would read as the machine starting by itself, the one impression it
-must never give. Test the lamps by starting a session.
+a green flash at power-up would read as the machine starting by itself, the one
+impression it must never give. Test the lamps by starting a session.
 
-`LED_ACTIVE_LOW` is **set** in `config.h`, because the lamps are two more
-channels of the same active-low relay board the motors are on (`RELAY_ACTIVE_LOW`
-is set for the same reason). It covers **both** lamps. Clear it only for a board
-that energizes on HIGH, and **check this before first power-up**: backwards,
-green is lit whenever the machine is idle and yellow while it is working, which
-is the dangerous way round.
+`LED_ACTIVE_LOW` is **set** in `config.h`, because the lamp relay is a channel of
+an active-low relay board. Clear it only for a board that energizes on HIGH, and
+**check this before first power-up**: backwards, green is lit whenever the
+machine is idle and yellow while it is working, which is the dangerous way round.
 
-**Why 23 and 32.** GPIO 23 was already the lamp pin under the single-LED design,
-kept for green. GPIO 32 is the pin the retired TOP limit switch freed — it is not
-a strapping pin and does not glitch at boot the way 0/2/5/12/15 can, and nothing
-else reads it or reserves it.
+GPIO 23 was already the lamp pin under the single-LED design. GPIO 32 is free
+again.
+
+## The motor drive
+
+The two motor relays are gone; a **BTS7960** H-bridge drives the motor through
+`actuator.cpp`, which is still the only file that touches a motor pin.
+
+**Why change.** A relay is on or off, so every stroke started and stopped by
+slamming a loaded leg into and out of full speed. The bridge lets the drive be
+faded, and that fade is the whole point of the change.
+
+**PWM.** LEDC, 20 kHz, 10-bit (`MOTOR_PWM_HZ` / `MOTOR_PWM_BITS`). 20 kHz is
+above hearing, so the patient hears the gearbox and not the drive, and it is
+just under the BTS7960's 25 kHz datasheet ceiling. Drop to 10000 if the module
+runs hot — it will whine, but switching losses fall. 10-bit is the most LEDC
+holds at that frequency. If `ledcAttach` fails, `setup()` prints `LEDC attach
+failed, the motor CANNOT be driven`; that machine will time out every stroke and
+fault with nothing having moved.
+
+**Ramping.** Every stroke fades in over `MOTOR_RAMP_MS` (400 ms) and every
+*normal* stop fades out over the same. That costs travel — roughly half a ramp
+at each end, about 0.4 s of a 7 s stroke — so **`liftSec` and `lowerSec` want
+re-tuning on the bench** after this change.
+
+Ramping is a comfort feature and never a safety one. These paths cut the drive
+dead, with no fade:
+
+| Path | Why |
+|---|---|
+| `Phase::Fault` | something is wrong with a leg that may be raised; another 400 ms of driving is the wrong answer |
+| the energize cap | a stroke that ran long, from either the loop check or the `esp_timer` backstop |
+| a live reversal | STOP during a lift; the dead time follows, the fade does not |
+| `actuatorBegin()` | boot and reset |
+
+`actuatorOff()` is the instant cut and `actuatorSoftOff()` is the fade; once a
+fade has landed the two are identical, which is why `applyActuator()` can call
+soft-off unconditionally for Idle, Hold and Rest.
+
+A fade re-arms the `esp_timer` backstop with a **full** `capMs` rather than a
+short window of its own. A window sized to the ramp is the obvious answer and it
+is wrong: this loop's blocking budget is two 400 ms HTTP timeouts per iteration,
+so an unreachable server routinely costs more wall clock than a ramp, and a
+ramp-sized window would fault the machine in Hold every session the Wi-Fi was
+down. The cost of the full cap is stated plainly in `actuator.cpp`: a stroke
+plus a *stranded* fade can drive for up to twice `capMs` before the backstop
+lands, where the relay build had one.
+
+**There is no firmware-controlled cut in the motor supply.** A relay on GPIO 33
+was designed and then dropped, and the reason is worth keeping: the machine
+already has a panel **emergency stop** that opens the whole 12 V feed — motor
+rail, panel lamps and the controller itself, all together.
+
+That button strictly dominates what the relay could do. Both cover a shorted
+high-side MOSFET, which no amount of firmware can stop, because it drives the
+motor from `B+` regardless of what `EN` and the PWM pins say. Only the button
+also covers a panic in *this* firmware — a relay driven by the firmware cannot
+open when the firmware is the thing that died. The cost is that it is manual and
+needs an operator present, which is already the rule this machine runs under and
+is stated in `config.h`.
+
+So GPIO 33 is free, the machine is down to two relay channels (the two lamps),
+and everything `actuator.cpp` does to stop the motor is a signal-level cut: `EN`
+LOW plus both PWM channels at zero.
+
+## Jog mode — hold a button to move the leg by hand
+
+For bench tuning and for nudging a leg into position. It is a mode, not a second
+meaning for the buttons: outside it START and STOP are exactly the edges they
+have always been, and STOP stays instant.
+
+**Enter:** hold **STOP** for 2 s while the machine is idle (`JOG_ENTER_MS`).
+A normal STOP tap still just clears the rep count — the hold is timed from the
+debounced level, so a tap never accumulates toward it. Once the mode is on,
+nothing drives until both buttons have been let go, so the entry hold never
+turns into a lower and a START line that reads permanently pressed never lifts.
+
+**Use:** hold **START** to raise, **STOP** to lower, at `MOTOR_JOG_DUTY` (half
+duty). Release and the drive fades out. Both buttons held never moves the leg:
+two directions at once has no sensible answer, and guessing one would drive a
+leg the way the operator did not mean.
+
+**Leave:** hold **START and STOP together** for 2 s (`JOG_EXIT_HOLD_MS`), tap
+**ออกจากโหมด** on the CYD (sends `jogexit`), or let 20 s pass with nothing held
+(`JOG_IDLE_EXIT_MS`). Either way the machine then
+lowers the leg in full, the same quiet full-length descent a fault recovery
+uses: green lamp solid, no session, nothing on the card. After the two-button exit,
+STOP has to be let go before a new 2 s entry hold counts, so the exit does not
+walk straight back into the mode. A session starting or a fault latching also
+ends the mode, without the lowering, because the state machine takes the motor.
+
+Entry is a hold on STOP rather than anything involving START because the START
+edge starts a session the instant it is seen: there is no gesture beginning with
+START that does not run the machine first.
+
+Things worth knowing:
+
+- **A jog marks the leg position unknown.** It moved the leg somewhere this
+  firmware cannot know, which is the same state a power cut mid-stroke leaves
+  behind, so it is recorded the same way — the next START lowers in full before
+  it lifts.
+- **The lamps blink green/yellow for the whole mode**, not only while a button
+  is held. A held button moves the leg immediately, so the panel must not read
+  as an ordinary idle at any point while the mode is on.
+- **The CYD shows it too.** The state message carries `"jog":true`, and the main
+  screen swaps the logo for **ปรับตำแหน่งขา** with the hint *ค้าง START ยก / STOP ลด*.
+  The exit lowering shows as an ordinary descent, and plays no start cue: the
+  cue now comes from the controller's one-shot `started` message, not from
+  `running` going true.
+  The settings gear is disabled for the same reason it is during a session.
+- **Direction is a setting, not a wiring rule.** `MOTOR_REVERSED` in `config.h`
+  picks which BTS7960 input lifts. The first bench machine had its motor leads
+  the other way round (Lift went down), so it ships as 1. Check with the leg
+  unloaded: START must raise it.
+- **Every safety path still applies.** Jog drives through the same `request()` a
+  stroke does, so it inherits break-before-make, the 50 ms reversal dead time,
+  the energize cap and its hardware timer unchanged. There is deliberately no
+  second way to drive the motor, because that would be a second way to get the
+  cut wrong. A cap trip ends the press: release both buttons to jog again.
+
+`MOTOR_JOG_DUTY` is a starting guess, not a measurement — see the note in
+`config.h`. Too low and a geared actuator under a loaded leg buzzes without
+moving, which looks exactly like a seized mechanism.
 
 ## The safety nets, and what each one actually covers
 
@@ -562,22 +865,25 @@ The limit switches are gone, and with them went the nets that depended on
 knowing where the leg was — a wiring-fault check on two switches closed at once,
 a bottom-switch-only-if-it-was-clear-at-the-start belief, and an Idle-can-lower
 path keyed off that belief. What is left is smaller and does not pretend to know
-the leg's position: it bounds how long a relay can be energized, and it makes
+the leg's position: it bounds how long the motor can be driven, and it makes
 sure every stop and every recovery drives the same bounded descent whether or
 not that descent actually gets the leg to the bottom.
 
 **1. Break-before-make, plus a 50 ms dead time.** `actuator.cpp` is the only
-file that touches the relay pins. It always de-energizes both before energizing
-one, and on a direction reversal it drops both, waits `DEADTIME_MS`, and
-energizes the new direction from `actuatorTick()`. The wait matters because
-commanding the relays apart is not the same as their contacts being apart: a
-STOP press during a lift goes from UP to SafeLower's DOWN in a single loop
-iteration, and without the wait that reversal relied on the UP relay releasing
-faster than the DOWN one operates — a property of the parts, not of this code,
-and the two are on different connectors.
+file that touches the motor pins. It always zeroes the idle half-bridge before
+raising the driving one, and on a direction reversal it cuts the drive dead,
+waits `DEADTIME_MS`, and drives the new direction from `actuatorTick()`. The
+wait matters because commanding a reversal apart is not the same as it being
+apart: a STOP press during a lift goes from UP to SafeLower's DOWN in a single
+loop iteration, and without the wait a loaded, still-turning motor is slammed
+into reverse in the microseconds between two writes. The BTS7960 survives that;
+the gearbox and the leg on it are what the dead time protects. The same wait
+covers a reversal that catches a soft stop part-way down — a fade is not a
+substitute for it. The relay-era hazard it replaced was contacts that had not
+released yet; the mechanism is the same, the reason is now mechanical.
 
 **2. The travel cap, enforced twice.** `actuatorTick()` checks it every loop,
-and an `esp_timer` one-shot armed on every energize cuts the relays from the
+and an `esp_timer` one-shot armed on every energize cuts the drive from the
 timer task if the loop does not get there. The loop-side check alone was not a
 second net: the failures that make a stroke run long — a network call blocking
 for its timeout, a long flash write — are the same failures that stop the check
@@ -604,7 +910,7 @@ duplicate row on the card.
 There is no confirmation that the descent actually reached the bottom — with the
 limit switches gone the firmware has no way to check, which is stated plainly in
 `config.h`: a slipping belt, a jammed actuator and a clean stroke all look
-identical to this firmware, "the relay was energized for `lowerSec`". A recovery
+identical to this firmware, "the motor was driven for `lowerSec`". A recovery
 that does not really clear whatever jammed the actuator is indistinguishable, to
 the firmware, from one that does; both simply run `lowerSec` and land in Idle.
 That is why the machine must not run unattended with a leg loaded on it — the
@@ -649,7 +955,7 @@ regardless, so this refusal never costs the machine its only way to stop.
 
 ### What the firmware cannot fix
 
-A DOWN relay that has failed open, or a jammed actuator, leaves no way down by
+A BTS7960 output that has failed open, or a jammed actuator, leaves no way down by
 any command: every descent is a bounded `lowerSec` stroke and nothing here can
 tell whether the leg actually moved. Strokes stay bounded and the machine can
 always be told to try again — START or STOP from a latched Fault both drive
@@ -680,16 +986,24 @@ patient-facing machine it recovers instead of appearing bricked.
 
 ## Wiring
 
-- Controller relays: UP GPIO 22, DOWN GPIO 27, active-low (`RELAY_ACTIVE_LOW`
-  set). There are no limit switches — travel is timed by `liftSec`/`lowerSec`,
-  both editable and capped by `maxTravelSec`.
+- Motor drive: a **BTS7960** H-bridge module. RPWM GPIO 22 (P3 connector), LPWM
+  GPIO 27 (CN1) — the two wires the relay coils used, so the harness is
+  unchanged. `R_EN` and `L_EN` are wired **together** to GPIO 4. All three are
+  active-HIGH and LOW is the safe level on each; there is no `RELAY_ACTIVE_LOW`
+  for the motor any more. There are no limit switches — travel is timed by
+  `liftSec`/`lowerSec`, both editable and capped by `maxTravelSec`.
+- Emergency stop: a panel button that opens the whole 12 V supply — motor rail,
+  lamps and the controller together. It is the machine's only hardware cut and
+  the only thing that stops a shorted output FET. Not wired to any GPIO.
 - Panel buttons: START GPIO 25, STOP GPIO 26. Momentary, INPUT_PULLUP, other
   side to GND; both normally-open (`BTN_START_NC` / `BTN_STOP_NC`, both `0` in
-  `config.h`). GPIO 4 and GPIO 33 are free — nothing reads them and nothing
-  reserves them.
-- Panel lamps: green GPIO 23, yellow GPIO 32, each a 12 V lamp through its own
-  relay. Green lit while a session is in progress, yellow while idle, **both**
-  lit for a latched FAULT — one lamp in each normal state, never blinking. The
-  relay board is active-low, so `LED_ACTIVE_LOW` is set; it covers both lamps.
+  `config.h`). GPIO 33 is free — nothing reads it and nothing reserves it.
+- Panel lamps: one relay on GPIO 23, green on its NO contact and yellow on NC.
+  Green while a session is in progress, yellow while idle, blinking for jog mode
+  and a latched FAULT. The relay board is active-low, so `LED_ACTIVE_LOW` is set.
+  GPIO 32 is free.
 - UART: controller GPIO 16 (RX) / 17 (TX) ↔ CYD GPIO 22 (RX) / 27 (TX),
-  cross-wired, common GND. 115200 8N1. Pins to be confirmed on the bench.
+  cross-wired, common GND. 19200 8N1, bench-confirmed. Both RX pins enable their
+  internal pull-up in `setup()`; a floating RX prefixes every frame with `0xFF`
+  junk, and the ~45k internal is weak enough that a **10k to 3V3 on the CYD's
+  GPIO 22** is still worth fitting — watch `rxTrimmed` to tell.

@@ -35,8 +35,11 @@ void uiShowFinish(const char* patientName, uint32_t durationSec, uint16_t reps,
 // not keep presenting the last known state as if it were live.
 // [TH] linkUp เป็น false = ไม่ได้รับข้อมูลจากคอนโทรลเลอร์เมื่อเร็วๆ นี้
 //      จอต้องไม่แสดงสถานะเก่าราวกับว่ายังสด
+// jog = the controller is in panel jog mode; the screen replaces the logo with
+// the button hint so the operator can see the mode is on.
+// [TH] jog = คอนโทรลเลอร์อยู่ในโหมดขยับเอง จอจะแสดงคำแนะนำปุ่มแทนโลโก้ ผู้ใช้จะได้เห็นว่าโหมดเปิดอยู่
 void uiUpdateMain(bool running, Phase phase, uint32_t elapsedSec, uint16_t reps,
-                  uint16_t target, bool wifiUp, bool serverUp, bool linkUp);
+                  uint16_t target, bool wifiUp, bool serverUp, bool linkUp, bool jog);
 void uiSetDeviceCode(const char* code);  // ตั้งรหัสอุปกรณ์ที่แสดงบนจอ
 // Main-screen target stepper. The controller owns the target: this only reports
 // a change the operator made; the label itself follows the next state message.
@@ -68,8 +71,8 @@ void uiSetTargetChanged(void (*cb)(uint16_t));
 // controllerTarget is target() as echoed back over the state message -- while
 // Confirm, that is pendingTargetReps, not the stored prescription (session.h's
 // target()), and it is the only proof this screen has that an edit actually
-// reached the controller: the "sets" message that carries an edit down is a
-// bare emit() with no ack on this branch (link.cpp). This value is seeded onto
+// reached the controller: the "sets" message that carries an edit down is
+// acknowledged by the link layer, but an ack is not the session applying it. This value is seeded onto
 // the on-screen number exactly once -- the first call after the screen was
 // not already the active one, i.e. the transition into Confirm -- and every
 // later call while it stays active instead compares the same argument against
@@ -100,8 +103,8 @@ void uiSetTargetChanged(void (*cb)(uint16_t));
 //
 //      controllerTarget คือค่า target() ที่สะท้อนกลับมาทางข้อความสถานะ ขณะอยู่สถานะรอยืนยันคือ
 //      pendingTargetReps ไม่ใช่ค่าที่แพทย์สั่ง (ดู target() ใน session.h) และเป็นหลักฐานเดียวที่หน้าจอนี้มี
-//      ว่าการแก้ไขไปถึงคอนโทรลเลอร์จริงหรือไม่ เพราะข้อความ "sets" ที่ส่งการแก้ไขลงไปเป็นแค่ emit() เปล่าๆ
-//      ไม่มีการยืนยันรับบนสายนี้ (link.cpp) ค่านี้จะถูกใช้ตั้งต้นตัวเลขบนจอครั้งเดียวเท่านั้น คือการเรียกครั้งแรก
+//      ว่าการแก้ไขไปถึงคอนโทรลเลอร์จริงหรือไม่ เพราะข้อความ "sets" ที่ส่งการแก้ไขลงไปได้รับการตอบรับจากชั้นลิงก์
+//      แต่การตอบรับไม่ได้แปลว่ารอบนำค่าไปใช้แล้ว ค่านี้จะถูกใช้ตั้งต้นตัวเลขบนจอครั้งเดียวเท่านั้น คือการเรียกครั้งแรก
 //      หลังจากที่หน้าจอนี้ยังไม่ใช่หน้าที่กำลังแสดงอยู่ (นั่นคือจังหวะเพิ่งเข้าสถานะรอยืนยัน) ส่วนการเรียกครั้งถัดไป
 //      ขณะที่ยังแสดงอยู่จะนำอาร์กิวเมนต์เดียวกันนี้ไปเทียบกับตัวเลขที่แสดงอยู่แล้วแทน แสดงความไม่ตรงกันที่ค้างอยู่
 //      เกินช่วงผ่อนผันสั้นๆ เป็นสถานะยังไม่ยืนยัน แทนที่จะยอมรับเงียบๆ หรือส่งซ้ำเอง ความไม่ตรงกันแค่หนึ่งรอบ
@@ -115,6 +118,8 @@ void uiShowConfirm(uint16_t controllerTarget, const DeviceSettings& s, bool link
 // ปุ่ม -/+ (onSets ส่ง sendSets) และ ตกลง/ยกเลิก (onConfirm ส่ง sendConfirm: true=ตกลง, false=ยกเลิก)
 void uiSetConfirmCallbacks(void (*onSets)(uint16_t), void (*onConfirm)(bool));
 
+// Tapped the on-screen jog exit — แตะปุ่มออกจากโหมดขยับเองบนจอ
+void uiSetJogExit(void (*cb)());
 void uiOpenSettings(const DeviceSettings& current);  // เปิดหน้าตั้งค่าพร้อมค่าปัจจุบัน
 void uiSetSettingsSaved(void (*onSave)(const DeviceSettings&));
 // SAVE stays disabled until the controller has sent its settings at least once,

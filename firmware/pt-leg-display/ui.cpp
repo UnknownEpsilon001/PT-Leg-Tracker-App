@@ -170,7 +170,7 @@ void uiBegin() {
 
 static lv_obj_t *scrMain, *lblClock, *lblReps, *lblPhase, *lblPhaseTimer, *lblStatus;
 static lv_obj_t *lblCode, *btnGear, *btnData, *imgLogo;
-static lv_obj_t *rowTarget;
+static lv_obj_t *rowTarget, *btnJogExit;
 // Declared here, ahead of the settings screen's other spinboxes further down, so
 // that uiUpdateMain (below) can keep it synced to the live target — see the
 // comment at that call site for why. Not grouped with spinMax/spinLift/etc. only
@@ -223,6 +223,12 @@ void uiSetCallbacks(void (*onOpenSettings)(), void (*onOpenData)()) {
 }
 
 void uiSetTargetChanged(void (*cb)(uint16_t)) { cbTarget = cb; }
+
+static void (*cbJogExit)() = nullptr;
+void uiSetJogExit(void (*cb)()) { cbJogExit = cb; }
+static void jogExitClicked(lv_event_t*) {
+  if (cbJogExit) cbJogExit();
+}
 
 static void gearClicked(lv_event_t*) {
   if (uiRunning) return;  // STOP must stay reachable during a session
@@ -347,6 +353,16 @@ static void buildMain() {
   lv_obj_set_size(btnTargetPlus, 38, 36);
   lv_obj_align(btnTargetPlus, LV_ALIGN_RIGHT_MID, 0, 0);
 
+  // Jog-mode exit, in the slot the phase timer leaves empty while jog is shown —
+  // high enough to clear the device code at the bottom edge. The controller
+  // lowers the leg on the way out, as for the panel exits.
+  // [TH] ปุ่มออกจากโหมดขยับเอง วางในตำแหน่งที่ตัวจับเวลาเว้นว่างไว้ตอนแสดงโหมดนี้
+  //      สูงพอที่จะไม่ทับรหัสเครื่องที่ขอบล่าง คอนโทรลเลอร์จะลดขาลงตอนออก เหมือนการออกด้วยปุ่มหน้าปัด
+  btnJogExit = makeBtn(scrMain, "ออกจากโหมด", COL_SURFACE, &thai20, jogExitClicked);
+  lv_obj_set_size(btnJogExit, 170, 40);
+  lv_obj_align(btnJogExit, LV_ALIGN_TOP_MID, 0, 166);
+  lv_obj_add_flag(btnJogExit, LV_OBJ_FLAG_HIDDEN);
+
   lblPhase = lv_label_create(scrMain);
   lv_obj_set_style_text_font(lblPhase, &thai20, 0);
   lv_obj_set_style_text_color(lblPhase, lv_color_hex(COL_MUTED), 0);
@@ -399,20 +415,21 @@ static const char* phaseName(Phase p) {
 }
 
 void uiUpdateMain(bool running, Phase phase, uint32_t elapsedSec, uint16_t reps,
-                  uint16_t target, bool wifiUp, bool serverUp, bool linkUp) {
+                  uint16_t target, bool wifiUp, bool serverUp, bool linkUp, bool jog) {
   // Repainting identical text still copies the string and invalidates the area,
   // so an idle screen would redraw four times a second for nothing.
   // [TH] วาดข้อความเดิมซ้ำก็ยังกินงาน จึงข้ามการอัปเดตถ้าค่าไม่เปลี่ยน กันจอวาดซ้ำ 4 ครั้ง/วินาทีเปล่าๆ
   static bool first = true;
-  static bool pRunning, pWifi, pServer, pLink;
+  static bool pRunning, pWifi, pServer, pLink, pJog;
   static Phase pPhase;
   static uint32_t pElapsed;
   static uint16_t pReps, pTarget;
   static uint32_t phaseTimerStartMs = 0;  // display's own millis() at the last phase edge
   if (!first && running == pRunning && phase == pPhase && elapsedSec == pElapsed &&
       reps == pReps && target == pTarget && wifiUp == pWifi && serverUp == pServer &&
-      linkUp == pLink)
+      linkUp == pLink && jog == pJog)
     return;
+  pJog = jog;
   // The wire only carries total session elapsed, not per-phase, so the in-phase
   // timer below is clocked locally from the phase edge. The mirrored 250 ms
   // UI/state refresh keeps the drift within a tick.
@@ -512,7 +529,11 @@ void uiUpdateMain(bool running, Phase phase, uint32_t elapsedSec, uint16_t reps,
   // a display with no controller attached is the most common idle case, and
   // hiding the branding there left no state that ever showed it. Link trouble is
   // reported in the status corner instead.
-  bool showLogo = !running && !fault;
+  // Jog only counts while the link is up: a stale flag must not hold the hint on
+  // a screen that can no longer hear the controller.
+  // [TH] นับโหมดขยับเองเฉพาะตอนลิงก์ใช้งานได้ ค่าเก่าที่ค้างอยู่ต้องไม่ทำให้คำแนะนำค้างบนจอที่ไม่ได้ยินคอนโทรลเลอร์แล้ว
+  bool jogShown = jog && linkUp && !running && !fault;
+  bool showLogo = !running && !fault && !jogShown;
   if (showLogo) {
     lv_obj_clear_flag(imgLogo, LV_OBJ_FLAG_HIDDEN);
     lv_obj_fade_in(imgLogo, 200, 0);
@@ -544,10 +565,29 @@ void uiUpdateMain(bool running, Phase phase, uint32_t elapsedSec, uint16_t reps,
   lv_obj_set_style_text_opa(lblClock, linkUp ? LV_OPA_COVER : LV_OPA_50, 0);
   lv_obj_set_style_text_opa(lblReps, linkUp ? LV_OPA_COVER : LV_OPA_50, 0);
 
+  // Jog mode: the clock, target row and phase timer mean nothing here, so the
+  // reps line becomes the mode name and the phase line the button hint. Wording
+  // keeps clear of vowel-over-tone stacks (no ขึ้น), the same rule as phaseName().
+  // [TH] โหมดขยับเอง: นาฬิกา แถวเป้าหมาย และตัวจับเวลาไม่มีความหมาย
+  //      บรรทัดจำนวนรอบจึงแสดงชื่อโหมด และบรรทัดสถานะแสดงคำแนะนำปุ่ม
+  //      ถ้อยคำเลี่ยงสระบนซ้อนวรรณยุกต์ (ไม่ใช้คำว่า ขึ้น) ตามกฎเดียวกับ phaseName()
+  if (jogShown) {
+    lv_obj_add_flag(lblClock, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(rowTarget, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(lblPhaseTimer, LV_OBJ_FLAG_HIDDEN);
+    lv_label_set_text(lblReps, "ปรับตำแหน่งขา");
+    lv_label_set_text(lblPhase, "ค้าง START ยก / STOP ลด");
+    lv_obj_set_style_text_color(lblPhase, lv_color_hex(COL_TEXT), 0);
+    lv_obj_clear_flag(btnJogExit, LV_OBJ_FLAG_HIDDEN);
+  } else {
+    lv_obj_add_flag(btnJogExit, LV_OBJ_FLAG_HIDDEN);
+  }
+
   // While a session runs, STOP must stay one tap away - the settings screen has
   // no stop control, and the controller's UART watchdog will not help because
-  // the display keeps pinging from in there.
-  if (running) lv_obj_add_state(btnGear, LV_STATE_DISABLED);
+  // the display keeps pinging from in there. Jog moves the leg too, so the gear
+  // stays off for the same reason.
+  if (running || jogShown) lv_obj_add_state(btnGear, LV_STATE_DISABLED);
   else lv_obj_clear_state(btnGear, LV_STATE_DISABLED);
 
   if (linkUp) {
@@ -567,7 +607,8 @@ void uiUpdateMain(bool running, Phase phase, uint32_t elapsedSec, uint16_t reps,
 //      ตัวจัดการเปรียบเทียบด้วยสตริง จึงต้องนิยามไว้ที่เดียว
 #define SCAN_PLACEHOLDER "(เลือกเครือข่าย)"
 
-static lv_obj_t *scrSettings, *taSsid, *taPass, *taServer, *taCode, *kb, *ddScan, *colSettings;
+static lv_obj_t *scrSettings, *taSsid, *taPass, *taServer, *taCode, *kb, *ddScan, *colSettings,
+    *swSound;
 static lv_obj_t *spinMax, *spinLift, *spinLower, *spinHold, *spinRest, *btnSave, *btnReset;
 static void (*cbSave)(const DeviceSettings&) = nullptr;
 static bool settingsKnown = false;  // has the controller ever sent its settings?
@@ -829,6 +870,16 @@ static void saveClicked(lv_event_t*) {
   s.lowerSec = (uint16_t)lv_spinbox_get_value(spinLower);
   s.restSec = (uint16_t)lv_spinbox_get_value(spinRest);
   s.targetReps = (uint16_t)lv_spinbox_get_value(spinTarget);
+  // Mandatory, not optional. `DeviceSettings s;` above default-constructs its
+  // Strings but leaves every scalar indeterminate — the assignments in this
+  // block are the only reason the others hold real values. A soundOn left
+  // unassigned here is garbage, not false, and it would go straight into gLast,
+  // into /settings.json and into audioSetEnabled.
+  // [TH] บรรทัดนี้จำเป็น ไม่ใช่ทางเลือก การประกาศ DeviceSettings s; ด้านบนสร้างเฉพาะส่วน String
+  //      ส่วนตัวเลขและบูลีนยังไม่มีค่าที่แน่นอน การกำหนดค่าในบล็อกนี้คือเหตุผลเดียวที่ฟิลด์อื่นมีค่าจริง
+  //      ถ้าไม่กำหนด soundOn ตรงนี้ ค่าที่ได้คือค่าขยะ ไม่ใช่ค่าเท็จ
+  //      และจะถูกส่งต่อไปยัง gLast ไปยัง /settings.json และไปยัง audioSetEnabled ทันที
+  s.soundOn = lv_obj_has_state(swSound, LV_STATE_CHECKED);
   if (cbSave) cbSave(s);
   hideKeyboard();
   // Stay only when a card was in the slot and refused the write — that is a
@@ -900,16 +951,25 @@ static void spinUp(lv_event_t* e) {
 // value through lv_spinbox_increment/decrement, so it needs its own -/+ keys.
 // One row per setting keeps the touch targets big enough to hit on a resistive
 // panel.
-static lv_obj_t* makeSpinRow(lv_obj_t* parent, const char* label, int val,
-                             int lo, int hi) {
+// A settings row: full width, fixed height, muted label on the left, and the
+// caller's control on the right. Shared so the geometry and the tap-bubbling
+// contract below are stated once — the spinbox and switch rows have to line up,
+// and a change made to only one of two copies would break that silently.
+// [TH] แถวของหน้าตั้งค่า กว้างเต็ม สูงคงที่ ป้ายสีจางอยู่ซ้าย ส่วนตัวควบคุมของผู้เรียกอยู่ขวา
+//      แยกออกมาใช้ร่วมกันเพื่อให้ขนาดและกติกาการส่งต่อการแตะด้านล่างถูกเขียนไว้ที่เดียว
+//      แถวช่องตัวเลขกับแถวสวิตช์ต้องเรียงตรงกัน การแก้เพียงสำเนาเดียวจากสองชุดจะทำให้เพี้ยนแบบเงียบๆ
+static lv_obj_t* makeRow(lv_obj_t* parent, const char* label) {
   lv_obj_t* row = lv_obj_create(parent);
   lv_obj_set_size(row, lv_pct(100), 42);
   lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
   lv_obj_set_style_border_width(row, 0, 0);
   lv_obj_set_style_pad_all(row, 0, 0);
   lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
-  // Let taps on the row's own background reach the column's dismiss handler. The
-  // -/+ buttons are children without this flag, so their clicks stay theirs.
+  // Let taps on the row's own background reach the column's dismiss handler.
+  // Controls added by the caller are children without this flag, so their clicks
+  // stay theirs.
+  // [TH] ให้การแตะพื้นหลังของแถวไปถึงตัวจัดการปิดแป้นพิมพ์ของคอลัมน์
+  //      ตัวควบคุมที่ผู้เรียกเพิ่มเข้ามาเป็นลูกที่ไม่มีแฟล็กนี้ การแตะจึงยังเป็นของมันเอง
   lv_obj_add_flag(row, LV_OBJ_FLAG_EVENT_BUBBLE);
 
   lv_obj_t* l = lv_label_create(row);
@@ -917,6 +977,12 @@ static lv_obj_t* makeSpinRow(lv_obj_t* parent, const char* label, int val,
   lv_obj_set_style_text_color(l, lv_color_hex(COL_MUTED), 0);
   lv_label_set_text(l, label);
   lv_obj_align(l, LV_ALIGN_LEFT_MID, 0, 0);
+  return row;
+}
+
+static lv_obj_t* makeSpinRow(lv_obj_t* parent, const char* label, int val,
+                             int lo, int hi) {
+  lv_obj_t* row = makeRow(parent, label);
 
   lv_obj_t* sp = lv_spinbox_create(row);
   lv_spinbox_set_range(sp, lo, hi);
@@ -939,6 +1005,19 @@ static lv_obj_t* makeSpinRow(lv_obj_t* parent, const char* label, int val,
   lv_obj_align(plus, LV_ALIGN_RIGHT_MID, 0, 0);
   lv_obj_add_event_cb(plus, spinUp, LV_EVENT_CLICKED, sp);
   return sp;
+}
+
+// Same row as the spinboxes, with a switch on the right instead of a spinbox and
+// its two buttons.
+// [TH] ใช้แถวเดียวกับช่องตัวเลข ต่างกันตรงที่ด้านขวาเป็นสวิตช์ ไม่ใช่ช่องตัวเลขกับปุ่มสองปุ่ม
+static lv_obj_t* makeSwitchRow(lv_obj_t* parent, const char* label, bool on) {
+  lv_obj_t* row = makeRow(parent, label);
+
+  lv_obj_t* sw = lv_switch_create(row);
+  lv_obj_set_size(sw, 50, 28);
+  lv_obj_align(sw, LV_ALIGN_RIGHT_MID, 0, 0);
+  if (on) lv_obj_add_state(sw, LV_STATE_CHECKED);
+  return sw;
 }
 
 // Built exactly once. Rebuilding it per open leaked ~8.9 KB of LVGL's 48 KB
@@ -1038,9 +1117,9 @@ static void buildSettings() {
   makeField(col, "รหัสอุปกรณ์", "KNEE-01", false, &taCode);
 
   // MAX TRAVEL is the safety cap the whole switch-timeout story rests on: it is
-  // how long a relay may stay energized with no end-of-travel switch closing.
+  // how long the motor may keep driving with no end-of-travel switch closing.
   // Its ceiling is deliberately far lower than HOLD/REST.
-  // [TH] MAX TRAVEL คือเพดานความปลอดภัยหลัก: เวลาที่รีเลย์จ่ายไฟได้โดยไม่มีสวิตช์ปลายทางปิด
+  // [TH] MAX TRAVEL คือเพดานความปลอดภัยหลัก: เวลาที่ขับมอเตอร์ได้โดยไม่มีสวิตช์ปลายทางปิด
   //      เพดานของมันตั้งไว้ต่ำกว่า HOLD/REST มากโดยตั้งใจ
   spinMax = makeSpinRow(col, "เวลาเดินทางสูงสุด (วิ)", 8, 1, 20);
   spinLift = makeSpinRow(col, "ยกขึ้น (วิ)", 7, 1, 20);
@@ -1048,6 +1127,16 @@ static void buildSettings() {
   spinLower = makeSpinRow(col, "ลดลง (วิ)", 7, 1, 20);
   spinRest = makeSpinRow(col, "พัก (วิ)", 10, 1, 60);
   spinTarget = makeSpinRow(col, "จำนวนครั้ง (0=ไม่จำกัด)", 10, 0, 99);
+  // "เสียง" and not "ปิดเสียง": positive sense matches the stored field, and the
+  // word has no vowel stacked over a tone mark, which this LVGL build cannot
+  // shape. Built here, with the rest of the screen — see the note above: this
+  // function runs exactly once, and creating widgets per open is what leaked the
+  // LVGL pool and froze the board on the fifth open.
+  // [TH] ใช้คำว่า "เสียง" ไม่ใช่ "ปิดเสียง" เพราะความหมายเชิงบวกตรงกับค่าที่เก็บไว้
+  //      และคำนี้ไม่มีสระซ้อนกับวรรณยุกต์ ซึ่ง LVGL รุ่นนี้จัดวางให้ไม่ได้
+  //      สร้างไว้ตรงนี้พร้อมกับส่วนอื่นของหน้าจอ ตามหมายเหตุด้านบน ฟังก์ชันนี้ทำงานครั้งเดียวเท่านั้น
+  //      การสร้างวิดเจ็ตใหม่ทุกครั้งที่เปิดคือสาเหตุที่หน่วยความจำ LVGL รั่วและเครื่องค้างตอนเปิดครั้งที่ห้า
+  swSound = makeSwitchRow(col, "เสียง", true);
 
   // The keyboard comes down before the dialog goes up. Both ways out of the
   // dialog return with lv_scr_load(scrSettings) rather than uiOpenSettings, so
@@ -1100,6 +1189,12 @@ void uiOpenSettings(const DeviceSettings& cur) {
   lv_spinbox_set_value(spinHold, cur.holdSec);
   lv_spinbox_set_value(spinLower, cur.lowerSec);
   lv_spinbox_set_value(spinRest, cur.restSec);
+  // Value set here, widget created in buildSettings(). Creating it here instead
+  // is the LVGL pool leak this screen already learned about once.
+  // [TH] ตั้งค่าตรงนี้ แต่สร้างวิดเจ็ตใน buildSettings()
+  //      ถ้าสร้างตรงนี้แทน จะเกิดหน่วยความจำ LVGL รั่วแบบที่หน้าจอนี้เคยเจอมาแล้ว
+  if (cur.soundOn) lv_obj_add_state(swSound, LV_STATE_CHECKED);
+  else lv_obj_clear_state(swSound, LV_STATE_CHECKED);
   // Seeded from uiTargetShown, NOT cur.targetReps. cur is gLast, which only
   // moves on a "settings" reply (boot/hello) — it does not see a live
   // {"t":"target"} round trip, so it can be behind by however long ago the

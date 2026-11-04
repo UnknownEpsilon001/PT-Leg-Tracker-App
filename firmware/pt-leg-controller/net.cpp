@@ -1,5 +1,5 @@
 // ตัวรับส่งข้อมูลกับเซิร์ฟเวอร์ผ่าน HTTP: ทำงานบนคอร์เดียวกับลูปความปลอดภัย
-// จึงตั้งค่า timeout ให้สั้น เพื่อไม่ให้บล็อกการอ่านลิมิตสวิตช์และเพดานเวลารีเลย์
+// จึงตั้งค่า timeout ให้สั้น เพื่อไม่ให้บล็อกการอ่านปุ่มและเพดานเวลาจ่ายไฟ
 // Server HTTP client. Runs on the same core as the safety loop, so timeouts are
 // kept short to avoid starving the limit-switch / actuator-cap servicing.
 #include "net.h"
@@ -29,11 +29,11 @@ static int evHead = 0, evCount = 0;
 // never accepts stays queued forever, so the safety loop would drop from
 // hundreds of iterations per second to two: the limit switches need two samples
 // 25 ms apart to be believed, and the panel STOP button the same, so both would
-// answer most of a second late while the relay is still driving.
+// answer most of a second late while the motor is still driving.
 // [TH] คิวที่ส่งไม่สำเร็จต้องไม่ลองใหม่ทุกรอบลูป
 //      การลองแต่ละครั้งเสียเวลาเท่ากับ timeout เต็มๆ และเหตุการณ์ที่เซิร์ฟเวอร์ไม่รับจะค้างตลอดไป
 //      ลูปความปลอดภัยจะเหลือแค่ไม่กี่รอบต่อวินาที ลิมิตสวิตช์ต้องอ่านสองครั้งห่างกัน 25 มิลลิวินาที
-//      ปุ่ม STOP ก็เช่นกัน ทั้งคู่จึงตอบสนองช้าเกือบวินาทีทั้งที่รีเลย์ยังทำงานอยู่
+//      ปุ่ม STOP ก็เช่นกัน ทั้งคู่จึงตอบสนองช้าเกือบวินาทีทั้งที่มอเตอร์ยังขับอยู่
 static const uint32_t EV_RETRY_MS = 3000;
 static uint32_t evNextTryMs = 0;
 

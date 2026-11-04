@@ -14,12 +14,11 @@
 # Then (port auto-detected; pass -Port COMx to override):
 #   .\firmware\tools\button-bench.ps1
 #
-# Two panel lamps are the out-of-band check throughout: green on GPIO 23 lit
-# whenever a session is in progress (including the safe-lower), yellow on
-# GPIO 32 lit while idle, and BOTH lit for a latched FAULT. Outside a fault
-# exactly one must be lit - never neither. Neither blinks - they are 12 V
-# lamps on relays, so they only ever switch at a phase boundary, and you
-# should hear a relay click each time. If a step's serial output disagrees
+# The panel lamps are the out-of-band check throughout: one changeover relay
+# on GPIO 23, green on NO lit whenever a session is in progress (including the
+# safe-lower), yellow on NC lit while idle, and blinking once a second for jog
+# mode and a latched FAULT. Outside those two the relay only ever switches at a
+# phase boundary, and you should hear a click each time. If a step's serial output disagrees
 # with the lamps, trust neither and check wiring.
 #
 # Wiring: both buttons are normally-open on INPUT_PULLUP, so an open pin is
@@ -48,7 +47,7 @@ $ErrorActionPreference = "Stop"
 # here first, instead of on the bench with jumpers in hand.
 $script:dryTranscript = @(
     'pt-leg-controller 0.1.0 ssid=ClinicWiFi server=http://192.168.0.12:8000 code=default cycle lift/hold/lower/rest=7/10/7/10 target=10'
-    'debug prints ON - btn start=25(NO) stop=26(NO), lamps green=23 yellow=32'
+    'debug prints ON - btn start=25(NO) stop=26(NO), lamp relay=23'
     '[dbg 210] btn levels start=HIGH/rest stop=HIGH/rest'
     '[dbg 210] phase=IDLE reps=0 elapsed=0s'
     '[dbg 5100] EDGE START'
@@ -68,7 +67,7 @@ $script:dryTranscript = @(
     '[dbg 30000] phase=IDLE reps=0 elapsed=0s'   # stopped from HOLD, so this one is the full 7 s lowerSec
     '[dbg 33000] EDGE START'
     '[dbg 33000] phase=LIFT reps=0 elapsed=0s'
-    'actuator: energize cap opened the relays'
+    'actuator: energize cap cut the motor drive'
     '[dbg 34500] phase=FAULT reps=0 elapsed=1s'
     # [TH] จากตรงนี้เป็นบทสนทนาจำลองของสถานะรอยืนยัน (CONFIRM) เริ่มด้วยการล้างสถานะผิดพลาดค้างจากขั้นก่อนหน้า
     # From here on: the CONFIRM lines, exercising the five steps below. Opens
@@ -220,7 +219,7 @@ if ($Tail) {
 $steps = @(
     [pscustomobject]@{
         Name    = "debug build is running"
-        Do      = "nothing, but watch the lamps through boot: yellow (GPIO 32) should come on and stay on, green (GPIO 23) must stay dark - neither should flash or click at power-up"
+        Do      = "nothing, but watch the lamps through boot: yellow should come on and stay on, green must stay dark - neither should flash or click at power-up"
         Expect  = @('debug prints ON')
         Hint    = "No banner: the image was built without the flag, or -NoReset skipped the reboot that prints it. Green LIT while idle instead of yellow: the lamp polarity is backwards - LED_ACTIVE_LOW is set in config.h for the active-low board fitted here, so either the board on the bench energizes on HIGH or that line got lost. Fix it before anything else, because the lamps currently mean the opposite of what they should."
         Fatal   = $true   # every later step reads that same debug output
@@ -267,9 +266,9 @@ $steps = @(
         # Not just a serial check: this step's real pass criterion is what you
         # watched, not what matched. The two patterns below only prove a full
         # cycle ran; the lamp invariant has to be confirmed by eye.
-        Do      = "run one more full cycle and watch BOTH lamps the whole time: touch GPIO 25 briefly, wait for LIFT, then touch GPIO 26 and watch it through to IDLE. This cycle never faults, so exactly one lamp must be lit at every instant - never both, never neither"
+        Do      = "run one more full cycle and watch BOTH lamps the whole time: touch GPIO 25 briefly, wait for LIFT, then touch GPIO 26 and watch it through to IDLE. This cycle never faults, so exactly one lamp must be lit at every instant - never blinking, never neither"
         Expect  = @('EDGE START', 'phase=LIFT', 'EDGE STOP', 'phase=IDLE')
-        Hint    = "If green and yellow ever agreed outside a latched FAULT - both lit, both dark, or a phase boundary above did not produce a relay click on either lamp - stop and check LED_ACTIVE_LOW in config.h and the lamp wiring before doing anything else. Both lit IS the fault indication, so it is only wrong when the phase is not FAULT."
+        Hint    = "If the lamps blinked, went both dark, or a phase boundary above did not produce a relay click - stop and check LED_ACTIVE_LOW in config.h and the lamp wiring (green on NO, yellow on NC) before doing anything else. Blinking IS the fault and jog indication, so it is only wrong outside those."
     },
     [pscustomobject]@{
         Name    = "actuator cap induces a FAULT"
@@ -278,11 +277,11 @@ $steps = @(
         # which is exactly what stops a low cap from faulting every ordinary lift.
         # So the cap has to be tripped the way it is meant to be: a loop stall that
         # outlasts its fixed 500 ms margin (actuatorSetCap = maxTravelSec*1000+500,
-        # see actuator.cpp) while a relay is energized. The heartbeat POST is the
+        # see actuator.cpp) while the motor is driving. The heartbeat POST is the
         # practical way to arrange that on the bench - see net.cpp.
         Do      = "reflash once more with BENCH_DEBUG=1 and, this time, a low DEFAULT_MAX_TRAVEL_SEC (say 1) in config.h with NVS erased first, so DEFAULT_LIFT_SEC/DEFAULT_LOWER_SEC auto-clamp down to match - this shrinks the cap's fixed 500 ms margin to a much bigger share of the 1 s stroke. Then set serverUrl to an address nothing answers on the LAN - not a down WiFi, which makes net.cpp's post() return instantly instead of blocking, but a real IP with no listener. Touch GPIO 25 to GND to START: the 1/s heartbeat blocks up to ~400 ms per attempt against that address, and one landing across the LIFT->HOLD boundary is what eats the margin and trips the actuator's own hardware timer. May take a couple of tries to land the timing - each START is an independent attempt"
-        Expect  = @('EDGE START', 'phase=LIFT', 'actuator: energize cap opened the relays', 'phase=FAULT')
-        Hint    = "No trip after several tries: check maxTravelSec really did come out at 1 - a value already stored in NVS from a previous flash beats a lowered config.h default, since settingsLoad only falls back to the compiled default when the key is absent. Also confirm the unreachable address fails SLOW: a WiFi that is actually down, or a host that actively refuses the connection, returns near-instantly and never blocks long enough - it has to be an address that is silently unreachable, packets just dropped. Watch the lamps: both should light together the instant it faults - that is the new latched-FAULT indication, previously indistinguishable plain yellow. To clear it, touch GPIO 26 (STOP): the leg lowers through the fault's own safe-lower and the latch clears the moment phase reaches IDLE, same as any other STOP-from-FAULT recovery."
+        Expect  = @('EDGE START', 'phase=LIFT', 'actuator: energize cap cut the motor drive', 'phase=FAULT')
+        Hint    = "No trip after several tries: check maxTravelSec really did come out at 1 - a value already stored in NVS from a previous flash beats a lowered config.h default, since settingsLoad only falls back to the compiled default when the key is absent. Also confirm the unreachable address fails SLOW: a WiFi that is actually down, or a host that actively refuses the connection, returns near-instantly and never blocks long enough - it has to be an address that is silently unreachable, packets just dropped. Watch the lamps: they should start blinking green/yellow the instant it faults - that is the latched-FAULT indication. To clear it, touch GPIO 26 (STOP): the leg lowers through the fault's own safe-lower and the latch clears the moment phase reaches IDLE, same as any other STOP-from-FAULT recovery."
     }
     # The five steps below need something every step above deliberately did
     # not: the display link actually up. requestStart() only opens Confirm
@@ -371,7 +370,7 @@ try {
     Write-Host ""
     Write-Host "controller button bench on $Port" -ForegroundColor Green
     Write-Host "buttons are NO: leave open = at rest, touch to GND = press" -ForegroundColor Green
-    Write-Host "watch both lamps throughout - outside a latched FAULT green and yellow must never agree" -ForegroundColor Green
+    Write-Host "watch the lamps throughout - only a latched FAULT or jog mode may blink" -ForegroundColor Green
     Write-Host "$($steps.Count) steps, ${StepTimeoutSec}s each. Ctrl+C to abort." -ForegroundColor Green
 
     $n = 0

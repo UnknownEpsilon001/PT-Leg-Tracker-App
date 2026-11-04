@@ -105,6 +105,7 @@ h1{font-size:clamp(30px,6vw,54px);font-weight:700;letter-spacing:-.03em;line-hei
 .pinstate .lbl{color:var(--silk);opacity:.85}
 .pinstate .num{font-family:var(--mono);margin-left:auto;color:var(--silk-dim)}
 .pinstate.up,.pinstate.down{color:var(--relay)}
+.pinstate.en{color:var(--relay)}
 .pinstate.green{color:var(--green)}
 .pinstate.yellow{color:var(--yellow)}
 
@@ -135,6 +136,13 @@ h2.sec .tag{font-family:var(--mono);font-size:11px;color:var(--pad);letter-spaci
 .boardfig{border:1px solid var(--rule);border-radius:12px;background:rgba(0,0,0,.2);padding:14px;
   position:sticky;top:14px;contain:layout paint}
 .boardfig svg{width:100%;height:auto;display:block}
+/* .boardfig is sticky so the board diagram stays put beside its pin tables while
+   they scroll. That only works inside .split, where the tall sibling column
+   bounds it. A figure that stands on its own in the page flow has the whole
+   document as its containing block, so it would follow the viewport for the
+   entire scroll — .flow opts out. The width cap keeps the 680-unit viewBox
+   rendering near 1:1 instead of being blown up to the full 1080px wrap. */
+.boardfig.flow{position:static;max-width:720px}
 .padgrp.lit{filter:brightness(1.55)}
 .blink{animation:blink 2.4s linear infinite;animation-play-state:paused}
 .blink.b2{animation-delay:-1.2s}
@@ -209,8 +217,8 @@ a{color:var(--pad)}
   <span class="th">สายเส้นไหน ต่อขาไหน</span>
 </h1>
 <p class="lede">
-  <span class="en">Two ESP32 boards per machine. The <b>controller</b> carries every wire you attach by hand — relays, panel buttons, panel lamps, clock. The <b>display</b> (CYD) has exactly three free wires: two for the UART link and a ground.</span>
-  <span class="th">หนึ่งเครื่องมี ESP32 สองบอร์ด บอร์ด<b>ควบคุม</b>รับสายทุกเส้นที่ต่อเอง ทั้งรีเลย์ ปุ่มหน้าปัด ไฟหน้าปัด และนาฬิกา ส่วนบอร์ด<b>จอ</b> (CYD) เหลือขาว่างให้ต่อแค่สามเส้น คือ UART สองเส้นกับกราวด์</span>
+  <span class="en">Two ESP32 boards per machine. The <b>controller</b> carries every wire you attach by hand — the motor driver, panel buttons, panel lamps, clock. The <b>display</b> (CYD) has exactly four free wires: two for the UART link, a ground, and the speaker.</span>
+  <span class="th">หนึ่งเครื่องมี ESP32 สองบอร์ด บอร์ด<b>ควบคุม</b>รับสายทุกเส้นที่ต่อเอง ทั้งตัวขับมอเตอร์ ปุ่มหน้าปัด ไฟหน้าปัด และนาฬิกา ส่วนบอร์ด<b>จอ</b> (CYD) เหลือขาว่างให้ต่อแค่สี่เส้น คือ UART สองเส้น กราวด์ และลำโพง</span>
 </p>
 
 <!-- ============ SIGNATURE RIG ============ -->
@@ -270,17 +278,17 @@ a{color:var(--pad)}
 
     <div class="pins">
       <div class="pinstate up" id="ps22"><span class="led"></span>
-        <span class="lbl"><span class="en">Relay UP</span><span class="th">รีเลย์ขึ้น</span></span>
+        <span class="lbl"><span class="en">RPWM — up</span><span class="th">RPWM — ขึ้น</span></span>
         <span class="num">GPIO 22</span></div>
       <div class="pinstate down" id="ps27"><span class="led"></span>
-        <span class="lbl"><span class="en">Relay DOWN</span><span class="th">รีเลย์ลง</span></span>
+        <span class="lbl"><span class="en">LPWM — down</span><span class="th">LPWM — ลง</span></span>
         <span class="num">GPIO 27</span></div>
+      <div class="pinstate en" id="ps4"><span class="led"></span>
+        <span class="lbl"><span class="en">Motor enable</span><span class="th">เปิดใช้งานตัวขับ</span></span>
+        <span class="num">GPIO 4</span></div>
       <div class="pinstate green" id="ps23"><span class="led"></span>
-        <span class="lbl"><span class="en">Green lamp</span><span class="th">ไฟเขียว</span></span>
+        <span class="lbl"><span class="en">Lamp relay (on = green)</span><span class="th">รีเลย์ไฟ (ทำงาน = เขียว)</span></span>
         <span class="num">GPIO 23</span></div>
-      <div class="pinstate yellow" id="ps32"><span class="led"></span>
-        <span class="lbl"><span class="en">Yellow lamp</span><span class="th">ไฟเหลือง</span></span>
-        <span class="num">GPIO 32</span></div>
     </div>
 
     <div class="controls">
@@ -302,6 +310,92 @@ a{color:var(--pad)}
   <span class="en">both boards need a <b>common ground</b>, and the UART pair is <b>cross-wired</b> (RX↔TX). Two boards on separate supplies with no shared ground give a silent link and no error message.</span>
   <span class="th">บอร์ดทั้งสองต้องใช้<b>กราวด์ร่วมกัน</b> และสาย UART ต้อง<b>ไขว้</b> (RX↔TX) ถ้าจ่ายไฟคนละชุดโดยไม่ต่อกราวด์ร่วม ลิงก์จะเงียบสนิทโดยไม่มีข้อความแจ้งเตือน</span>
 </div>
+
+<!-- ============ BTS7960 MODULE ============ -->
+<h2 class="sec">
+  <span class="en">The BTS7960 module itself</span><span class="th">ตัวโมดูล BTS7960</span>
+  <span class="tag">motor driver</span>
+</h2>
+<p class="sec-note">
+  <span class="en">Two connector groups, not one. The ESP32 only ever touches the 8-pin logic header. Motor power lives on the four screw terminals, and that is the side the emergency stop cuts.</span>
+  <span class="th">โมดูลมีขั้วต่อสองกลุ่ม ไม่ใช่กลุ่มเดียว ESP32 ต่อกับหัวต่อลอจิก 8 ขาเท่านั้น ส่วนไฟเลี้ยงมอเตอร์อยู่ที่ขั้วสกรูสี่ตัว และปุ่มหยุดฉุกเฉินตัดที่ฝั่งนั้น</span>
+</p>
+
+<div class="boardfig flow">
+  <svg viewBox="0 0 680 470" role="img" aria-label="BTS7960 module connector layout">
+    <text class="en" x="228" y="62" font-size="11" text-anchor="end" fill="#7FA396" letter-spacing="1.5">LOGIC HEADER · 8 PINS</text>
+    <text class="th" x="228" y="62" font-size="11" text-anchor="end" fill="#7FA396" letter-spacing="1.5">หัวต่อลอจิก · 8 ขา</text>
+    <text class="en" x="422" y="62" font-size="11" fill="#7FA396" letter-spacing="1.5">SCREW TERMINALS · 4</text>
+    <text class="th" x="422" y="62" font-size="11" fill="#7FA396" letter-spacing="1.5">ขั้วสกรู · 4 ตัว</text>
+
+    <rect x="250" y="28" width="150" height="414" rx="8" fill="#0E2A24" stroke="#1D4438" stroke-width="1.5"/>
+    <text x="325" y="50" font-size="11" font-family="ui-monospace,monospace" text-anchor="middle" fill="#3E6B5C" letter-spacing="1.5">BTS7960</text>
+
+      <rect x="236" y="78" width="28" height="14" rx="2" fill="var(--green)" opacity=".9"/>
+      <text x="272" y="89" font-size="12" font-family="ui-monospace,monospace" fill="var(--green)">VCC</text>
+      <text class="en" x="228" y="89" font-size="12" text-anchor="end" fill="#7FA396">ESP32 5V (VIN)</text>
+      <text class="th" x="228" y="89" font-size="12" text-anchor="end" fill="#7FA396">5V (VIN) ของ ESP32</text>
+      <rect x="236" y="118" width="28" height="14" rx="2" fill="var(--green)" opacity=".9"/>
+      <text x="272" y="129" font-size="12" font-family="ui-monospace,monospace" fill="var(--green)">GND</text>
+      <text class="en" x="228" y="129" font-size="12" text-anchor="end" fill="#7FA396">ESP32 GND</text>
+      <text class="th" x="228" y="129" font-size="12" text-anchor="end" fill="#7FA396">GND ของ ESP32</text>
+      <rect x="236" y="158" width="28" height="14" rx="2" fill="var(--relay)" opacity=".9"/>
+      <text x="272" y="169" font-size="12" font-family="ui-monospace,monospace" fill="var(--relay)">R_EN</text>
+      <text class="en" x="228" y="169" font-size="12" text-anchor="end" fill="#7FA396">GPIO 4</text>
+      <text class="th" x="228" y="169" font-size="12" text-anchor="end" fill="#7FA396">ขา 4</text>
+      <rect x="236" y="198" width="28" height="14" rx="2" fill="var(--relay)" opacity=".9"/>
+      <text x="272" y="209" font-size="12" font-family="ui-monospace,monospace" fill="var(--relay)">L_EN</text>
+      <text class="en" x="228" y="209" font-size="12" text-anchor="end" fill="#7FA396">GPIO 4 · same wire</text>
+      <text class="th" x="228" y="209" font-size="12" text-anchor="end" fill="#7FA396">ขา 4 · สายเดียวกัน</text>
+      <rect x="236" y="238" width="28" height="14" rx="2" fill="var(--relay)" opacity=".9"/>
+      <text x="272" y="249" font-size="12" font-family="ui-monospace,monospace" fill="var(--relay)">RPWM</text>
+      <text class="en" x="228" y="249" font-size="12" text-anchor="end" fill="#7FA396">GPIO 22 · up</text>
+      <text class="th" x="228" y="249" font-size="12" text-anchor="end" fill="#7FA396">ขา 22 · ขึ้น</text>
+      <rect x="236" y="278" width="28" height="14" rx="2" fill="var(--relay)" opacity=".9"/>
+      <text x="272" y="289" font-size="12" font-family="ui-monospace,monospace" fill="var(--relay)">LPWM</text>
+      <text class="en" x="228" y="289" font-size="12" text-anchor="end" fill="#7FA396">GPIO 27 · down</text>
+      <text class="th" x="228" y="289" font-size="12" text-anchor="end" fill="#7FA396">ขา 27 · ลง</text>
+      <rect x="236" y="318" width="28" height="14" rx="2" fill="var(--silk-dim)" opacity=".9"/>
+      <text x="272" y="329" font-size="12" font-family="ui-monospace,monospace" fill="var(--silk-dim)">R_IS</text>
+      <text class="en" x="228" y="329" font-size="12" text-anchor="end" fill="#7FA396">not used</text>
+      <text class="th" x="228" y="329" font-size="12" text-anchor="end" fill="#7FA396">ไม่ใช้</text>
+      <rect x="236" y="358" width="28" height="14" rx="2" fill="var(--silk-dim)" opacity=".9"/>
+      <text x="272" y="369" font-size="12" font-family="ui-monospace,monospace" fill="var(--silk-dim)">L_IS</text>
+      <text class="en" x="228" y="369" font-size="12" text-anchor="end" fill="#7FA396">not used</text>
+      <text class="th" x="228" y="369" font-size="12" text-anchor="end" fill="#7FA396">ไม่ใช้</text>
+      <rect x="386" y="94" width="28" height="22" rx="3" fill="var(--yellow)" opacity=".9"/>
+      <text x="378" y="109" font-size="12" font-family="ui-monospace,monospace" text-anchor="end" fill="var(--yellow)">B+</text>
+      <text class="en" x="422" y="109" font-size="12" fill="#FFCB47">12 V + via the emergency stop</text>
+      <text class="th" x="422" y="109" font-size="12" fill="#FFCB47">12V + ผ่านปุ่มหยุดฉุกเฉิน</text>
+      <rect x="386" y="184" width="28" height="22" rx="3" fill="var(--silk-dim)" opacity=".9"/>
+      <text x="378" y="199" font-size="12" font-family="ui-monospace,monospace" text-anchor="end" fill="var(--silk-dim)">B−</text>
+      <text class="en" x="422" y="199" font-size="12" fill="#7FA396">12 V −</text>
+      <text class="th" x="422" y="199" font-size="12" fill="#7FA396">12V −</text>
+      <rect x="386" y="274" width="28" height="22" rx="3" fill="var(--relay)" opacity=".9"/>
+      <text x="378" y="289" font-size="12" font-family="ui-monospace,monospace" text-anchor="end" fill="var(--relay)">M+</text>
+      <text class="en" x="422" y="289" font-size="12" fill="#7FA396">motor lead</text>
+      <text class="th" x="422" y="289" font-size="12" fill="#7FA396">สายมอเตอร์</text>
+      <rect x="386" y="364" width="28" height="22" rx="3" fill="var(--relay)" opacity=".9"/>
+      <text x="378" y="379" font-size="12" font-family="ui-monospace,monospace" text-anchor="end" fill="var(--relay)">M−</text>
+      <text class="en" x="422" y="379" font-size="12" fill="#7FA396">motor lead</text>
+      <text class="th" x="422" y="379" font-size="12" fill="#7FA396">สายมอเตอร์</text>
+  </svg>
+  <p class="figcap">
+    <span class="en">Terminal order varies between module revisions — read the silkscreen on your own board before crimping. The header is 0.1 in pitch; the four terminals are screw posts and carry the full motor current.</span>
+    <span class="th">ลำดับขั้วต่อของโมดูลแต่ละรุ่นไม่เหมือนกัน ให้อ่านตัวอักษรบนบอร์ดจริงก่อนย้ำหัวสาย หัวต่อลอจิกระยะ 0.1 นิ้ว ส่วนขั้วสกรูสี่ตัวรับกระแสมอเตอร์เต็มจำนวน</span>
+  </p>
+</div>
+
+<div class="warn" style="margin-top:16px">
+  <b><span class="en">The relay cuts B+, never VCC:</span><span class="th">รีเลย์ตัดที่ขา B+ ไม่ใช่ VCC:</span></b>
+  <span class="en">put the relay's <b>normally-open</b> contact in the 12 V positive wire on its way to <code>B+</code>, and leave <code>VCC</code> powered at all times. Cutting <code>VCC</code> instead leaves <code>B+</code> sitting on the output MOSFETs, so a shorted high-side FET still turns the motor — the exact fault the relay is there for — and the ESP32 keeps driving the inputs of an unpowered chip, which pushes current through its protection diodes. Leave <code>B−</code> connected: it is bonded to the module ground your ESP32 shares.</span>
+  <span class="th">ให้ใช้หน้าสัมผัสแบบ<b>ปกติเปิด</b> (NO) ของรีเลย์คั่นในสายไฟบวก 12 โวลต์ก่อนเข้าขา <code>B+</code> และปล่อยให้ <code>VCC</code> มีไฟตลอดเวลา ถ้าไปตัดที่ <code>VCC</code> แทน ขา <code>B+</code> จะยังจ่อมอสเฟตขาออกอยู่ มอสเฟตฝั่งบวกที่ลัดวงจรจึงยังหมุนมอเตอร์ได้ ซึ่งเป็นความเสียหายที่รีเลย์ตัวนี้มีไว้กันพอดี ทั้ง ESP32 ยังขับขาอินพุตของชิปที่ไม่มีไฟเลี้ยง ทำให้กระแสไหลผ่านไดโอดป้องกันของชิป ส่วนขา <code>B−</code> ให้ต่อไว้ตามเดิม เพราะเชื่อมกับกราวด์ของโมดูลที่ ESP32 ใช้ร่วมกัน</span>
+</div>
+
+<p class="sub" style="margin:14px 0 0">
+  <span class="en"><code>R_IS</code> and <code>L_IS</code> are current-sense outputs. The firmware does not read them — there is no GPIO left to read them with — so leave both unconnected. <code>R_EN</code> and <code>L_EN</code> share one wire to GPIO 4, which is the single write that kills the bridge on every emergency path.</span>
+  <span class="th">ขา <code>R_IS</code> และ <code>L_IS</code> เป็นขาออกวัดกระแส เฟิร์มแวร์ไม่ได้อ่านค่าเหล่านี้ เพราะไม่มีขา GPIO เหลือให้อ่านแล้ว จึงปล่อยลอยไว้ทั้งสองขา ส่วนขา <code>R_EN</code> และ <code>L_EN</code> ใช้สายเส้นเดียวกันไปที่ขา 4 ซึ่งเป็นการเขียนขาครั้งเดียวที่ตัดการทำงานของสะพานเอชในทุกเส้นทางฉุกเฉิน</span>
+</p>
 
 <!-- ============ CONTROLLER ============ -->
 <h2 class="sec">
@@ -330,7 +424,7 @@ a{color:var(--pad)}
   </div>
 
   <div>
-    <h3 style="--dot:var(--relay)"><span class="en">Relays — motor drive</span><span class="th">รีเลย์ — ขับมอเตอร์</span></h3>
+    <h3 style="--dot:var(--relay)"><span class="en">BTS7960 — motor drive</span><span class="th">BTS7960 — ขับมอเตอร์</span></h3>
     <div class="tbl"><table>
       <thead><tr>
         <th><span class="en">Signal</span><span class="th">สัญญาณ</span></th>
@@ -338,20 +432,34 @@ a{color:var(--pad)}
         <th><span class="en">Connect to</span><span class="th">ต่อไปที่</span></th>
       </tr></thead>
       <tbody>
-      <tr data-pin="22"><td><span class="en">Relay UP</span><span class="th">รีเลย์ยกขึ้น</span></td>
+      <tr data-pin="22"><td><span class="en">RPWM — drives up</span><span class="th">RPWM — ขับขึ้น</span></td>
         <td><span class="pad">GPIO 22</span></td>
-        <td>IN1 <span class="sub"><span class="en">on the relay board</span><span class="th">ของบอร์ดรีเลย์</span></span></td></tr>
-      <tr data-pin="27"><td><span class="en">Relay DOWN</span><span class="th">รีเลย์ลดลง</span></td>
+        <td>RPWM <span class="sub"><span class="en">on the BTS7960 — the P3 wire the UP relay coil used</span><span class="th">ของโมดูล BTS7960 — สายขั้ว P3 เส้นเดิมของขดลวดรีเลย์ขึ้น</span></span></td></tr>
+      <tr data-pin="27"><td><span class="en">LPWM — drives down</span><span class="th">LPWM — ขับลง</span></td>
         <td><span class="pad">GPIO 27</span></td>
-        <td>IN2 <span class="sub"><span class="en">on the relay board</span><span class="th">ของบอร์ดรีเลย์</span></span></td></tr>
-      <tr><td><span class="en">Power</span><span class="th">ไฟเลี้ยง</span></td>
+        <td>LPWM <span class="sub"><span class="en">on the BTS7960 — the CN1 wire the DOWN relay coil used</span><span class="th">ของโมดูล BTS7960 — สายขั้ว CN1 เส้นเดิมของขดลวดรีเลย์ลง</span></span></td></tr>
+      <tr data-pin="4"><td><span class="en">Motor enable</span><span class="th">เปิดใช้งานตัวขับ</span></td>
+        <td><span class="pad">GPIO 4</span></td>
+        <td>R_EN <b><span class="en">and</span><span class="th">และ</span></b> L_EN <span class="sub"><span class="en">— both, wired together to this one pin</span><span class="th">— ต่อรวมกันทั้งสองขามาที่ขานี้ขาเดียว</span></span></td></tr>
+      <tr><td><span class="en">Logic power</span><span class="th">ไฟเลี้ยงลอจิก</span></td>
         <td><span class="pad ghost">VIN / GND</span></td>
-        <td><span class="en">Relay VCC + GND, per the module's rating</span><span class="th">ขา VCC และ GND ของโมดูลรีเลย์ ตามแรงดันที่โมดูลระบุ</span></td></tr>
+        <td><span class="en">BTS7960 <code>VCC</code> + <code>GND</code>, and the relay module's VCC + GND</span><span class="th">ขา <code>VCC</code> และ <code>GND</code> ของ BTS7960 กับขา VCC และ GND ของโมดูลรีเลย์</span></td></tr>
+      <tr><td><span class="en">Motor power</span><span class="th">ไฟเลี้ยงมอเตอร์</span></td>
+        <td><span class="pad ghost">B+ / B−</span></td>
+        <td><span class="en">The motor supply — <b>through the emergency stop</b>, which breaks the whole 12 V feed</span><span class="th">ไฟเลี้ยงมอเตอร์ — <b>ผ่านปุ่มหยุดฉุกเฉิน</b> ซึ่งตัดไฟ 12 โวลต์ทั้งระบบ</span></td></tr>
       </tbody>
     </table></div>
     <p class="sub" style="margin:8px 0 0">
-      <span class="en">The fitted board is active-low, so <code>RELAY_ACTIVE_LOW</code> is set in <code>config.h</code>; clear it only for a board that energizes on HIGH. The firmware always breaks before it makes and waits 50 ms on a reversal — never drive both relays from one pin.</span>
-      <span class="th">บอร์ดที่ใช้เป็นแบบ active-low จึงเปิด <code>RELAY_ACTIVE_LOW</code> ไว้ใน <code>config.h</code> แล้ว ปิดค่านี้เฉพาะเมื่อใช้บอร์ดที่สั่งงานด้วยลอจิก HIGH เฟิร์มแวร์จะตัดก่อนต่อเสมอ และหน่วง 50 มิลลิวินาทีเมื่อกลับทาง ห้ามใช้ขาเดียวสั่งรีเลย์สองตัว</span>
+      <span class="en">All three BTS7960 inputs are <b>active-HIGH</b> and LOW is the safe level on each — there is no <code>RELAY_ACTIVE_LOW</code> for the motor any more. The firmware drives RPWM and LPWM with LEDC at 20 kHz, 10-bit, zeroing the idle side before it raises the driving one, and it waits 50 ms on a reversal. <b>Never wire RPWM and LPWM to one pin.</b></span>
+      <span class="th">ขาอินพุตทั้งสามของ BTS7960 สั่งงานด้วย<b>ลอจิกสูง</b> และลอจิกต่ำคือระดับที่ปลอดภัยของทุกขา จึงไม่มี <code>RELAY_ACTIVE_LOW</code> สำหรับมอเตอร์อีกต่อไป เฟิร์มแวร์ขับ RPWM และ LPWM ด้วย LEDC ที่ 20 กิโลเฮิรตซ์ ความละเอียด 10 บิต โดยลดฝั่งที่ไม่ได้ใช้ให้เป็นศูนย์ก่อนยกฝั่งที่ขับ และหน่วง 50 มิลลิวินาทีเมื่อกลับทาง <b>ห้ามต่อ RPWM กับ LPWM เข้าขาเดียวกัน</b></span>
+    </p>
+    <p class="sub" style="margin:8px 0 0">
+      <span class="en">Each stroke fades in over <code>MOTOR_RAMP_MS</code> (400 ms) and each normal stop fades out over it, so a loaded leg is never yanked into motion. Ramping is comfort, never safety: a FAULT, the travel cap, a STOP that reverses a lift, and boot all cut the drive dead.</span>
+      <span class="th">แต่ละจังหวะจะค่อยๆ เร่งขึ้นภายในเวลา <code>MOTOR_RAMP_MS</code> (400 มิลลิวินาที) และการหยุดตามปกติจะค่อยๆ ผ่อนลงในเวลาเดียวกัน ขาที่มีน้ำหนักกดอยู่จึงไม่ถูกกระชากให้เคลื่อนที่ การไล่กำลังมีไว้เพื่อความนุ่มนวล ไม่ใช่เพื่อความปลอดภัย เพราะสถานะผิดพลาด เพดานเวลาเดินทาง การกด STOP ที่กลับทิศระหว่างยก และการเปิดเครื่อง ล้วนตัดกำลังขับทันที</span>
+    </p>
+    <p class="sub" style="margin:8px 0 0">
+      <span class="en">Nothing in the firmware can disconnect motor power, and that is deliberate. The machine's hardware cut is the panel <b>emergency stop</b>, which opens the whole 12 V feed — motor rail, lamps and the controller together. It covers a shorted high-side MOSFET, which no firmware can stop because such a FET drives the motor from <code>B+</code> whatever the inputs say, and it covers a panic in the firmware, which a firmware-driven relay could not. The trade is that it is manual and needs an operator present — already the rule this machine runs under.</span>
+      <span class="th">ไม่มีอะไรในเฟิร์มแวร์ที่ตัดไฟเลี้ยงมอเตอร์ได้ และตั้งใจให้เป็นเช่นนั้น การตัดระดับฮาร์ดแวร์ของเครื่องคือ<b>ปุ่มหยุดฉุกเฉิน</b>ที่หน้าปัด ซึ่งตัดไฟ 12 โวลต์ทั้งระบบ ทั้งไฟมอเตอร์ ไฟหน้าปัด และบอร์ดควบคุมพร้อมกัน ครอบคลุมกรณีมอสเฟตฝั่งบวกลัดวงจร ซึ่งเฟิร์มแวร์หยุดไม่ได้เลยเพราะมอสเฟตแบบนั้นขับมอเตอร์จากขา <code>B+</code> ไม่ว่าขาอินพุตจะสั่งอะไร และครอบคลุมกรณีเฟิร์มแวร์พัง ซึ่งรีเลย์ที่สั่งด้วยเฟิร์มแวร์ทำไม่ได้ สิ่งที่ต้องแลกคือเป็นการตัดด้วยมือและต้องมีผู้ควบคุมอยู่ด้วย ซึ่งเป็นกฎที่เครื่องนี้ใช้อยู่แล้ว</span>
     </p>
 
     <h3 style="--dot:var(--green)"><span class="en">Panel lamps</span><span class="th">ไฟหน้าปัด</span></h3>
@@ -362,17 +470,14 @@ a{color:var(--pad)}
         <th><span class="en">Does</span><span class="th">หน้าที่</span></th>
       </tr></thead>
       <tbody>
-      <tr data-pin="23"><td><span class="en">Green lamp</span><span class="th">ไฟเขียว</span></td>
+      <tr data-pin="23"><td><span class="en">Lamp relay</span><span class="th">รีเลย์ไฟ</span></td>
         <td><span class="pad">GPIO 23</span></td>
-        <td><span class="en"><b>Output</b> — lit while a session is in progress and the actuator may move</span><span class="th"><b>ขาออก</b> ติดตอนอยู่ในรอบการทำงานและชุดขับเคลื่อนอาจเคลื่อนที่</span></td></tr>
-      <tr data-pin="32"><td><span class="en">Yellow lamp</span><span class="th">ไฟเหลือง</span></td>
-        <td><span class="pad">GPIO 32</span></td>
-        <td><span class="en"><b>Output</b> — lit when idle; nothing will move on its own. Lit together with green for a latched FAULT</span><span class="th"><b>ขาออก</b> ติดตอนว่าง จะไม่มีอะไรเคลื่อนที่เอง และติดพร้อมไฟเขียวเมื่อค้างสถานะผิดพลาด</span></td></tr>
+        <td><span class="en"><b>Output</b> — relay on lights green (NO): a session is in progress and the actuator may move. Off lights yellow (NC): idle. Blinks for jog mode and a latched FAULT</span><span class="th"><b>ขาออก</b> รีเลย์ทำงานติดไฟเขียว (NO) คืออยู่ในรอบการทำงานและชุดขับเคลื่อนอาจเคลื่อนที่ รีเลย์ดับติดไฟเหลือง (NC) คือว่าง และกะพริบในโหมดขยับเองและเมื่อค้างสถานะผิดพลาด</span></td></tr>
       </tbody>
     </table></div>
     <p class="sub" style="margin:8px 0 0">
-      <span class="en">Each lamp is a 12 V bulb through its own relay. Exactly one is lit in each normal state and both are lit for a latched FAULT, so "both" is unmistakably abnormal; neither ever blinks — every change is a relay contact operation. The lamps are two more channels of the same active-low board, so <code>LED_ACTIVE_LOW</code> is set in <code>config.h</code>; it covers both lamps.</span>
-      <span class="th">ไฟแต่ละดวงเป็นหลอด 12 โวลต์ผ่านรีเลย์ของตัวเอง สถานะปกติจะติดครั้งละดวงเดียว และจะติดทั้งสองดวงเมื่อค้างสถานะผิดพลาด การติดพร้อมกันจึงผิดปกติอย่างชัดเจน และไม่มีการกะพริบเลย เพราะทุกการเปลี่ยนสถานะคือการตัดต่อหน้าสัมผัสของรีเลย์ ไฟทั้งสองดวงเป็นอีกสองช่องของบอร์ด active-low แผ่นเดียวกัน จึงเปิด <code>LED_ACTIVE_LOW</code> ไว้ใน <code>config.h</code> แล้ว ซึ่งใช้กับไฟทั้งสองดวง</span>
+      <span class="en">Two 12 V bulbs on one changeover relay: green on NO, yellow on NC, so exactly one is lit at any moment and a dead controller shows yellow. Jog mode and a latched FAULT blink once a second; every toggle is a contact operation. The relay board is active-low, so <code>LED_ACTIVE_LOW</code> is set in <code>config.h</code>. GPIO 32 is free.</span>
+      <span class="th">หลอด 12 โวลต์สองดวงบนรีเลย์สองทางตัวเดียว ไฟเขียวต่อที่ NO ไฟเหลืองต่อที่ NC จึงติดได้ทีละดวงเสมอ และบอร์ดควบคุมที่ดับอยู่จะแสดงไฟเหลือง โหมดขยับเองและสถานะผิดพลาดที่ค้างอยู่จะกะพริบวินาทีละครั้ง ทุกการสลับคือการตัดต่อหน้าสัมผัสหนึ่งครั้ง บอร์ดรีเลย์สั่งงานด้วยลอจิกต่ำ จึงเปิด <code>LED_ACTIVE_LOW</code> ไว้ใน <code>config.h</code> ขา 32 ว่างแล้ว</span>
     </p>
 
     <h3 style="--dot:var(--btn)"><span class="en">Panel buttons</span><span class="th">ปุ่มหน้าปัด</span></h3>
@@ -390,8 +495,8 @@ a{color:var(--pad)}
       </tbody>
     </table></div>
     <p class="sub" style="margin:8px 0 0">
-      <span class="en">Momentary, <code>INPUT_PULLUP</code>, other side to GND. Both are <b>normally-open</b> — <code>BTN_START_NC</code> and <code>BTN_STOP_NC</code> are both <code>0</code>, as committed. The interrupt latch that recovers a press the loop missed is wired to STOP alone. <b>GPIO 4</b> and <b>GPIO 33</b> are now free pins — nothing reads them and nothing reserves them.</span>
-      <span class="th">ปุ่มกดชั่วขณะ ตั้ง <code>INPUT_PULLUP</code> อีกขาลง GND ทั้งสองปุ่มเป็นแบบ<b>ปกติเปิด</b> (NO) — <code>BTN_START_NC</code> และ <code>BTN_STOP_NC</code> เป็น <code>0</code> ทั้งคู่ตามที่คอมมิตไว้ กลไกจับค้างของอินเทอร์รัปต์ที่กู้การกดที่ลูปพลาดไปผูกกับปุ่ม STOP เพียงปุ่มเดียว <b>ขา 4</b> และ <b>ขา 33</b> ตอนนี้เป็นขาว่าง ไม่มีอะไรอ่านและไม่ได้กันไว้ให้อะไร</span>
+      <span class="en">Momentary, <code>INPUT_PULLUP</code>, other side to GND. Both are <b>normally-open</b> — <code>BTN_START_NC</code> and <code>BTN_STOP_NC</code> are both <code>0</code>, as committed. The interrupt latch that recovers a press the loop missed is wired to STOP alone. <b>GPIO 4</b> is the motor enable; <b>GPIO 33</b> is free — nothing reads it and nothing reserves it.</span>
+      <span class="th">ปุ่มกดชั่วขณะ ตั้ง <code>INPUT_PULLUP</code> อีกขาลง GND ทั้งสองปุ่มเป็นแบบ<b>ปกติเปิด</b> (NO) — <code>BTN_START_NC</code> และ <code>BTN_STOP_NC</code> เป็น <code>0</code> ทั้งคู่ตามที่คอมมิตไว้ กลไกจับค้างของอินเทอร์รัปต์ที่กู้การกดที่ลูปพลาดไปผูกกับปุ่ม STOP เพียงปุ่มเดียว <b>ขา 4</b> เป็นขาเปิดใช้งานตัวขับมอเตอร์ ส่วน <b>ขา 33</b> ยังว่าง ไม่มีอะไรอ่านและไม่ได้กันไว้ให้อะไร</span>
     </p>
 
     <h3 style="--dot:var(--i2c)"><span class="en">DS3231 clock — I²C</span><span class="th">นาฬิกา DS3231 — I²C</span></h3>
@@ -409,8 +514,8 @@ a{color:var(--pad)}
       </tbody>
     </table></div>
     <p class="sub" style="margin:8px 0 0">
-      <span class="en">Not the ESP32's usual 21/22 pair: GPIO 22 drives a relay here.</span>
-      <span class="th">ไม่ได้ใช้คู่ 21/22 ตามปกติของ ESP32 เพราะขา 22 ถูกใช้เป็นรีเลย์ไปแล้ว</span>
+      <span class="en">Not the ESP32's usual 21/22 pair: GPIO 22 drives the motor here.</span>
+      <span class="th">ไม่ได้ใช้คู่ 21/22 ตามปกติของ ESP32 เพราะขา 22 ถูกใช้ขับมอเตอร์ไปแล้ว</span>
     </p>
   </div>
 </div>
@@ -508,8 +613,15 @@ a{color:var(--pad)}
         <td><span class="en">Controller GPIO 16 (RX)</span><span class="th">ขา 16 (RX) ของบอร์ดควบคุม</span></td></tr>
       <tr><td>GND</td><td><span class="pad ghost">GND</span></td>
         <td><span class="en">Controller GND</span><span class="th">GND ของบอร์ดควบคุม</span></td></tr>
+      <tr><td><span class="en">Speaker</span><span class="th">ลำโพง</span></td><td><span class="pad">GPIO 26</span></td>
+        <td><span class="en">Onboard amp → speaker JST</span><span class="th">วงจรขยายเสียงบนบอร์ด → ขั้วต่อลำโพง</span></td></tr>
       </tbody>
     </table></div>
+
+    <p class="sub" style="margin:8px 0 0">
+      <span class="en"><b>Check for the amplifier before connecting a speaker.</b> Some CYD revisions leave the amp pads empty and wire the speaker JST straight to GPIO 26. With no speaker attached, run <code>dacWrite(26, 128)</code> and measure: GPIO 26 reads about 1.65 V on every board, but the JST should read near 0 V DC if an amp is present. If the JST reads that same 1.65 V there is no amp — an 8 Ω voice coil across a DAC pin is close to a short, and the pin cannot source it. Fit an external PAM8403 or MAX98357A between the pin and the speaker instead. The firmware is identical either way.</span>
+      <span class="th"><b>ตรวจว่ามีวงจรขยายเสียงก่อนต่อลำโพง</b> CYD บางรุ่นไม่ได้ติดตั้งชิปขยายเสียง และต่อขั้วลำโพงเข้ากับขา 26 ตรงๆ ให้ถอดลำโพงออกก่อน แล้วสั่ง <code>dacWrite(26, 128)</code> และวัดแรงดัน ขา 26 จะอ่านได้ราว 1.65 โวลต์ทุกบอร์ด แต่ขั้วลำโพงควรอ่านได้ใกล้ 0 โวลต์ถ้ามีวงจรขยายเสียง ถ้าขั้วลำโพงอ่านได้ 1.65 โวลต์เท่ากัน แปลว่าไม่มีวงจรขยายเสียง ขดลวดลำโพง 8 โอห์มที่ต่อคร่อมขา DAC เกือบเท่ากับการลัดวงจร และขานั้นจ่ายกระแสไม่ไหว ให้ใส่โมดูล PAM8403 หรือ MAX98357A คั่นระหว่างขากับลำโพงแทน เฟิร์มแวร์ใช้ชุดเดียวกันทั้งสองแบบ</span>
+    </p>
 
     <h3><span class="en">Onboard — do not reuse</span><span class="th">ขาที่ใช้อยู่แล้ว — ห้ามใช้ซ้ำ</span></h3>
     <div class="tbl"><table>
@@ -544,8 +656,8 @@ a{color:var(--pad)}
 <div class="rules">
   <div class="rule" style="--k:var(--fault)">
     <h4><span class="en">GPIO 34, 35, 36, 39 have no pull-up</span><span class="th">ขา 34, 35, 36, 39 ไม่มีตัวต้านทานพูลอัป</span></h4>
-    <p><span class="en">Input-only. Never put a switch or button on them — it's why START and STOP sit on pins that support <code>INPUT_PULLUP</code> (25, 26). The two lamps land on 23 and 32 for a related but different reason: they're <code>OUTPUT</code>, not buttons, and 34–39 can't drive anything at all, input-only or otherwise.</span>
-       <span class="th">เป็นขารับสัญญาณอย่างเดียว ห้ามต่อสวิตช์หรือปุ่ม จึงต้องวางปุ่ม START และ STOP ไว้ที่ขาซึ่งรองรับ <code>INPUT_PULLUP</code> (25, 26) ส่วนไฟทั้งสองดวงมาอยู่ที่ขา 23 และ 32 ด้วยเหตุผลที่เกี่ยวข้องกันแต่ต่างกัน คือเป็นขา <code>OUTPUT</code> ไม่ใช่ปุ่ม และขา 34–39 ขับสัญญาณออกไม่ได้เลยไม่ว่าจะรับสัญญาณอย่างเดียวหรือไม่ก็ตาม</span></p>
+    <p><span class="en">Input-only. Never put a switch or button on them — it's why START and STOP sit on pins that support <code>INPUT_PULLUP</code> (25, 26). The lamp relay lands on 23 for a related but different reason: they're <code>OUTPUT</code>, not buttons, and 34–39 can't drive anything at all, input-only or otherwise.</span>
+       <span class="th">เป็นขารับสัญญาณอย่างเดียว ห้ามต่อสวิตช์หรือปุ่ม จึงต้องวางปุ่ม START และ STOP ไว้ที่ขาซึ่งรองรับ <code>INPUT_PULLUP</code> (25, 26) ส่วนรีเลย์ไฟมาอยู่ที่ขา 23 ด้วยเหตุผลที่เกี่ยวข้องกันแต่ต่างกัน คือเป็นขา <code>OUTPUT</code> ไม่ใช่ปุ่ม และขา 34–39 ขับสัญญาณออกไม่ได้เลยไม่ว่าจะรับสัญญาณอย่างเดียวหรือไม่ก็ตาม</span></p>
   </div>
   <div class="rule" style="--k:var(--green)">
     <h4><span class="en">An unwired NO input reads as released</span><span class="th">ขาที่ไม่ได้ต่อสายแบบ NO จะอ่านว่ายังไม่กด</span></h4>
@@ -563,9 +675,9 @@ a{color:var(--pad)}
        <span class="th">ถ้าขา START อ่านว่ากดมาตั้งแต่เปิดเครื่อง หรือกดค้างนานผิดปกติ เฟิร์มแวร์จะสงสัยว่าสายลัดวงจรและปฏิเสธการเริ่มรอบ รวมถึงคำสั่งจากเซิร์ฟเวอร์ด้วย ให้แตะขา 25 ลงกราวด์แล้วปล่อยหนึ่งครั้งเพื่อล้างข้อสงสัย ส่วนปุ่ม STOP อยู่คนละขาและไม่เคยถูกปฏิเสธ</span></p>
   </div>
   <div class="rule" style="--k:var(--relay)">
-    <h4><span class="en">Check relay polarity with the actuator off</span><span class="th">ตรวจขั้วรีเลย์ตอนถอดมอเตอร์ออก</span></h4>
-    <p><span class="en">A wrong <code>RELAY_ACTIVE_LOW</code> setting drives the motor the moment the board powers up.</span>
-       <span class="th">ถ้าตั้งค่า <code>RELAY_ACTIVE_LOW</code> ผิด มอเตอร์จะเดินทันทีที่บอร์ดจ่ายไฟ</span></p>
+    <h4><span class="en">Prove the drive is dead before the motor goes on</span><span class="th">พิสูจน์ว่ากำลังขับดับจริงก่อนต่อมอเตอร์</span></h4>
+    <p><span class="en">With the motor disconnected, power up and confirm GPIO 4 sits LOW and both PWM pins read 0 V. The BTS7960 inputs are active-HIGH, so anything driving them at reset turns the motor. Test the emergency stop on the same pass: pressed, the 12 V rail must read 0 V everywhere.</span>
+       <span class="th">ถอดมอเตอร์ออกก่อน แล้วจ่ายไฟและตรวจว่าขา 4 เป็นลอจิกต่ำ และขา PWM ทั้งสองอ่านได้ 0 โวลต์ เพราะขาอินพุตของ BTS7960 สั่งงานด้วยลอจิกสูง อะไรก็ตามที่ขับขาเหล่านั้นตอนรีเซ็ตจะทำให้มอเตอร์หมุน และให้ทดสอบปุ่มหยุดฉุกเฉินในรอบเดียวกัน เมื่อกดแล้วไฟ 12 โวลต์ต้องอ่านได้ 0 โวลต์ทุกจุด</span></p>
   </div>
 </div>
 
@@ -578,22 +690,22 @@ a{color:var(--pad)}
     <th><span class="en">Mode</span><span class="th">โหมด</span></th>
   </tr></thead>
   <tbody>
+  <tr data-pin="4"><td><span class="pad">4</span></td><td><span class="en">Motor enable</span><span class="th">เปิดใช้งานตัวขับมอเตอร์</span> <span class="sub"><span class="en">R_EN + L_EN</span><span class="th">ขา R_EN และ L_EN</span></span></td><td class="sub">OUTPUT</td></tr>
   <tr data-pin="16"><td><span class="pad">16</span></td><td><span class="en">UART RX ← display</span><span class="th">UART รับ ← บอร์ดจอ</span></td><td class="sub">Serial2</td></tr>
   <tr data-pin="17"><td><span class="pad">17</span></td><td><span class="en">UART TX → display</span><span class="th">UART ส่ง → บอร์ดจอ</span></td><td class="sub">Serial2</td></tr>
   <tr data-pin="19"><td><span class="pad">19</span></td><td><span class="en">RTC SCL</span><span class="th">นาฬิกา SCL</span></td><td class="sub">I²C</td></tr>
   <tr data-pin="21"><td><span class="pad">21</span></td><td><span class="en">RTC SDA</span><span class="th">นาฬิกา SDA</span></td><td class="sub">I²C</td></tr>
-  <tr data-pin="22"><td><span class="pad">22</span></td><td><span class="en">Relay UP</span><span class="th">รีเลย์ยกขึ้น</span></td><td class="sub">OUTPUT</td></tr>
-  <tr data-pin="23"><td><span class="pad">23</span></td><td><span class="en">Green lamp</span><span class="th">ไฟเขียว</span> <span class="sub"><span class="en">via relay</span><span class="th">ผ่านรีเลย์</span></span></td><td class="sub">OUTPUT</td></tr>
+  <tr data-pin="22"><td><span class="pad">22</span></td><td><span class="en">Motor RPWM — up</span><span class="th">RPWM ขับขึ้น</span></td><td class="sub">LEDC PWM</td></tr>
+  <tr data-pin="23"><td><span class="pad">23</span></td><td><span class="en">Lamp relay</span><span class="th">รีเลย์ไฟ</span> <span class="sub"><span class="en">via relay</span><span class="th">ผ่านรีเลย์</span></span></td><td class="sub">OUTPUT</td></tr>
   <tr data-pin="25"><td><span class="pad">25</span></td><td>START <span class="sub"><span class="en">button</span><span class="th">ปุ่ม</span></span></td><td class="sub">INPUT_PULLUP</td></tr>
   <tr data-pin="26"><td><span class="pad">26</span></td><td>STOP <span class="sub"><span class="en">button</span><span class="th">ปุ่ม</span></span></td><td class="sub">INPUT_PULLUP + <span class="en">interrupt</span><span class="th">อินเทอร์รัปต์</span></td></tr>
-  <tr data-pin="27"><td><span class="pad">27</span></td><td><span class="en">Relay DOWN</span><span class="th">รีเลย์ลดลง</span></td><td class="sub">OUTPUT</td></tr>
-  <tr data-pin="32"><td><span class="pad">32</span></td><td><span class="en">Yellow lamp</span><span class="th">ไฟเหลือง</span> <span class="sub"><span class="en">via relay</span><span class="th">ผ่านรีเลย์</span></span></td><td class="sub">OUTPUT</td></tr>
+  <tr data-pin="27"><td><span class="pad">27</span></td><td><span class="en">Motor LPWM — down</span><span class="th">LPWM ขับลง</span></td><td class="sub">LEDC PWM</td></tr>
   </tbody>
 </table></div>
 
 <footer>
-  <span class="en">Pins read from <code>pt-leg-controller/config.h</code>, <code>pt-leg-controller.ino</code>, <code>pt-leg-display/pt-leg-display.ino</code>, <code>store.cpp</code>, <code>touch_bb.cpp</code> and <code>TFT_eSPI_User_Setup.h</code>. Change a pin in the firmware and this page goes stale — update it in the same commit. UART pin choice is still marked "to be confirmed on the bench" in <code>firmware/README.md</code>.</span>
-  <span class="th">ข้อมูลขาอ่านจาก <code>pt-leg-controller/config.h</code>, <code>pt-leg-controller.ino</code>, <code>pt-leg-display/pt-leg-display.ino</code>, <code>store.cpp</code>, <code>touch_bb.cpp</code> และ <code>TFT_eSPI_User_Setup.h</code> ถ้าแก้ขาในเฟิร์มแวร์ หน้านี้จะไม่ตรงทันที ให้แก้ไปพร้อมกันในคอมมิตเดียว ส่วนขา UART ใน <code>firmware/README.md</code> ยังระบุว่ารอยืนยันบนโต๊ะทดสอบ</span>
+  <span class="en">Pins read from <code>pt-leg-controller/config.h</code>, <code>pt-leg-controller.ino</code>, <code>pt-leg-display/pt-leg-display.ino</code>, <code>store.cpp</code>, <code>touch_bb.cpp</code> and <code>TFT_eSPI_User_Setup.h</code>. Change a pin in the firmware and this page goes stale — update it in the same commit. The UART pins are bench-confirmed at 19200 8N1; see <code>firmware/README.md</code>.</span>
+  <span class="th">ข้อมูลขาอ่านจาก <code>pt-leg-controller/config.h</code>, <code>pt-leg-controller.ino</code>, <code>pt-leg-display/pt-leg-display.ino</code>, <code>store.cpp</code>, <code>touch_bb.cpp</code> และ <code>TFT_eSPI_User_Setup.h</code> ถ้าแก้ขาในเฟิร์มแวร์ หน้านี้จะไม่ตรงทันที ให้แก้ไปพร้อมกันในคอมมิตเดียว ส่วนขา UART ยืนยันบนโต๊ะทดสอบแล้วที่ 19200 8N1 ดูรายละเอียดใน <code>firmware/README.md</code></span>
 </footer>
 
 </div>
@@ -618,9 +730,10 @@ a{color:var(--pad)}
 (function(){
   var LEFT =['EN','36','39','34','35','32','33','25','26','27','14','12','13','GND','VIN'];
   var RIGHT=['23','22','TX0','RX0','21','19','18','5','17','16','4','2','15','GND','3V3'];
-  var USE={ '22':['var(--relay)','UP'], '27':['var(--relay)','DOWN'],
+  var USE={ '22':['var(--relay)','RPWM'], '27':['var(--relay)','LPWM'],
+            '4':['var(--relay)','M-EN'],
             '25':['var(--btn)','START'], '26':['var(--btn)','STOP'],
-            '23':['var(--btn)','GREEN'], '32':['var(--btn)','YELLOW'],
+            '23':['var(--btn)','LAMP'],
             '21':['var(--i2c)','SDA'], '19':['var(--i2c)','SCL'],
             '16':['var(--uart)','RX'], '17':['var(--uart)','TX'] };
   var NS='http://www.w3.org/2000/svg', g=document.getElementById('ctrlPins');
@@ -685,7 +798,8 @@ a{color:var(--pad)}
       phaseT=document.getElementById('phaseT'), totT=document.getElementById('totT'),
       cTarget=document.getElementById('cTarget'),
       ps={22:document.getElementById('ps22'),27:document.getElementById('ps27'),
-          23:document.getElementById('ps23'),32:document.getElementById('ps32')};
+          4:document.getElementById('ps4'),
+          23:document.getElementById('ps23')};
   if(!leg) return;
 
   var LIFT=7, LOWER=7, HOLD=10, REST=10;      // seconds, as the firmware ships
@@ -708,10 +822,10 @@ a{color:var(--pad)}
 
   var TEXT={
     idle:{en:['IDLE','Press START'],th:['ว่าง','กด START']},
-    lift:{en:['LIFT','Relay 22 energized, 7 s'],th:['ยกขึ้น','รีเลย์ขา 22 ทำงาน 7 วินาที']},
-    hold:{en:['HOLD','Both relays off, 10 s'],th:['ค้างไว้','รีเลย์ดับทั้งคู่ 10 วินาที']},
-    lower:{en:['LOWER','Relay 27 energized, 7 s'],th:['ลดลง','รีเลย์ขา 27 ทำงาน 7 วินาที']},
-    rest:{en:['REST','Both relays off, 10 s'],th:['พัก','รีเลย์ดับทั้งคู่ 10 วินาที']},
+    lift:{en:['LIFT','RPWM 22 driving, 7 s'],th:['ยกขึ้น','ขา RPWM 22 กำลังขับ 7 วินาที']},
+    hold:{en:['HOLD','Motor off, 10 s'],th:['ค้างไว้','มอเตอร์หยุด 10 วินาที']},
+    lower:{en:['LOWER','LPWM 27 driving, 7 s'],th:['ลดลง','ขา LPWM 27 กำลังขับ 7 วินาที']},
+    rest:{en:['REST','Motor off, 10 s'],th:['พัก','มอเตอร์หยุด 10 วินาที']},
     safe:{en:['SAFE-LOWER','STOP pressed — bringing the leg down'],th:['ลดลงอย่างปลอดภัย','กด STOP กำลังลดขาลง']}
   };
 
@@ -754,20 +868,25 @@ a{color:var(--pad)}
       }
     }
   }
-  function relays(){
+  /* The enable pin follows the two PWM sides: it is high only while one of them
+     is actually driving, and it is the single write that kills the bridge on
+     every emergency path. Nothing here disconnects motor power — the machine's
+     hardware cut is the panel emergency stop, which opens the whole 12 V feed
+     and would take this simulation's board down with it. */
+  function motor(){
+    var driving = phase==='lift'||phase==='lower'||phase==='safe';
     ps[22].classList.toggle('on',phase==='lift');
     ps[27].classList.toggle('on',phase==='lower'||phase==='safe');
+    ps[4].classList.toggle('on',driving);
   }
 
-  /* Panel lamps: exactly one lit at any moment, the same rule panelLampsSet()
-     drives from SessionSM::running() — green while a session is in progress
-     (including the safe-lower), yellow otherwise. No timer and no blinking,
-     because the real lamps are 12 V behind mechanical relays and every change
-     of state is a contact operation. Updated from the phase transitions like
-     relays(), not on an interval. */
+  /* Panel lamp relay: on (green) while a session is in progress, including the
+     safe-lower, off (yellow) otherwise — the same rule panelLampsSet() drives
+     from SessionSM::running(). The simulation has no jog or fault, so it never
+     blinks. Updated from the phase transitions like motor(), not on an
+     interval. */
   function lamps(){
     ps[23].classList.toggle('on', phase!=='idle');
-    ps[32].classList.toggle('on', phase==='idle');
   }
 
   var timer=0, posFrom=0, posTo=0, tStart=0, tDur=0;
@@ -798,7 +917,7 @@ a{color:var(--pad)}
     pos=posNow();
     if(phase!=='idle') sessAcc+=phaseSec();
     phase=ph; phStart=performance.now(); phSpeed=speed;
-    relays(); lamps(); label(); clock(); ticking(ph!=='idle');
+    motor(); lamps(); label(); clock(); ticking(ph!=='idle');
     var ms;
     if(ph==='lift'){
       ms=LIFT/speed*1000;
