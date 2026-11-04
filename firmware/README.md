@@ -1,4 +1,4 @@
-# PT Leg Device Firmware
+# Smart OA Knee — Device Firmware
 
 Two ESP32s per machine:
 
@@ -272,7 +272,20 @@ powershell -File firmware/tools/make-sounds.ps1 -In .\raw\start.m4a -Out .\sd\so
 powershell -File firmware/tools/make-sounds.ps1 -In .\raw -Out .\sd\sounds
 ```
 
-It normalises, converts, strips metadata chunks, pads 20 ms of silence at both
+The four shipped cues in `firmware/sd/sounds/` come from `make-cues.py`: a short
+UI effect from `assets/soundeffectthatifound/UI Sound/`, then the phrase spoken
+by the `th-TH-PremwadeeNeural` voice. Copy that folder to the card as `/sounds`.
+To rebuild them (needs ffmpeg, `pip install edge-tts` and internet; the phrases
+go to Microsoft's online TTS):
+
+```bash
+python firmware/tools/make-cues.py                          # female voice
+python firmware/tools/make-cues.py --voice th-TH-NiwatNeural  # male voice
+```
+
+It passes its mix through `make-sounds.ps1`, so the checks below still apply.
+
+`make-sounds.ps1` normalises, converts, strips metadata chunks, pads 20 ms of silence at both
 ends, and refuses to write a file over the buffer size. **Loudness is decided
 there or not at all** — there is no gain stage anywhere in the firmware, so a
 quiet recording is a quiet machine and the fix is to re-run the tool, not to
@@ -775,6 +788,49 @@ is stated in `config.h`.
 So GPIO 33 is free, the machine is down to two relay channels (the two lamps),
 and everything `actuator.cpp` does to stop the motor is a signal-level cut: `EN`
 LOW plus both PWM channels at zero.
+
+## Jog mode — hold a button to move the leg by hand
+
+For bench tuning and for nudging a leg into position. It is a mode, not a second
+meaning for the buttons: outside it START and STOP are exactly the edges they
+have always been, and STOP stays instant.
+
+**Enter:** hold **STOP** for 2 s while the machine is idle (`JOG_ENTER_MS`).
+A normal STOP tap still just clears the rep count — the hold is timed from the
+debounced level, so a tap never accumulates toward it. Once the mode is on,
+nothing drives until both buttons have been let go, so the entry hold never
+turns into a lower and a START line that reads permanently pressed never lifts.
+
+**Use:** hold **START** to raise, **STOP** to lower, at `MOTOR_JOG_DUTY` (half
+duty). Release and the drive fades out. Both buttons held does nothing on
+purpose: two directions at once has no sensible answer, and guessing one would
+drive a leg the way the operator did not mean.
+
+**Leave:** 20 s with nothing held (`JOG_IDLE_EXIT_MS`), or anything that gives
+the motor to the state machine — a session starting, a fault latching.
+
+Entry is a hold on STOP rather than anything involving START because the START
+edge starts a session the instant it is seen: there is no gesture beginning with
+START that does not run the machine first.
+
+Three things worth knowing:
+
+- **A jog marks the leg position unknown.** It moved the leg somewhere this
+  firmware cannot know, which is the same state a power cut mid-stroke leaves
+  behind, so it is recorded the same way — the next START lowers in full before
+  it lifts.
+- **The green lamp is lit for the whole mode**, not only while a button is held.
+  A held button moves the leg immediately, so "the motor may move" is true the
+  entire time the mode is on.
+- **Every safety path still applies.** Jog drives through the same `request()` a
+  stroke does, so it inherits break-before-make, the 50 ms reversal dead time,
+  the energize cap and its hardware timer unchanged. There is deliberately no
+  second way to drive the motor, because that would be a second way to get the
+  cut wrong. A cap trip ends the press: release both buttons to jog again.
+
+`MOTOR_JOG_DUTY` is a starting guess, not a measurement — see the note in
+`config.h`. Too low and a geared actuator under a loaded leg buzzes without
+moving, which looks exactly like a seized mechanism.
 
 ## The safety nets, and what each one actually covers
 

@@ -56,6 +56,135 @@ Link gLink;                // ลิงก์ UART ไปยังบอร์�
 //      และเครื่องต้องใช้งานแบบออฟไลน์ได้ ไม่จำเป็นต้องซิงก์ซ้ำเรื่อยๆ
 static bool gNtpDone = false;
 
+// Jog mode: hold a button to move the leg by hand, for bench tuning and for
+// nudging a leg into place. Entered by holding STOP while idle for JOG_ENTER_MS,
+// left after JOG_IDLE_EXIT_MS with nothing held.
+//
+// It lives here and not in SessionSM on purpose. Jog is not a phase of a therapy
+// session — it reports nothing, logs nothing, counts no reps, and belongs to no
+// session. Adding a Phase for it would put it on the wire, where the display
+// mirrors the enum by ordinal, and would give the state machine a state in which
+// none of its own rules apply.
+//
+// Entry is a hold on STOP rather than anything involving START, because the
+// START edge starts a session the instant it is seen: there is no gesture
+// beginning with START that does not run the machine first. STOP while idle only
+// clears the rep count, so holding it past that costs nothing. Inside the mode
+// neither button keeps its normal meaning, which is why the mode exists at all —
+// outside it, both are exactly the edges they have always been, and STOP stays
+// instant.
+// [TH] โหมดขยับเอง: กดปุ่มค้างเพื่อขยับขาด้วยมือ ใช้ปรับค่าบนโต๊ะและจัดตำแหน่งขา
+//      เข้าโหมดโดยกดปุ่ม STOP ค้างตอนเครื่องว่างเป็นเวลา JOG_ENTER_MS
+//      และออกจากโหมดเมื่อไม่มีการกดอะไรนาน JOG_IDLE_EXIT_MS
+//      โหมดนี้อยู่ที่ไฟล์นี้ ไม่ได้อยู่ใน SessionSM โดยตั้งใจ
+//      เพราะการขยับเองไม่ใช่สถานะหนึ่งของรอบการรักษา ไม่รายงาน ไม่บันทึก ไม่นับจำนวนครั้ง
+//      และไม่เป็นของรอบไหนเลย การเพิ่มค่าใน Phase จะทำให้มันไปอยู่บนสายสื่อสาร
+//      ซึ่งฝั่งจอเทียบค่าด้วยลำดับของ enum และจะให้เครื่องสถานะมีสถานะที่กฎของตัวเองใช้ไม่ได้เลย
+//      การเข้าโหมดใช้การกดค้างที่ปุ่ม STOP ไม่ใช่อะไรที่เกี่ยวกับปุ่ม START
+//      เพราะขอบของปุ่ม START เริ่มรอบการทำงานทันทีที่เห็น
+//      จึงไม่มีท่าทางใดที่เริ่มด้วยปุ่ม START แล้วไม่สั่งให้เครื่องเดินไปก่อน
+//      ส่วนปุ่ม STOP ตอนเครื่องว่างแค่ล้างจำนวนครั้ง การกดค้างเลยจุดนั้นจึงไม่เสียอะไร
+//      ในโหมดนี้ปุ่มทั้งสองไม่มีความหมายเดิม ซึ่งเป็นเหตุผลที่ต้องมีโหมดแยก
+//      เพราะนอกโหมด ปุ่มทั้งสองยังเป็นขอบสัญญาณแบบเดิมทุกอย่าง และปุ่ม STOP ยังตัดทันที
+static bool gJogMode = false;
+static uint32_t gJogHeldSince = 0;  // when STOP began being held while idle
+static uint32_t gJogLastInput = 0;  // last time a jog button was held
+// Set on entry and on an energize-cap trip: nothing drives until both buttons
+// have been let go. Without it the STOP still held from the entry gesture
+// lowered the leg the moment the mode came on, a shorted START line lifted it as
+// soon as STOP was released, and a held button re-drove 50 ms after the cap cut
+// it — the cap never bounded a jog at all.
+// [TH] ตั้งค่าตอนเข้าโหมดและตอนชนเพดานเวลา จะไม่ขับอะไรจนกว่าจะปล่อยปุ่มทั้งสองก่อน
+//      ถ้าไม่มี ปุ่ม STOP ที่ยังกดค้างจากการเข้าโหมดจะลดขาลงทันทีที่โหมดเปิด
+//      สาย START ที่ลัดวงจรจะยกขาขึ้นทันทีที่ปล่อย STOP
+//      และปุ่มที่กดค้างจะขับใหม่ 50 มิลลิวินาทีหลังเพดานเวลาตัด เพดานจึงไม่เคยคุมการขยับเองได้เลย
+static bool gJogNeedRelease = false;
+
+// Returns the direction the operator is asking for, and ACT_OFF for none. Both
+// buttons held is deliberately nothing: two directions at once has no sensible
+// answer, and picking one would drive a leg the way the operator did not mean.
+// [TH] คืนทิศทางที่ผู้ใช้สั่ง และคืน ACT_OFF ถ้าไม่ได้สั่ง
+//      การกดสองปุ่มพร้อมกันจงใจให้ไม่เกิดอะไร เพราะสองทิศพร้อมกันไม่มีคำตอบที่สมเหตุสมผล
+//      การเลือกทางใดทางหนึ่งจะเป็นการขับขาไปในทางที่ผู้ใช้ไม่ได้ตั้งใจ
+static ActState jogRequest() {
+  bool up = buttonStartHeld(), down = buttonStopHeld();
+  if (up == down) return ACT_OFF;
+  return up ? ACT_UP : ACT_DOWN;
+}
+
+// Drives the motor from the held buttons. Returns true when it owns the motor
+// this iteration, so applyActuator() leaves it alone.
+// [TH] ขับมอเตอร์ตามปุ่มที่กดค้างอยู่ คืนค่าจริงเมื่อโหมดนี้เป็นเจ้าของมอเตอร์ในรอบนี้
+//      applyActuator() จะได้ไม่เข้ามาแทรก
+static bool jogLoop(uint32_t nowMs) {
+  // A session (panel- or server-started) or a latched fault outranks the mode:
+  // leave it at once and let the state machine have the motor back. Checked
+  // before entry as well as during, so the mode can never be entered into a
+  // machine that is already moving on its own.
+  // [TH] รอบการทำงาน (เริ่มจากหน้าปัดหรือจากเซิร์ฟเวอร์) หรือความผิดพลาดที่ค้างอยู่ สำคัญกว่าโหมดนี้
+  //      ให้ออกจากโหมดทันทีและคืนมอเตอร์ให้เครื่องสถานะ
+  //      ตรวจทั้งก่อนเข้าโหมดและระหว่างอยู่ในโหมด
+  //      โหมดนี้จึงไม่มีทางถูกเข้าไปในเครื่องที่กำลังเคลื่อนที่เองอยู่แล้ว
+  if (gSession.running() || gSession.faulted()) {
+    gJogMode = false;
+    gJogHeldSince = 0;
+    return false;
+  }
+
+  if (!gJogMode) {
+    // Hold STOP while idle to enter. The hold is timed from the debounced level,
+    // not from the edge, so a tap that clears the rep count never accumulates.
+    // [TH] กดปุ่ม STOP ค้างตอนเครื่องว่างเพื่อเข้าโหมด
+    //      จับเวลาการกดค้างจากระดับสัญญาณที่ผ่านกันเด้งแล้ว ไม่ใช่จากขอบ
+    //      การกดสั้นๆ เพื่อล้างจำนวนครั้งจึงไม่ถูกนับสะสม
+    if (!buttonStopHeld()) { gJogHeldSince = 0; return false; }
+    if (gJogHeldSince == 0) gJogHeldSince = nowMs;
+    if (nowMs - gJogHeldSince < JOG_ENTER_MS) return false;
+    gJogMode = true;
+    gJogHeldSince = 0;
+    gJogLastInput = nowMs;
+    gJogNeedRelease = true;  // the entry hold is not itself a jog — ไม่ถือว่าการกดค้างเพื่อเข้าโหมดเป็นการสั่งขยับ
+    Serial.println("jog: mode on - release STOP, then hold START to raise, STOP to lower");
+    return true;
+  }
+
+  // gJogLastInput is not refreshed while waiting, so a button that never lets go
+  // (a shorted line) still times the mode out.
+  // [TH] ไม่อัปเดต gJogLastInput ระหว่างรอ ปุ่มที่ไม่เคยถูกปล่อย (สายลัดวงจร) จึงยังทำให้โหมดหมดเวลาได้
+  if (gJogNeedRelease) {
+    if (buttonStartHeld() || buttonStopHeld()) {
+      actuatorSoftOff();
+      if (nowMs - gJogLastInput >= JOG_IDLE_EXIT_MS) {
+        gJogMode = false;
+        Serial.println("jog: mode off - a button never released");
+      }
+      return true;
+    }
+    gJogNeedRelease = false;
+  }
+
+  ActState dir = jogRequest();
+  if (dir != ACT_OFF) {
+    gJogLastInput = nowMs;
+    // Recorded on the first movement, not on release: a jog interrupted by a power
+    // cut still has to leave the position unknown.
+    // [TH] บันทึกตั้งแต่การขยับครั้งแรก ไม่ใช่ตอนปล่อยปุ่ม
+    //      การขยับที่ถูกไฟดับขัดจังหวะก็ยังต้องทิ้งสถานะว่าไม่ทราบตำแหน่งไว้
+    gSession.markLegMoved();
+    actuatorJog(dir);
+    return true;
+  }
+
+  // Nothing held. Fade out, and leave the mode if it has been quiet long enough.
+  // [TH] ไม่มีการกดอะไร ให้ผ่อนกำลังลง และออกจากโหมดถ้าเงียบนานพอแล้ว
+  actuatorSoftOff();
+  if (nowMs - gJogLastInput >= JOG_IDLE_EXIT_MS) {
+    gJogMode = false;
+    Serial.println("jog: mode off - idle timeout");
+  }
+  return true;
+}
+
 static void applyActuator() {
   // [TH] แปลงสถานะปัจจุบันของรอบให้เป็นคำสั่งขับมอเตอร์ (เรียกทุกลูป)
   //
@@ -519,6 +648,14 @@ void loop() {
     //      เพราะเพดานอาจถูกชนเนื่องจากการลดขาเองกำลังมีปัญหา
     if (gSession.phase() != Phase::SafeLower) gSession.forceFault(now);
     else gSession.cancelQueuedStart();
+    // forceFault() is a no-op in Idle, which is where jog runs, so the cap has to
+    // be enforced here: the held button must be let go before it drives again.
+    // [TH] forceFault() ไม่ทำอะไรในสถานะว่าง ซึ่งเป็นที่ที่โหมดขยับเองทำงาน
+    //      จึงต้องบังคับเพดานตรงนี้ ต้องปล่อยปุ่มก่อนจึงจะขับได้อีก
+    if (gJogMode) {
+      gJogNeedRelease = true;
+      Serial.println("jog: energize cap reached - release both buttons to jog again");
+    }
   }
 
   // panel buttons: START begins a session, STOP ends one — and when the machine is
@@ -528,16 +665,37 @@ void loop() {
   //      อ่านทั้งสองก่อน เพราะการอ่านจะล้างขอบทิ้ง โหมดดีบักต้องเห็นค่าชุดเดียวกับที่ลูปใช้
   bool pressStart = buttonStartPressed();
   bool pressStop = buttonStopPressed();
-  // A start is refused while the START line looks shorted: it would restart the
-  // machine at the end of every session with nobody at the panel. A stop is never
-  // refused by anything.
-  // [TH] ไม่ให้เริ่มรอบถ้าสาย START ดูเหมือนลัดวงจร เพราะจะทำให้เครื่องเริ่มใหม่ทุกครั้งที่รอบจบ
-  //      โดยไม่มีใครอยู่ที่หน้าปัด ส่วนการสั่งหยุดไม่เคยถูกปฏิเสธด้วยอะไรทั้งสิ้น
-  if (pressStart && buttonStartStuck())
-    Serial.println("start refused: START reads pressed, check its wiring");
-  else if (pressStart) gSession.start(now);
-  if (pressStop) gSession.requestStop(now);
-  applyActuator();
+  // Jog mode owns the motor and both buttons while it is on, but only those: the
+  // rest of the loop runs untouched. An early return here starved the heartbeat
+  // and the state message, and the display's 2.5 s link watchdog then reported no
+  // controller at all — a machine that looks disconnected while somebody is
+  // holding its buttons is worse than one that merely looks idle.
+  //
+  // The edges are read and dropped rather than left alone, because the accessors
+  // are what clear them: an edge left pending fires the instant the mode exits,
+  // and a START press from ten seconds ago starting the machine is exactly the
+  // surprise this panel must never spring.
+  // [TH] โหมดขยับเองเป็นเจ้าของมอเตอร์และปุ่มทั้งสองขณะที่เปิดอยู่ แต่เป็นเจ้าของแค่นั้น
+  //      ส่วนที่เหลือของลูปยังทำงานตามปกติ
+  //      การคืนค่าออกจากลูปตรงนี้ทำให้สัญญาณชีพและข้อความสถานะขาดหายไป
+  //      แล้วตัวเฝ้าระวังลิงก์ 2.5 วินาทีของจอจะรายงานว่าไม่พบตัวควบคุมเลย
+  //      เครื่องที่ดูเหมือนขาดการเชื่อมต่อขณะที่มีคนกดปุ่มอยู่ แย่กว่าเครื่องที่ดูเหมือนแค่ว่าง
+  //      ขอบสัญญาณถูกอ่านแล้วทิ้ง ไม่ใช่ปล่อยไว้ เพราะตัวอ่านเป็นตัวล้างขอบ
+  //      ขอบที่ค้างอยู่จะทำงานทันทีที่ออกจากโหมด
+  //      และการที่ปุ่ม START ที่กดไปสิบวินาทีก่อนมาสั่งให้เครื่องเดิน คือความประหลาดใจที่หน้าปัดนี้ต้องไม่สร้าง
+  bool jogActive = jogLoop(now);
+  if (!jogActive) {
+    // A start is refused while the START line looks shorted: it would restart the
+    // machine at the end of every session with nobody at the panel. A stop is never
+    // refused by anything.
+    // [TH] ไม่ให้เริ่มรอบถ้าสาย START ดูเหมือนลัดวงจร เพราะจะทำให้เครื่องเริ่มใหม่ทุกครั้งที่รอบจบ
+    //      โดยไม่มีใครอยู่ที่หน้าปัด ส่วนการสั่งหยุดไม่เคยถูกปฏิเสธด้วยอะไรทั้งสิ้น
+    if (pressStart && buttonStartStuck())
+      Serial.println("start refused: START reads pressed, check its wiring");
+    else if (pressStart) gSession.start(now);
+    if (pressStop) gSession.requestStop(now);
+    applyActuator();
+  }
   actuatorTick(now);
   // Right after the motor command, and before the network work: the lamp agrees
   // with the actuator command issued in the same iteration, and it still updates
@@ -554,7 +712,7 @@ void loop() {
   //      เป็นจริงตอนยกขึ้น/ค้าง/ลดลง/พัก และตอนลดขาเพื่อหยุด เป็นเท็จตอนว่างและตอนค้างสถานะผิดพลาด
   //      ส่วน faulted() ถูกส่งเข้าไปด้วยเพื่อให้สถานะผิดพลาดที่ค้างอยู่ติดไฟทั้งสองดวง
   //      แทนที่จะดูเหมือนสถานะว่างตามปกติ ซึ่งสำคัญบนเครื่องที่มีแค่หน้าปัดโดยไม่มีจอ CYD บอกว่าเป็นสถานะไหน
-  panelLampsSet(gSession.running(), gSession.faulted());
+  panelLampsSet(gSession.running() || jogActive, gSession.faulted());
   // The trip raised by actuatorTick's own software check is consumed at the top of
   // the NEXT iteration, alongside the hardware timer's. Both go through the one
   // place above, so a trip can never be charged to a session that started after

@@ -19,44 +19,17 @@
 #define PIN_MOT_RPWM 22 // P3 connector — ขา RPWM สั่งมอเตอร์ "ยกขึ้น"
 #define PIN_MOT_LPWM 27 // CN1 connector — ขา LPWM สั่งมอเตอร์ "ลดลง"
 // R_EN and L_EN wired together to this one pin. Separate pins would let each
-// half-bridge be enabled on its own, but GPIO 33 is spent on the master relay
-// below and that relay is the stronger cut of the two. Nothing is lost: the
+// half-bridge be enabled on its own, but nothing is lost by sharing: the
 // BTS7960 blocks cross-conduction inside each half-bridge on its own, and the
 // two halves are never commanded high together — actuator.cpp zeroes the idle
-// side before it raises the driving one.
+// side before it raises the driving one. One pin is also one write, which is
+// what makes the enable a single-instruction kill on every emergency path.
 // [TH] ขา R_EN และ L_EN ต่อรวมกันมาที่ขานี้ขาเดียว
 //      ถ้าแยกสองขาจะเปิดใช้งานสะพานครึ่งซีกแต่ละข้างแยกกันได้
-//      แต่ขา 33 ถูกใช้กับรีเลย์ตัดหลักด้านล่างแล้ว และรีเลย์ตัวนั้นเป็นการตัดที่หนักแน่นกว่า
-//      ไม่ได้เสียอะไรไป เพราะ BTS7960 กันการนำกระแสทะลุภายในสะพานครึ่งซีกแต่ละข้างอยู่แล้ว
+//      แต่การใช้ขาร่วมกันไม่ได้เสียอะไร เพราะ BTS7960 กันการนำกระแสทะลุภายในสะพานครึ่งซีกแต่ละข้างอยู่แล้ว
 //      และสองซีกไม่เคยถูกสั่งลอจิกสูงพร้อมกัน actuator.cpp จะลดฝั่งที่ไม่ได้ใช้ให้เป็นศูนย์ก่อนเสมอ
+//      ขาเดียวยังหมายถึงคำสั่งเขียนครั้งเดียว ซึ่งทำให้ขาเปิดใช้งานเป็นการตัดด้วยคำสั่งเดียวในทุกเส้นทางฉุกเฉิน
 #define PIN_MOT_EN 4
-// Master cut relay, in series with the BTS7960's motor supply. A relay contact
-// fails open; a MOSFET fails shorted, and a shorted high-side FET drives the
-// motor with the firmware unable to stop it — on a machine with a patient's leg
-// loaded that is the failure mode worth spending a relay on. It is one more
-// channel of the same active-low board the lamps are on.
-//
-// It switches on session boundaries, not on strokes: closed when a session
-// starts, open when it ends or faults. Two contact operations per session rather
-// than two per rep, which is ~40 a day at twenty sessions and keeps a
-// ~100k-operation relay alive for years. actuator.cpp also never makes or breaks
-// it under load — the drive is cut to zero first and the contacts settle before
-// any PWM — so the contacts only ever switch a dead circuit.
-// [TH] รีเลย์ตัดหลัก ต่ออนุกรมกับไฟเลี้ยงมอเตอร์ของ BTS7960
-//      หน้าสัมผัสรีเลย์เสียแบบเปิดวงจร ส่วนมอสเฟตเสียแบบลัดวงจร
-//      และมอสเฟตฝั่งบวกที่ลัดวงจรจะขับมอเตอร์โดยที่เฟิร์มแวร์หยุดไม่ได้
-//      บนเครื่องที่มีขาผู้ป่วยวางอยู่ นี่คือรูปแบบความเสียหายที่คุ้มค่าที่จะเสียรีเลย์หนึ่งตัวไปกัน
-//      เป็นอีกหนึ่งช่องของบอร์ดสั่งงานด้วยลอจิกต่ำแผ่นเดียวกับหลอดไฟ
-//      รีเลย์นี้ตัดต่อตามขอบเขตของรอบการทำงาน ไม่ใช่ตามจังหวะการเคลื่อนที่
-//      ปิดวงจรเมื่อรอบเริ่ม เปิดวงจรเมื่อรอบจบหรือเกิดความผิดพลาด
-//      คือตัดต่อสองครั้งต่อรอบ ไม่ใช่สองครั้งต่อการทำหนึ่งครั้ง
-//      ที่ยี่สิบรอบต่อวันคือราว 40 ครั้งต่อวัน รีเลย์ที่ทนได้ราวแสนครั้งจึงอยู่ได้หลายปี
-//      และ actuator.cpp ไม่เคยตัดต่อขณะมีโหลด จะลดกำลังขับเป็นศูนย์ก่อน
-//      และรอให้หน้าสัมผัสนิ่งก่อนจ่าย PWM หน้าสัมผัสจึงตัดต่อวงจรที่ไม่มีกระแสเสมอ
-#define PIN_MOT_MASTER 33
-#define MASTER_ACTIVE_LOW // same active-low relay board as the lamps
-                          // [TH] บอร์ดรีเลย์สั่งงานด้วยลอจิกต่ำแผ่นเดียวกับหลอดไฟ
-
 // PWM for the two BTS7960 inputs, through the ESP32's LEDC peripheral.
 // 20 kHz is above hearing, so a patient hears the gearbox and not the drive; it
 // is also the BTS7960 datasheet's ceiling of 25 kHz with a little margin. Drop
@@ -92,10 +65,44 @@
 //      ทั้งหมดนี้ตัดกำลังขับทันที ดูรายละเอียดใน actuator.cpp
 #define MOTOR_RAMP_MS 400
 
+// Jog: hold-to-move for manual positioning, entered by holding STOP while idle.
+// Half duty because jog exists to nudge a leg into place and to watch what the
+// mechanism does, not to cover travel — and because a slow drive is the one you
+// can still react to with a hand on the leg.
+//
+// TUNE THIS ON THE BENCH. Half of full is a starting guess, not a measurement: a
+// geared 12 V actuator under a loaded leg has stiction, and too low a duty buzzes
+// without moving, which looks exactly like a seized mechanism. Raise it until the
+// leg moves smoothly from rest, then stop.
+// [TH] โหมดขยับเอง: กดค้างเพื่อเคลื่อนที่ ใช้จัดตำแหน่งด้วยมือ เข้าโหมดโดยกดปุ่ม STOP ค้างตอนเครื่องว่าง
+//      ใช้กำลังขับครึ่งเดียว เพราะโหมดนี้มีไว้ขยับขาเข้าที่และดูว่ากลไกทำงานอย่างไร ไม่ใช่เพื่อเคลื่อนที่เป็นระยะ
+//      และเพราะการขับช้าเป็นการขับที่ยังทันตั้งตัวได้ถ้ามือวางอยู่บนขา
+//      ค่านี้ต้องปรับจากการทดลองจริง ครึ่งหนึ่งของกำลังเต็มเป็นค่าเดาเริ่มต้น ไม่ใช่ค่าที่วัดมา
+//      ชุดขับเคลื่อน 12 โวลต์แบบมีเกียร์ที่มีขาวางอยู่มีความฝืดตอนออกตัว
+//      ถ้ากำลังขับต่ำเกินไปจะได้แค่เสียงหวีดโดยไม่ขยับ ซึ่งดูเหมือนกลไกติดตายเลย
+//      ให้เพิ่มขึ้นจนขาเริ่มเคลื่อนจากจุดหยุดได้นุ่มนวล แล้วหยุดที่ค่านั้น
+#define MOTOR_JOG_DUTY (MOTOR_DUTY_MAX / 2)
+// How long STOP must be held, while idle, to enter jog mode. Long enough that
+// the ordinary STOP tap that clears the rep count can never reach it.
+// [TH] ต้องกดปุ่ม STOP ค้างนานเท่าใดตอนเครื่องว่างจึงจะเข้าโหมดขยับเอง
+//      นานพอที่การกด STOP สั้นๆ เพื่อล้างจำนวนครั้งจะไม่มีทางไปถึงค่านี้ได้
+#define JOG_ENTER_MS 2000
+// Jog mode leaves itself after this long with no button held, so a machine is
+// never left sitting in a mode where START does not start a session.
+// [TH] โหมดขยับเองจะออกเองเมื่อไม่มีการกดปุ่มนานเท่านี้
+//      เครื่องจะไม่ถูกทิ้งไว้ในโหมดที่ปุ่ม START ไม่ได้เริ่มรอบการทำงาน
+#define JOG_IDLE_EXIT_MS 20000
+
 // The top and bottom limit switches are gone. Travel is timed now: LIFT drives
 // RPWM for liftSec and LOWER drives LPWM for lowerSec, both editable.
-// GPIO 32 became the yellow lamp; GPIO 33 is the master cut relay. There are no
-// free GPIOs left on this board.
+// GPIO 32 became the yellow lamp; GPIO 33 is free.
+//
+// There is no firmware-controlled cut in the motor supply, and deliberately so.
+// The machine's hardware cut is the panel emergency stop, which opens the whole
+// 12 V feed — motor rail, lamps and this MCU together. A relay driven by this
+// firmware could not survive a panic in this firmware; the button can, and it
+// also covers a shorted output FET, which nothing in software can. It is manual,
+// so it needs an operator present — already the rule this machine runs under.
 //
 // What this costs, stated once so nobody rediscovers it the hard way: the board
 // has no measurement of where the leg is. A slipping belt, a jammed actuator and
@@ -104,7 +111,13 @@
 // machine must not run unattended with a leg loaded on it.
 // [TH] ลิมิตสวิตช์บนและล่างถูกยกเลิกแล้ว ตอนนี้การเคลื่อนที่ใช้เวลาเป็นตัวกำหนด
 //      สถานะยกขาจ่ายกำลังทาง RPWM เป็นเวลา liftSec และสถานะลดลงจ่ายทาง LPWM เป็นเวลา lowerSec ปรับได้ทั้งคู่
-//      ขา 32 กลายเป็นไฟเหลือง ส่วนขา 33 เป็นรีเลย์ตัดหลัก ไม่มีขา GPIO ว่างเหลือบนบอร์ดนี้แล้ว
+//      ขา 32 กลายเป็นไฟเหลือง ส่วนขา 33 ว่าง
+//      ไม่มีการตัดไฟเลี้ยงมอเตอร์ที่สั่งด้วยเฟิร์มแวร์ และตั้งใจให้เป็นเช่นนั้น
+//      การตัดระดับฮาร์ดแวร์ของเครื่องคือปุ่มหยุดฉุกเฉินที่หน้าปัด
+//      ซึ่งตัดไฟ 12 โวลต์ทั้งระบบ ทั้งไฟมอเตอร์ ไฟหน้าปัด และไมโครคอนโทรลเลอร์ตัวนี้พร้อมกัน
+//      รีเลย์ที่สั่งด้วยเฟิร์มแวร์นี้จะไม่รอดถ้าเฟิร์มแวร์นี้เองพัง แต่ปุ่มกดรอด
+//      และยังครอบคลุมกรณีมอสเฟตขาออกลัดวงจร ซึ่งซอฟต์แวร์ทำอะไรไม่ได้เลย
+//      เป็นการตัดด้วยมือ จึงต้องมีผู้ควบคุมอยู่ด้วย ซึ่งเป็นกฎที่เครื่องนี้ใช้อยู่แล้ว
 //      สิ่งที่ต้องแลก บอกไว้ครั้งเดียวเพื่อไม่ให้ต้องไปค้นพบเองตอนเกิดเรื่อง
 //      บอร์ดไม่มีการวัดตำแหน่งขาเลย สายพานลื่น ชุดขับเคลื่อนติดขัด และการเคลื่อนที่ปกติ
 //      เป็นเหตุการณ์เดียวกันหมดสำหรับเฟิร์มแวร์นี้ คือ "มอเตอร์ถูกขับครบ lowerSec"
@@ -186,13 +199,11 @@
 //      ไม่ใช่ขา strapping และไม่มีสัญญาณแกว่งตอนบูตแบบขา 0/2/5/12/15
 #define PIN_LAMP_GREEN 23
 #define PIN_LAMP_YELLOW 32
-// The lamps are relay channels too, on the same active-low board as the master
-// cut relay — so this is set for the same reason MASTER_ACTIVE_LOW is. Covers
-// BOTH lamps, on the assumption they are two channels of one board. Check before
+// The lamps are the only relay channels left on the machine — two channels of
+// one active-low board. This covers BOTH of them. Check before
 // first power-up: backwards, green is lit whenever the machine is idle, which is
 // the dangerous way round.
-// [TH] หลอดไฟก็เป็นช่องรีเลย์เหมือนกัน อยู่บนบอร์ดสั่งงานด้วยลอจิกต่ำแผ่นเดียวกับรีเลย์ตัดหลัก
-//      จึงเปิดค่านี้ด้วยเหตุผลเดียวกับ MASTER_ACTIVE_LOW
+// [TH] หลอดไฟเป็นช่องรีเลย์เพียงชุดเดียวที่เหลืออยู่บนเครื่อง คือสองช่องของบอร์ดสั่งงานด้วยลอจิกต่ำแผ่นเดียว
 //      ใช้กับหลอดทั้งสองดวง โดยถือว่าเป็นสองช่องของบอร์ดเดียวกัน
 //      ต้องตรวจก่อนเปิดเครื่องครั้งแรก ถ้ากลับด้าน ไฟเขียวจะติดตอนเครื่องว่าง ซึ่งเป็นด้านที่อันตราย
 #define LED_ACTIVE_LOW
@@ -200,13 +211,13 @@
 // DS3231 real-time clock on the controller I2C bus. Not the ESP32 default pair
 // (21/22): 22 drives the motor, and 25 is now START. 21 and 19 are what is left
 // free after motor 22/27, UART 16/17, the START/STOP buttons on 25/26, and the
-// yellow lamp on 32 — 4 and 33 have since gone to the motor enable and the
-// master cut relay. Left as they are: moving a working I2C bus buys nothing and
-// invalidates every wiring photo.
+// yellow lamp on 32 — 4 is now the motor enable and 33 is free. Left as they
+// are: moving a working I2C bus buys nothing and invalidates every wiring
+// photo.
 // [TH] นาฬิกา DS3231 ต่อผ่าน I2C ของบอร์ดคอนโทรลเลอร์
 //      ใช้ขา 21/19 เพราะขา 22 เป็นขาขับมอเตอร์ และขา 25 เป็นปุ่ม START ไปแล้ว
 //      ขาที่เหลือว่างหลังหักขาขับมอเตอร์ 22/27, UART 16/17, ปุ่ม START/STOP 25/26 และไฟเหลืองที่ขา 32
-//      คือขา 4 และ 33 ซึ่งตอนนี้ไปเป็นขาเปิดใช้งานตัวขับมอเตอร์กับรีเลย์ตัดหลักแล้ว
+//      คือขา 4 ซึ่งตอนนี้เป็นขาเปิดใช้งานตัวขับมอเตอร์ ส่วนขา 33 ยังว่างอยู่
 //      ไม่ย้ายบัสนี้ เพราะบัส I2C ที่ใช้งานได้อยู่แล้วย้ายไปก็ไม่ได้อะไรเพิ่ม
 //      มีแต่จะทำให้รูปการต่อสายทั้งหมดใช้ไม่ได้
 #define PIN_RTC_SDA 21

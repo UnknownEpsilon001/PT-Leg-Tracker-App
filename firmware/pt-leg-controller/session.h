@@ -96,6 +96,14 @@ class SessionSM {
   void setTarget(uint16_t reps) { cfg.targetReps = reps; }
   uint16_t target() const { return cfg.targetReps; }
 
+  // A manual jog moved the leg to somewhere this firmware cannot know, which is
+  // the same state a power cut mid-stroke leaves behind — so it is recorded the
+  // same way, and the next START lowers in full before it lifts.
+  // [TH] การขยับเองด้วยมือพาขาไปอยู่ตำแหน่งที่เฟิร์มแวร์นี้ไม่มีทางรู้
+  //      ซึ่งเป็นสถานะเดียวกับที่ไฟดับกลางจังหวะทิ้งไว้ จึงบันทึกด้วยวิธีเดียวกัน
+  //      และปุ่ม START ครั้งถัดไปจะลดขาลงเต็มระยะก่อนยกขึ้น
+  void markLegMoved() { legPositionUnknown = true; }
+
   void tick(uint32_t nowMs);
   bool running() const { return ph != Phase::Idle && ph != Phase::Fault; }
   bool faulted() const { return ph == Phase::Fault; }

@@ -40,3 +40,11 @@ bool buttonStopPressed();
 //      จึงไม่ให้เริ่มรอบใดๆ ตราบที่ยังเป็นแบบนั้น รวมถึงรอบที่สั่งจากเซิร์ฟเวอร์
 //      ค่านี้ล้างทันทีที่ระดับขาเปลี่ยน ซึ่งปุ่มที่ถูกกดค้างจริงจะเปลี่ยนเมื่อปล่อย
 bool buttonStartStuck();
+// Debounced level, not an edge: true for as long as the button is actually held.
+// Only jog mode uses these — every other control is an edge, because a held
+// button must never mean "keep doing it" for anything that starts a session.
+// [TH] ระดับสัญญาณที่ผ่านกันเด้งแล้ว ไม่ใช่ขอบ เป็นจริงตลอดเวลาที่กดค้างอยู่จริง
+//      มีแต่โหมดขยับเองที่ใช้ค่านี้ ส่วนการควบคุมอื่นใช้ขอบทั้งหมด
+//      เพราะการกดค้างต้องไม่มีความหมายว่า "ทำต่อไปเรื่อยๆ" กับอะไรที่เริ่มรอบการทำงาน
+bool buttonStartHeld();
+bool buttonStopHeld();

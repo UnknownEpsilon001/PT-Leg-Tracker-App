@@ -235,5 +235,8 @@ void buttonsPoll(uint32_t nowMs) {
   poll(bStop, nowMs);
 }
 
+bool buttonStartHeld() { return bStart.stable; }
+bool buttonStopHeld() { return bStop.stable; }
+
 bool buttonStartPressed() { return takeEdge(bStart, nullptr); }
 bool buttonStopPressed() { return takeEdge(bStop, nullptr); }

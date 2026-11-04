@@ -9,17 +9,13 @@ enum ActState { ACT_OFF, ACT_UP, ACT_DOWN };  // สถานะ: ปิด / �
 
 // Safety invariants enforced here and nowhere else:
 // - UP and DOWN are never driven at the same time (break-before-make).
-// - Nothing is ever driven while the master cut relay is open, and the relay is
-//   never made or broken while the drive is live.
-// - actuatorBegin() forces the drive dead and the master relay open, and must be
-//   the first hardware call in setup().
+// - actuatorBegin() forces the drive dead, and must be the first hardware call
+//   in setup().
 // - Ramping is a comfort feature, never a safety one: every emergency path
 //   (fault, energize cap, live reversal, boot) cuts the drive instantly.
 // [TH] ข้อกำหนดความปลอดภัยที่บังคับใช้ที่ไฟล์นี้เท่านั้น:
 //  - ห้ามขับ "ขึ้น" และ "ลง" พร้อมกัน (ตัดก่อนต่อ = break-before-make)
-//  - ห้ามขับมอเตอร์ขณะที่รีเลย์ตัดหลักเปิดวงจรอยู่ และห้ามตัดต่อรีเลย์นั้นขณะที่กำลังขับอยู่
-//  - actuatorBegin() บังคับให้กำลังขับดับและรีเลย์ตัดหลักเปิดวงจร
-//    และต้องเป็นคำสั่งฮาร์ดแวร์แรกใน setup()
+//  - actuatorBegin() บังคับให้กำลังขับดับ และต้องเป็นคำสั่งฮาร์ดแวร์แรกใน setup()
 //  - การไล่กำลังขับมีไว้เพื่อความนุ่มนวล ไม่ใช่เพื่อความปลอดภัย
 //    ทุกเส้นทางฉุกเฉิน (ความผิดพลาด เพดานเวลา การกลับทิศขณะขับอยู่ การเปิดเครื่อง) ตัดกำลังขับทันที
 void actuatorBegin();
@@ -41,20 +37,11 @@ void actuatorOff();
 //      (ยกขึ้น -> ค้าง, ลดลง -> พัก, และตอนถึงพื้นของการลดขาเพื่อหยุด) ห้ามใช้กับความผิดพลาด
 //      เมื่อผ่อนจนสุดแล้วจะเหมือน actuatorOff() ทุกประการ จึงเรียกซ้ำทุกลูปได้ปลอดภัย
 void actuatorSoftOff();
-// Close (true) or open (false) the master cut relay. Drive the session's
-// "may the motor move at all" state into this every loop; it is idempotent.
-// Closing does not start anything — it only permits it, and the first stroke
-// still waits out the contact settle time. Opening is deferred until the drive
-// has actually reached zero, so a soft stop is never cut short and the contacts
-// never break a live circuit; an emergency cut opens it immediately, but only
-// after the drive is already dead.
-// [TH] ปิดวงจร (true) หรือเปิดวงจร (false) ของรีเลย์ตัดหลัก
-//      ให้ส่งสถานะ "มอเตอร์เคลื่อนที่ได้หรือไม่" ของรอบการทำงานเข้ามาทุกลูป เรียกซ้ำได้ปลอดภัย
-//      การปิดวงจรไม่ได้เริ่มอะไร เป็นแค่การอนุญาต และการเคลื่อนที่ครั้งแรกยังต้องรอให้หน้าสัมผัสนิ่งก่อน
-//      ส่วนการเปิดวงจรจะรอจนกำลังขับลงถึงศูนย์จริง การหยุดแบบนุ่มนวลจึงไม่ถูกตัดกลางคัน
-//      และหน้าสัมผัสไม่เคยตัดวงจรที่มีกระแส
-//      การตัดฉุกเฉินจะเปิดวงจรทันที แต่ก็ต่อเมื่อกำลังขับดับไปแล้วเช่นกัน
-void actuatorArm(bool on);
+// Hold-to-move at MOTOR_JOG_DUTY for manual positioning. ACT_OFF fades out.
+// Call every loop while the operator holds the button; it is idempotent.
+// [TH] กดค้างเพื่อขยับที่กำลังขับ MOTOR_JOG_DUTY ใช้จัดตำแหน่งขาด้วยมือ
+//      ค่า ACT_OFF จะค่อยๆ ผ่อนกำลังลง เรียกทุกลูปตราบที่ผู้ใช้ยังกดค้าง เรียกซ้ำได้ปลอดภัย
+void actuatorJog(ActState dir);
 ActState actuatorState();
 // Restart the energize clock without changing direction. Call on a phase change
 // that begins a new stroke in the same direction as the last one (Lower ->
