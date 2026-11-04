@@ -40,21 +40,28 @@ watch(
   },
 )
 
+let submitting = false // a double-tap on the last choice must not save twice
+
 async function answer(choiceIndex: number) {
-  if (!quiz.value) return
+  if (!quiz.value || submitting) return
   answers.value[qIndex.value] = choiceIndex
   if (qIndex.value < quiz.value.questions.length - 1) {
     qIndex.value++
     return
   }
+  submitting = true
   finalScore.value = scoreQuiz(quiz.value.questions as { correctIndex?: number }[], answers.value)
-  await store.addResult({
-    quizId: quiz.value.id,
-    answers: [...answers.value],
-    score: finalScore.value,
-    timestamp: new Date().toISOString(),
-  })
-  done.value = true
+  try {
+    await store.addResult({
+      quizId: quiz.value.id,
+      answers: [...answers.value],
+      score: finalScore.value,
+      timestamp: new Date().toISOString(),
+    })
+    done.value = true
+  } finally {
+    submitting = false
+  }
 }
 </script>
 

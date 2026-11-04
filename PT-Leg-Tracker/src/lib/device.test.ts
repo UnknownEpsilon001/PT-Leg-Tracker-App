@@ -230,10 +230,10 @@ describe('claimSession', () => {
       }),
     )
   })
-  it('throws unreachable on 404 (unknown session)', async () => {
+  it('throws not-found on 404 (unknown session)', async () => {
     mockFetchOnce(jsonRes(404, { detail: 'unknown session' }))
     await expect(claimSession('http://srv', 'nope', 'P001')).rejects.toMatchObject({
-      kind: 'unreachable',
+      kind: 'not-found',
     })
   })
 })

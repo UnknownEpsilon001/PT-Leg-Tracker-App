@@ -20,8 +20,16 @@ const painPoints = computed(() =>
     .filter((r) => r.painAfter !== undefined)
     .sort((a, b) => a.date.localeCompare(b.date))
     .slice(-10)
-    .map((r) => ({ label: r.date.slice(5, 10), value: r.painAfter as number })),
+    .map((r) => ({ label: localMonthDay(r.date), value: r.painAfter as number })),
 )
+
+// MM-DD on the phone's own calendar; slicing the ISO string gave the UTC day,
+// a day early for anything logged before 07:00 in Thailand
+// [TH] เดือน-วัน ตามเวลาเครื่อง ; ตัดจากสตริง ISO จะได้วันของ UTC ซึ่งช้าไปหนึ่งวันก่อน 7 โมงเช้า
+function localMonthDay(iso: string) {
+  const d = new Date(iso)
+  return `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
 
 const thisWeekCount = computed(() => {
   const weekAgo = Date.now() - 7 * 24 * 3600 * 1000

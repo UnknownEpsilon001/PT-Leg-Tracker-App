@@ -113,11 +113,17 @@ function parsedSeconds(s: string, min: number, max: number): number | undefined 
   if (trimmed === '') return undefined
   const n = Number(trimmed)
   if (!Number.isFinite(n)) return undefined
-  return Math.min(max, Math.max(min, n))
+  // whole seconds: the server's fields are int and would 422 on 7.5
+  // [TH] ปัดเป็นวินาทีเต็ม เพราะเซิร์ฟเวอร์รับเฉพาะจำนวนเต็ม ค่าอย่าง 7.5 จะถูกปฏิเสธ
+  return Math.min(max, Math.max(min, Math.round(n)))
 }
 
 async function saveTimings() {
   timingsMessage.value = ''
+  if (!settings.settings.serverUrl) {
+    timingsMessage.value = 'ยังไม่ได้ตั้งค่าที่อยู่เซิร์ฟเวอร์'
+    return
+  }
   const timings: DeviceTimings = {}
   const lift = parsedSeconds(timingLift.value, 1, 20)
   const lower = parsedSeconds(timingLower.value, 1, 20)
