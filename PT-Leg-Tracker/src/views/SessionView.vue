@@ -300,11 +300,11 @@ async function save() {
     })
     // Queued first so a failed claim is retried by the next sync instead of lost.
     // [TH] เข้าคิวก่อน ถ้าผูกไม่สำเร็จ การซิงก์ครั้งถัดไปจะลองใหม่ ไม่หายไปเฉยๆ
-    if (sessionId.value) await queueClaim(sessionId.value)
     const code = profileStore.profile?.patientCode
-    if (code && serverUrl.value) {
+    if (sessionId.value && code) await queueClaim(sessionId.value, code)
+    if (serverUrl.value) {
       try {
-        await flushClaims(serverUrl.value, code)
+        await flushClaims(serverUrl.value)
       } catch {
         // best-effort: anything left stays queued, local log is saved
       }

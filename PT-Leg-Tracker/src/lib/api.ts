@@ -44,7 +44,7 @@ export async function syncNow(): Promise<boolean> {
   try {
     // claims first, so a session claimed now is in the list fetched below
     // [TH] ผูกเซสชันที่ค้างก่อน เซสชันที่เพิ่งผูกได้จะได้อยู่ในรายการที่ดึงด้านล่าง
-    await flushClaims(url, code)
+    await flushClaims(url)
     const remote = await fetchDeviceSessions(url, code)
     await sessions.replaceAll(mergeSessions(sessions.sessions, remote))
     await settings.update({ lastSync: new Date().toISOString() })

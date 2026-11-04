@@ -23,15 +23,15 @@ afterEach(() => vi.unstubAllGlobals())
 
 describe('claims queue', () => {
   it('queues each session once', async () => {
-    await queueClaim('s1')
-    await queueClaim('s1')
-    expect(pending()).toEqual(['s1'])
+    await queueClaim('s1', 'P001')
+    await queueClaim('s1', 'P001')
+    expect(pending()).toEqual([{ sessionId: 's1', patientCode: 'P001' }])
   })
 
   it('keeps failed claims, drops claimed and unknown ones', async () => {
-    await queueClaim('ok')
-    await queueClaim('down')
-    await queueClaim('gone')
+    await queueClaim('ok', 'P001')
+    await queueClaim('down', 'P001')
+    await queueClaim('gone', 'P001')
     vi.stubGlobal(
       'fetch',
       vi.fn(async (url: string) => {
@@ -39,7 +39,17 @@ describe('claims queue', () => {
         return res(url.includes('/gone/') ? 404 : 200)
       }),
     )
-    await flushClaims('http://srv', 'P001')
-    expect(pending()).toEqual(['down'])
+    await flushClaims('http://srv')
+    expect(pending()).toEqual([{ sessionId: 'down', patientCode: 'P001' }])
+  })
+
+  it('claims each session for the patient it was queued under', async () => {
+    await queueClaim('a', 'OLD')
+    await queueClaim('b', 'NEW')
+    const fn = vi.fn(async (_url: string, _init: RequestInit) => res(200))
+    vi.stubGlobal('fetch', fn)
+    await flushClaims('http://srv')
+    const codes = fn.mock.calls.map(([, init]) => JSON.parse(init.body as string).patientCode)
+    expect(codes).toEqual(['OLD', 'NEW'])
   })
 })
