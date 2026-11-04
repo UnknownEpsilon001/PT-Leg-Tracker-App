@@ -39,6 +39,7 @@
 #include "uitest.h"        // bench-only serial control of the UI — โหมดทดสอบผ่านสาย
 #include "audio.h"         // spoken cues from /sounds on the card — เสียงพูดจากการ์ด
 #include <driver/gpio.h>
+#include <esp_heap_caps.h>
 
 // Both drive the USB serial port, so enabling both means two readers fighting
 // over the same bytes and neither working.
@@ -473,18 +474,28 @@ void setup() {
   //      ตอนนี้ link.cpp ตัดขยะให้แล้ว ส่วนนี้ช่วยไม่ให้เกิดขยะตั้งแต่ต้น
   //      ถ้ายังมีอยู่ ให้ใส่ตัวต้านทาน 10 กิโลโอห์มไป 3.3V จะแน่นอนกว่า
   gpio_set_pull_mode(GPIO_NUM_22, GPIO_PULLUP_ONLY);
-  // Before the screen and the card, deliberately. The full 48 KB buffer needs
-  // one contiguous block; allocated last, after the 48 KB LVGL draw buffer and
-  // the SD driver had split the big heap region, it fell back to the 24 KB tier
-  // on a real board with 171 KB free, and every cue longer than 1.11 s was
-  // rejected. LVGL has its own degrade ladder if this leaves it short. Nothing
-  // here needs the card: the clips are opened later, in audioLoop().
-  // [TH] เรียกก่อนจอและการ์ดโดยตั้งใจ บัฟเฟอร์เต็ม 48 KB ต้องได้หน่วยความจำก้อนเดียวติดกัน
-  //      ถ้าจองท้ายสุด หลังบัฟเฟอร์วาดภาพ LVGL 48 KB และไดรเวอร์การ์ดแบ่งหน่วยความจำก้อนใหญ่ไปแล้ว
-  //      บนบอร์ดจริงที่เหลือว่าง 171 KB ยังได้แค่ขั้น 24 KB และทุกเสียงที่ยาวเกิน 1.11 วินาทีถูกปฏิเสธ
-  //      LVGL มีขั้นลดขนาดของตัวเองถ้าหน่วยความจำไม่พอ และตรงนี้ไม่ต้องใช้การ์ด เพราะคลิปถูกเปิดทีหลังใน audioLoop()
-  audioBegin();
-  uiBegin();
+  // Three large heap claims, in this order on purpose: the SD mount, the 48 KB
+  // audio buffer, then the 48 KB LVGL draw buffer. Each needs one contiguous
+  // block, and the ESP32 has only one region big enough for more than one of
+  // them. Measured on the board:
+  //  - LVGL first: audio fell to its 24 KB tier and rejected every cue > 1.11 s.
+  //  - audio, LVGL, then SD: the mount failed ("sd card: absent") with 114 KB
+  //    free. Most likely the FAT driver's file table (~25 KB, one block) no
+  //    longer fit; mounted first it takes ~28 KB of the big block, as the
+  //    "largest free block" lines below show.
+  // The screen and the card are on separate SPI ports (USE_HSPI_PORT in
+  // TFT_eSPI_User_Setup.h), so this order costs the card nothing.
+  // The SD mount is the smallest and the one whose failure costs the most (no
+  // roster, no logging, no cues), so it goes first; LVGL goes last because it is
+  // the only one with a degrade ladder that keeps the screen working.
+  // [TH] การจองหน่วยความจำก้อนใหญ่สามรายการเรียงลำดับนี้โดยตั้งใจ: เมานต์การ์ด บัฟเฟอร์เสียง 48 KB แล้วบัฟเฟอร์วาดภาพ LVGL 48 KB
+  //      แต่ละรายการต้องได้หน่วยความจำก้อนเดียวติดกัน และ ESP32 มีบริเวณที่ใหญ่พอสำหรับมากกว่าหนึ่งรายการอยู่บริเวณเดียว
+  //      วัดบนบอร์ดจริง: จองจอก่อน บัฟเฟอร์เสียงตกไปขั้น 24 KB และปฏิเสธเสียงทุกอันที่ยาวเกิน 1.11 วินาที
+  //      จองเสียงกับจอก่อนการ์ด การเมานต์ล้มเหลวทั้งที่ว่าง 114 KB เพราะตารางไฟล์ของไดรเวอร์ FAT (~25 KB ก้อนเดียว) ไม่พอที่
+  //      การ์ดใช้น้อยที่สุดและเสียหายมากที่สุดถ้าล้มเหลว (ไม่มีทะเบียน ไม่มีบันทึก ไม่มีเสียง) จึงไปก่อน
+  //      LVGL ไปท้ายสุดเพราะเป็นรายการเดียวที่มีขั้นลดขนาดซึ่งยังทำให้จอใช้งานได้
+  Serial.printf("heap: largest free block %u before the sd mount\n",
+                (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
   // A missing or unreadable card is not an error worth stopping for: the roster
   // is empty, sessions ring-buffer, and the machine still runs.
   // [TH] ไม่มีการ์ดหรืออ่านการ์ดไม่ได้ ไม่ถือเป็นข้อผิดพลาดที่ต้องหยุดเครื่อง
@@ -493,6 +504,8 @@ void setup() {
                 storePatientCount());
   gCardWasPresent = storeCardPresent();  // boot state, so the first tick is not read as an insertion
   sdlogEnsureHeader();
+  audioBegin();  // prints its own largest-block figure — พิมพ์ขนาดก้อนใหญ่สุดเอง
+  uiBegin();
   // Read before the link comes up: the controller's reply is what triggers
   // reconciliation, and this decides which side of it wins.
   // [TH] อ่านไฟล์ก่อนที่ลิงก์จะพร้อม เพราะการตอบกลับของคอนโทรลเลอร์คือจุดที่เริ่มเทียบค่า
