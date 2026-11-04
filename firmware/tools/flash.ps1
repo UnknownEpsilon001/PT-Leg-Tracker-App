@@ -36,6 +36,7 @@ param(
     [switch]$SkipGuards,         # flash a bench build on purpose
     [switch]$NoCompile,          # compatibility alias for -Action upload
     [switch]$ForceCompile,       # rebuild even when the source hash is unchanged
+    [switch]$IfChanged,          # -Action compile: skip a board whose source hash is unchanged
     [switch]$DryRun,             # resolve the workflow but do not erase or upload
     [switch]$AllowPortRoleMismatch, # allow an explicit port whose VID maps to the other board
     [switch]$Yes,                # answer the -Erase confirmation up front
@@ -727,7 +728,7 @@ function Invoke-SelectedAction {
     }
 
     if ($Action -in @("compile", "auto")) {
-        foreach ($role in $roles) { Invoke-Compile $role -OnlyWhenChanged:($Action -eq "auto") | Out-Null }
+        foreach ($role in $roles) { Invoke-Compile $role -OnlyWhenChanged:($Action -eq "auto" -or $IfChanged) | Out-Null }
     }
 
     if ($Action -in @("upload", "auto")) {

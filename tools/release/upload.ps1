@@ -79,10 +79,17 @@ function Publish-Board([string]$role, [string]$port) {
         $offset, $file = -split $line
         $argList += $offset, (Join-Path $dir $file)
     }
-    Write-Host "== $role on $port ==" -ForegroundColor Cyan
-    if ($Erase) { Invoke-Esptool @("--chip", "esp32", "--port", $port, "erase-flash") "erase of $role on $port" }
+    if ($Erase) {
+        Write-Host "  erasing the whole chip (about 20 s)..."
+        Invoke-Esptool @("--chip", "esp32", "--port", $port, "erase-flash") "erase of $role on $port"
+    }
+    Write-Host "  writing 4 images; esptool shows the percent for each"
     Invoke-Esptool $argList "upload of $role on $port"
-    Write-Host "done: $role on $port" -ForegroundColor Green
+}
+
+function Format-Span([TimeSpan]$t) {
+    if ($t.TotalMinutes -ge 1) { return "{0}m{1:00}s" -f [int][math]::Floor($t.TotalMinutes), $t.Seconds }
+    return "{0}s" -f [int]$t.TotalSeconds
 }
 
 $roles = if ($Board -eq "both") { @("controller", "display") } else { @($Board) }
@@ -100,5 +107,34 @@ Write-Host "Pull the controller<->CYD UART jumpers first; a connected link fakes
 if ($Erase) { Write-Host "-Erase wipes NVS: Wi-Fi and device code are lost until the SD card pushes them back." -ForegroundColor Yellow }
 if (-not $Yes) { Read-Host "Press Enter to flash, Ctrl+C to cancel" | Out-Null }
 
-foreach ($role in $plan.Keys) { Publish-Board $role $plan[$role] }
-Write-Host "All done. Reconnect the jumpers and power both boards." -ForegroundColor Green
+$clock = [Diagnostics.Stopwatch]::StartNew()
+$done = @()
+$i = 0
+foreach ($role in @($plan.Keys)) {
+    $i++
+    $port = $plan[$role]
+    $Host.UI.RawUI.WindowTitle = "Flashing $i/$($plan.Count) - $role on $port"
+    Write-Host ""
+    Write-Host "[$i/$($plan.Count)] $role on $port" -ForegroundColor Cyan
+    $boardClock = [Diagnostics.Stopwatch]::StartNew()
+    try {
+        Publish-Board $role $port
+    } catch {
+        $Host.UI.RawUI.WindowTitle = "Flashing FAILED - $role"
+        Write-Host ""
+        Write-Host "[FAILED] $role on $port after $(Format-Span $boardClock.Elapsed)" -ForegroundColor Red
+        Write-Host "  $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host "  Check the cable and the UART jumpers, then run upload.cmd again." -ForegroundColor Red
+        if ($done) { Write-Host "  Already flashed in this run: $($done -join ', ')" -ForegroundColor Yellow }
+        try { [console]::Beep(400, 600) } catch {}
+        exit 1
+    }
+    $done += $role
+    Write-Host "[OK] $role flashed in $(Format-Span $boardClock.Elapsed)" -ForegroundColor Green
+}
+
+$Host.UI.RawUI.WindowTitle = "Flashing done"
+Write-Host ""
+Write-Host "ALL DONE: $($done -join ' + ') flashed in $(Format-Span $clock.Elapsed)" -ForegroundColor Green
+Write-Host "Reconnect the UART jumpers and power both boards." -ForegroundColor Green
+try { [console]::Beep(880, 200); [console]::Beep(1175, 300) } catch {}
