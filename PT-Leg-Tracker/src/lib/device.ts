@@ -2,8 +2,14 @@
 // Server-mediated device-control client (v3): start/stop a session, read current state.
 import type { CurrentSession } from '@/types'
 
-// [TH] ชนิดของข้อผิดพลาดจากอุปกรณ์: ติดต่อไม่ได้ / ไม่ว่าง / ว่างอยู่ / ออฟไลน์ / ไม่ได้ตั้งรหัสอุปกรณ์
-export type DeviceErrorKind = 'unreachable' | 'busy' | 'idle' | 'offline' | 'no-device'
+// [TH] ชนิดของข้อผิดพลาดจากอุปกรณ์: ติดต่อไม่ได้ / ไม่ว่าง / ว่างอยู่ / ออฟไลน์ / ไม่ได้ตั้งรหัสอุปกรณ์ / ไม่พบ (404)
+export type DeviceErrorKind =
+  | 'unreachable'
+  | 'busy'
+  | 'idle'
+  | 'offline'
+  | 'no-device'
+  | 'not-found'
 
 export class DeviceError extends Error {
   kind: DeviceErrorKind
@@ -19,7 +25,7 @@ function base(url: string): string {
   return url.replace(/\/+$/, '')
 }
 
-// [TH] ยิงคำขอ HTTP พร้อมตั้งเวลาหมดอายุ ; สถานะ 409 = ชนกันตามบริบท, อื่นๆ ที่ไม่ ok = ติดต่อไม่ได้
+// [TH] ยิงคำขอ HTTP พร้อมตั้งเวลาหมดอายุ ; สถานะ 409 = ชนกันตามบริบท, 404 = ไม่พบ, อื่นๆ ที่ไม่ ok = ติดต่อไม่ได้
 async function request(
   url: string,
   conflictKind: DeviceErrorKind,
@@ -30,6 +36,7 @@ async function request(
   try {
     const res = await fetch(url, { ...init, signal: ctrl.signal })
     if (res.status === 409) throw new DeviceError(conflictKind)
+    if (res.status === 404) throw new DeviceError('not-found')
     if (!res.ok) throw new DeviceError('unreachable')
     return await res.json()
   } catch (e) {

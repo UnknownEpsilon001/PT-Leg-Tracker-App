@@ -6,14 +6,9 @@ import { useRouter } from 'vue-router'
 import AppIcon from '@/components/AppIcon.vue'
 import PainScale from '@/components/PainScale.vue'
 import ConfettiBurst from '@/components/ConfettiBurst.vue'
-import {
-  DeviceError,
-  claimSession,
-  getCurrent,
-  queueStart,
-  queueStop,
-  setTarget,
-} from '@/lib/device'
+import TargetStepper from '@/components/TargetStepper.vue'
+import { flushClaims, queueClaim } from '@/lib/claims'
+import { DeviceError, getCurrent, queueStart, queueStop, setTarget } from '@/lib/device'
 import { canOpenConfirm, confirmSeed, planConfirmStep } from '@/lib/start-confirm'
 import { performTargetStep, planTargetStep } from '@/lib/target-step'
 import { usePainLogStore } from '@/stores/painlog'
@@ -89,6 +84,16 @@ const confirmLabel = computed(() => (confirmValue.value > 0 ? `${confirmValue.va
 let poller: ReturnType<typeof setInterval> | null = null
 let ticker: ReturnType<typeof setInterval> | null = null
 let disposed = false
+// Bumped by stopPolling so a poll still in flight when polling stops (stop(),
+// failOffline) cannot land afterwards and flip the phase back to 'running'.
+// [TH] เพิ่มค่าทุกครั้งที่ stopPolling ผลของการอ่านสถานะที่ค้างอยู่ตอนหยุดจะได้ไม่ย้อนกลับมาเปลี่ยนหน้าจอ
+let pollGen = 0
+// Consecutive failed polls while still 'starting'; the server dropped after
+// accepting the start, and without a cap the screen would wait forever.
+// [TH] จำนวนครั้งที่อ่านสถานะพลาดติดกันระหว่างรอเครื่องเริ่ม ถ้าไม่จำกัด หน้าจอจะรอไปตลอด
+let startingFails = 0
+const STARTING_MAX_FAILS = 5 // 5 polls × 2 s = 10 s
+const saving = ref(false)
 
 const serverUrl = computed(() => settings.settings.serverUrl.trim())
 const deviceCode = computed(() => settings.settings.deviceCode.trim())
@@ -101,6 +106,7 @@ const clock = computed(() => {
 })
 
 function stopPolling() {
+  pollGen++
   if (poller) clearInterval(poller)
   poller = null
   if (ticker) clearInterval(ticker)
@@ -109,6 +115,7 @@ function stopPolling() {
 
 function startPolling() {
   stopPolling()
+  startingFails = 0
   poller = setInterval(poll, 2000)
   // smooth 1 s clock between polls; each poll overwrites with the server value
   ticker = setInterval(() => {
@@ -117,10 +124,12 @@ function startPolling() {
 }
 
 async function poll() {
+  const gen = pollGen
   try {
     const cur = await getCurrent(serverUrl.value, deviceCode.value)
-    if (disposed) return
+    if (disposed || gen !== pollGen) return
     connLost.value = false
+    startingFails = 0
     // The target is the machine's, not ours — every successful poll re-reads it.
     // [TH] เป้าหมายเป็นของเครื่อง ไม่ใช่ของแอป การอ่านสถานะทุกครั้งที่สำเร็จจะอัปเดตค่าตามจริงเสมอ
     target.value = cur.targetReps
@@ -141,7 +150,15 @@ async function poll() {
       phase.value = 'after'
     }
   } catch {
+    if (disposed || gen !== pollGen) return
     connLost.value = true // keep last-known values; keep polling
+    if (phase.value === 'starting' && ++startingFails >= STARTING_MAX_FAILS) {
+      // If the device did start, the next start() gets 'busy' and offers attach.
+      // [TH] ถ้าเครื่องเริ่มไปแล้วจริง การกดเริ่มครั้งถัดไปจะได้ busy และมีปุ่มเข้าร่วมให้
+      stopPolling()
+      phase.value = 'before'
+      errorMsg.value = 'เชื่อมต่อไม่สำเร็จ ลองใหม่ภายหลัง'
+    }
   }
 }
 
@@ -300,6 +317,16 @@ function attach() {
 }
 
 async function stop() {
+  // attach() shows the stop button before the first poll has learned the
+  // session id; without it the session would never be claimed for this patient.
+  // [TH] attach() แสดงปุ่มหยุดก่อนที่จะรู้รหัสเซสชัน ถ้าไม่ถามก่อน เซสชันนี้จะไม่ถูกผูกกับผู้ป่วย
+  if (!sessionId.value) {
+    try {
+      sessionId.value = (await getCurrent(serverUrl.value, deviceCode.value)).sessionId
+    } catch {
+      // unreachable: stop below fails the same way and the flow still advances
+    }
+  }
   try {
     await queueStop(serverUrl.value, deviceCode.value)
   } catch {
@@ -310,20 +337,30 @@ async function stop() {
 }
 
 async function save() {
-  if (painBefore.value === null || painAfter.value === null) return
-  await painLogStore.add({
-    sessionId: sessionId.value,
-    recordedAt: new Date().toISOString(),
-    painBefore: painBefore.value,
-    painAfter: painAfter.value,
-  })
-  const code = profileStore.profile?.patientCode
-  if (sessionId.value && code && serverUrl.value) {
-    try {
-      await claimSession(serverUrl.value, sessionId.value, code)
-    } catch {
-      // best-effort: session stays unclaimed on the server, local log is saved
+  if (painBefore.value === null || painAfter.value === null || saving.value) return
+  saving.value = true
+  try {
+    await painLogStore.add({
+      sessionId: sessionId.value,
+      recordedAt: new Date().toISOString(),
+      painBefore: painBefore.value,
+      painAfter: painAfter.value,
+    })
+    // Queued first so a failed claim is retried by the next sync instead of lost.
+    // [TH] เข้าคิวก่อน ถ้าผูกไม่สำเร็จ การซิงก์ครั้งถัดไปจะลองใหม่ ไม่หายไปเฉยๆ
+    const code = profileStore.profile?.patientCode
+    if (sessionId.value && code) await queueClaim(sessionId.value, code)
+    if (serverUrl.value) {
+      try {
+        await flushClaims(serverUrl.value)
+      } catch {
+        // best-effort: anything left stays queued, local log is saved
+      }
     }
+  } catch {
+    saving.value = false
+    errorMsg.value = 'บันทึกไม่สำเร็จ กรุณาลองใหม่'
+    return
   }
   router.replace({ name: 'records' })
 }
@@ -361,25 +398,7 @@ onUnmounted(() => {
       <template v-if="confirmOpen">
         <div class="card">
           <h2>รอยืนยัน</h2>
-          <div class="target-stepper">
-            <button
-              class="step"
-              aria-label="ลดจำนวนเซ็ต"
-              :disabled="confirmValue === 0"
-              @click="stepConfirm(-1)"
-            >
-              −
-            </button>
-            <span class="target-label">{{ confirmLabel }}</span>
-            <button
-              class="step"
-              aria-label="เพิ่มจำนวนเซ็ต"
-              :disabled="confirmValue === 99"
-              @click="stepConfirm(1)"
-            >
-              +
-            </button>
-          </div>
+          <TargetStepper :value="confirmValue" :label="confirmLabel" prefix="" noun="เซ็ต" @step="stepConfirm" />
         </div>
         <button class="primary wide" @click="confirmStart">
           <AppIcon name="check" /> ตกลง
@@ -391,26 +410,9 @@ onUnmounted(() => {
           <h2>ก่อนเริ่ม ปวดเข่าแค่ไหน?</h2>
           <PainScale v-model="painBefore" />
         </div>
-        <div class="target-stepper">
-          <button
-            class="step"
-            aria-label="ลดจำนวนเป้าหมาย"
-            :disabled="targetShown === null || targetShown === 0"
-            @click="stepTarget(-1)"
-          >
-            −
-          </button>
-          <span class="target-label">เป้าหมาย {{ targetLabel }}</span>
-          <button
-            class="step"
-            aria-label="เพิ่มจำนวนเป้าหมาย"
-            :disabled="targetShown === null || targetShown === 99"
-            @click="stepTarget(1)"
-          >
-            +
-          </button>
-        </div>
+        <TargetStepper :value="targetShown" :label="targetLabel" @step="stepTarget" />
         <p class="card">สวมอุปกรณ์ให้เรียบร้อย (ดูวิธีใช้ได้ที่เมนู "วิธีใช้เครื่อง") แล้วกดเริ่ม</p>
+        <p v-if="phase === 'starting' && connLost" class="hint">กำลังเชื่อมต่อ…</p>
         <p v-if="errorMsg" class="error">{{ errorMsg }}</p>
         <button
           class="primary wide breathe"
@@ -442,25 +444,7 @@ onUnmounted(() => {
         </Transition>
         <span v-if="targetShown !== null && targetShown > 0"> / {{ targetShown }}</span>
       </p>
-      <div class="target-stepper">
-        <button
-          class="step"
-          aria-label="ลดจำนวนเป้าหมาย"
-          :disabled="targetShown === null || targetShown === 0"
-          @click="stepTarget(-1)"
-        >
-          −
-        </button>
-        <span class="target-label">เป้าหมาย {{ targetLabel }}</span>
-        <button
-          class="step"
-          aria-label="เพิ่มจำนวนเป้าหมาย"
-          :disabled="targetShown === null || targetShown === 99"
-          @click="stepTarget(1)"
-        >
-          +
-        </button>
-      </div>
+      <TargetStepper :value="targetShown" :label="targetLabel" @step="stepTarget" />
       <p class="hint">
         {{ connLost ? 'กำลังเชื่อมต่อ…' : 'เครื่องกำลังทำงาน บริหารเข่าตามจังหวะของอุปกรณ์' }}
       </p>
@@ -473,7 +457,8 @@ onUnmounted(() => {
         <h2>หลังออกกำลังกาย ปวดเข่าแค่ไหน?</h2>
         <PainScale v-model="painAfter" />
       </div>
-      <button class="primary wide" :disabled="painAfter === null" @click="save">
+      <p v-if="errorMsg" class="error">{{ errorMsg }}</p>
+      <button class="primary wide" :disabled="painAfter === null || saving" @click="save">
         <AppIcon name="check" /> บันทึกผล
       </button>
     </template>
@@ -558,26 +543,6 @@ onUnmounted(() => {
   text-align: center;
   font-variant-numeric: tabular-nums;
   margin-bottom: 0.5rem;
-}
-
-.target-stepper {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.75rem;
-  margin-bottom: 1rem;
-}
-
-.target-label {
-  min-width: 8rem;
-  text-align: center;
-  font-weight: 600;
-}
-
-.step {
-  min-width: 3rem;
-  font-size: 1.3rem;
-  padding: 0.5rem;
 }
 
 .hint {

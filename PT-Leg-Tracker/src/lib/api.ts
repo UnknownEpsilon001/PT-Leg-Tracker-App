@@ -1,6 +1,7 @@
 // ดึงประวัติเซสชันจากเซิร์ฟเวอร์ตามรหัสผู้ป่วย แล้วรวมเข้ากับข้อมูลในเครื่อง
 // Fetch a patient's session history from the server and merge into the local log.
 import type { Session } from '@/types'
+import { flushClaims } from './claims'
 import { mergeSessions } from './sessions'
 import { useSessionsStore } from '@/stores/sessions'
 import { useSettingsStore } from '@/stores/settings'
@@ -41,6 +42,9 @@ export async function syncNow(): Promise<boolean> {
   const code = profile.profile?.patientCode
   if (!url || !code) return false
   try {
+    // claims first, so a session claimed now is in the list fetched below
+    // [TH] ผูกเซสชันที่ค้างก่อน เซสชันที่เพิ่งผูกได้จะได้อยู่ในรายการที่ดึงด้านล่าง
+    await flushClaims(url)
     const remote = await fetchDeviceSessions(url, code)
     await sessions.replaceAll(mergeSessions(sessions.sessions, remote))
     await settings.update({ lastSync: new Date().toISOString() })
