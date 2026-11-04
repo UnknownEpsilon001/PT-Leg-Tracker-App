@@ -35,8 +35,11 @@ void uiShowFinish(const char* patientName, uint32_t durationSec, uint16_t reps,
 // not keep presenting the last known state as if it were live.
 // [TH] linkUp เป็น false = ไม่ได้รับข้อมูลจากคอนโทรลเลอร์เมื่อเร็วๆ นี้
 //      จอต้องไม่แสดงสถานะเก่าราวกับว่ายังสด
+// jog = the controller is in panel jog mode; the screen replaces the logo with
+// the button hint so the operator can see the mode is on.
+// [TH] jog = คอนโทรลเลอร์อยู่ในโหมดขยับเอง จอจะแสดงคำแนะนำปุ่มแทนโลโก้ ผู้ใช้จะได้เห็นว่าโหมดเปิดอยู่
 void uiUpdateMain(bool running, Phase phase, uint32_t elapsedSec, uint16_t reps,
-                  uint16_t target, bool wifiUp, bool serverUp, bool linkUp);
+                  uint16_t target, bool wifiUp, bool serverUp, bool linkUp, bool jog);
 void uiSetDeviceCode(const char* code);  // ตั้งรหัสอุปกรณ์ที่แสดงบนจอ
 // Main-screen target stepper. The controller owns the target: this only reports
 // a change the operator made; the label itself follows the next state message.

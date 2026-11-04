@@ -822,6 +822,13 @@ Three things worth knowing:
 - **The green lamp is lit for the whole mode**, not only while a button is held.
   A held button moves the leg immediately, so "the motor may move" is true the
   entire time the mode is on.
+- **The CYD shows it too.** The state message carries `"jog":true`, and the main
+  screen swaps the logo for **ปรับตำแหน่งขา** with the hint *ค้าง START ยก / STOP ลด*.
+  The settings gear is disabled for the same reason it is during a session.
+- **Direction is a setting, not a wiring rule.** `MOTOR_REVERSED` in `config.h`
+  picks which BTS7960 input lifts. The first bench machine had its motor leads
+  the other way round (Lift went down), so it ships as 1. Check with the leg
+  unloaded: START must raise it.
 - **Every safety path still applies.** Jog drives through the same `request()` a
   stroke does, so it inherits break-before-make, the 50 ms reversal dead time,
   the energize cap and its hardware timer unchanged. There is deliberately no

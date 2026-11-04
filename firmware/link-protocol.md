@@ -104,8 +104,9 @@ discarded as repeats.
 
 ## Controller → Display
 
-- `{"t":"state","running":bool,"phase":int,"elapsed":int,"reps":int,"target":int,"wifi":bool,"server":bool}`
-  — ~4 Hz.
+- `{"t":"state","running":bool,"phase":int,"elapsed":int,"reps":int,"target":int,"wifi":bool,"server":bool,"jog":bool}`
+  — ~4 Hz. `jog` is true while the panel jog mode is on; a display reading an
+  older controller that omits it treats it as false.
 - `{"t":"settings", ...current...}` — reply to `hello`, so the CYD settings
   screen pre-fills and the main screen can show the device code. Carries the
   same fields as the `settings` message above, including `lift`, `lower` and

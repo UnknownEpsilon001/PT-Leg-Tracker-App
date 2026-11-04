@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <SD.h>
 #include <driver/dac_continuous.h>
+#include <esp_heap_caps.h>
 #include <stdlib.h>
 
 #include "wav.h"
@@ -118,6 +119,10 @@ void audioBegin() {
   // [TH] ไล่ลองทีละขั้น ต่างจากบัฟเฟอร์วาดภาพของ LVGL ใน ui.cpp ตรงที่ไม่รีบูตชิป
   //      เครื่องที่เล่นเสียงไม่ได้ยังเป็นเครื่องที่ใช้งานได้
   //      การรีบูตเพราะเรื่องนี้จะเปลี่ยนของอำนวยความสะดวกที่ขาดไปให้กลายเป็นเครื่องล่ม
+  // The tier that wins is decided by the largest contiguous block, not by total
+  // free heap, so that is the number worth printing when it falls short.
+  // [TH] ขั้นที่ได้ขึ้นกับก้อนหน่วยความจำติดกันที่ใหญ่ที่สุด ไม่ใช่หน่วยความจำว่างรวม จึงพิมพ์ค่านี้
+  size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
   for (size_t i = 0; i < sizeof(AUDIO_BUF_TIERS) / sizeof(AUDIO_BUF_TIERS[0]); ++i) {
     gBuf = (uint8_t*)malloc(AUDIO_BUF_TIERS[i]);
     if (gBuf) {
@@ -161,8 +166,8 @@ void audioBegin() {
     return;
   }
 
-  Serial.printf("audio: %u byte buffer (%.2f s), DAC on GPIO 26\n", (unsigned)gBufCap,
-                (double)gBufCap / (double)WAV_RATE);
+  Serial.printf("audio: %u byte buffer (%.2f s), DAC on GPIO 26, largest free block was %u\n",
+                (unsigned)gBufCap, (double)gBufCap / (double)WAV_RATE, (unsigned)largest);
 }
 
 // Records the request and returns. The card work happens in audioLoop().

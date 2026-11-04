@@ -50,6 +50,7 @@
 Link gLink;  // ลิงก์ UART ไปยังคอนโทรลเลอร์
 static bool uiRunning = false;
 static Phase uiPhase = Phase::Idle;
+static bool uiJog = false;  // controller's panel jog mode — โหมดขยับเองที่หน้าปัด
 static uint32_t uiElapsed = 0;
 static uint16_t uiReps = 0;
 static uint16_t uiTarget = 0;
@@ -377,6 +378,7 @@ static void onLinkState(const LinkState& s) {
   uiTarget = s.target;
   uiWifi = s.wifi;
   uiServer = s.server;
+  uiJog = s.jog;
 
   // Start has no one-shot message, so it must edge-detect, and both ways that
   // can go wrong are real.
@@ -471,6 +473,17 @@ void setup() {
   //      ตอนนี้ link.cpp ตัดขยะให้แล้ว ส่วนนี้ช่วยไม่ให้เกิดขยะตั้งแต่ต้น
   //      ถ้ายังมีอยู่ ให้ใส่ตัวต้านทาน 10 กิโลโอห์มไป 3.3V จะแน่นอนกว่า
   gpio_set_pull_mode(GPIO_NUM_22, GPIO_PULLUP_ONLY);
+  // Before the screen and the card, deliberately. The full 48 KB buffer needs
+  // one contiguous block; allocated last, after the 48 KB LVGL draw buffer and
+  // the SD driver had split the big heap region, it fell back to the 24 KB tier
+  // on a real board with 171 KB free, and every cue longer than 1.11 s was
+  // rejected. LVGL has its own degrade ladder if this leaves it short. Nothing
+  // here needs the card: the clips are opened later, in audioLoop().
+  // [TH] เรียกก่อนจอและการ์ดโดยตั้งใจ บัฟเฟอร์เต็ม 48 KB ต้องได้หน่วยความจำก้อนเดียวติดกัน
+  //      ถ้าจองท้ายสุด หลังบัฟเฟอร์วาดภาพ LVGL 48 KB และไดรเวอร์การ์ดแบ่งหน่วยความจำก้อนใหญ่ไปแล้ว
+  //      บนบอร์ดจริงที่เหลือว่าง 171 KB ยังได้แค่ขั้น 24 KB และทุกเสียงที่ยาวเกิน 1.11 วินาทีถูกปฏิเสธ
+  //      LVGL มีขั้นลดขนาดของตัวเองถ้าหน่วยความจำไม่พอ และตรงนี้ไม่ต้องใช้การ์ด เพราะคลิปถูกเปิดทีหลังใน audioLoop()
+  audioBegin();
   uiBegin();
   // A missing or unreadable card is not an error worth stopping for: the roster
   // is empty, sessions ring-buffer, and the machine still runs.
@@ -480,11 +493,6 @@ void setup() {
                 storePatientCount());
   gCardWasPresent = storeCardPresent();  // boot state, so the first tick is not read as an insertion
   sdlogEnsureHeader();
-  // After the card, because a cue reads its clip from it. Safe with no card:
-  // the buffer and the DAC channel do not depend on one.
-  // [TH] อยู่หลังการเปิดการ์ด เพราะเสียงแต่ละรายการอ่านคลิปจากการ์ด
-  //      เรียกได้แม้ไม่มีการ์ด เพราะบัฟเฟอร์และช่องสัญญาณ DAC ไม่ได้ขึ้นกับการ์ด
-  audioBegin();
   // Read before the link comes up: the controller's reply is what triggers
   // reconciliation, and this decides which side of it wins.
   // [TH] อ่านไฟล์ก่อนที่ลิงก์จะพร้อม เพราะการตอบกลับของคอนโทรลเลอร์คือจุดที่เริ่มเทียบค่า
@@ -596,7 +604,8 @@ void loop() {
 #if LOOP_DEBUG
     uint32_t dbgTDraw = millis();
 #endif
-    uiUpdateMain(uiRunning, uiPhase, uiElapsedNow(now), uiReps, uiTarget, uiWifi, uiServer, gLinkUp);
+    uiUpdateMain(uiRunning, uiPhase, uiElapsedNow(now), uiReps, uiTarget, uiWifi, uiServer, gLinkUp,
+                 uiJog);
 #if LOOP_DEBUG
     dbgDrawMs = millis() - dbgTDraw;
 #endif

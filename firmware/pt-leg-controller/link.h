@@ -15,6 +15,7 @@ struct LinkState {  // สถานะที่คอนโทรลเลอร
   uint16_t target;  // 0 = ไม่จำกัด — the display shows reps/target when non-zero
   bool wifi;        // สถานะเชื่อมต่อ WiFi
   bool server;      // สถานะเชื่อมต่อเซิร์ฟเวอร์
+  bool jog;         // panel jog mode is on — โหมดขยับเองเปิดอยู่ (absent on old images = false)
 };
 
 // LinkSettings.target's wire sentinel for "this settings message did not carry

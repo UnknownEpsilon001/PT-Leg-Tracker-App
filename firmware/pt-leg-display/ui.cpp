@@ -397,20 +397,21 @@ static const char* phaseName(Phase p) {
 }
 
 void uiUpdateMain(bool running, Phase phase, uint32_t elapsedSec, uint16_t reps,
-                  uint16_t target, bool wifiUp, bool serverUp, bool linkUp) {
+                  uint16_t target, bool wifiUp, bool serverUp, bool linkUp, bool jog) {
   // Repainting identical text still copies the string and invalidates the area,
   // so an idle screen would redraw four times a second for nothing.
   // [TH] วาดข้อความเดิมซ้ำก็ยังกินงาน จึงข้ามการอัปเดตถ้าค่าไม่เปลี่ยน กันจอวาดซ้ำ 4 ครั้ง/วินาทีเปล่าๆ
   static bool first = true;
-  static bool pRunning, pWifi, pServer, pLink;
+  static bool pRunning, pWifi, pServer, pLink, pJog;
   static Phase pPhase;
   static uint32_t pElapsed;
   static uint16_t pReps, pTarget;
   static uint32_t phaseTimerStartMs = 0;  // display's own millis() at the last phase edge
   if (!first && running == pRunning && phase == pPhase && elapsedSec == pElapsed &&
       reps == pReps && target == pTarget && wifiUp == pWifi && serverUp == pServer &&
-      linkUp == pLink)
+      linkUp == pLink && jog == pJog)
     return;
+  pJog = jog;
   // The wire only carries total session elapsed, not per-phase, so the in-phase
   // timer below is clocked locally from the phase edge. The mirrored 250 ms
   // UI/state refresh keeps the drift within a tick.
@@ -465,7 +466,11 @@ void uiUpdateMain(bool running, Phase phase, uint32_t elapsedSec, uint16_t reps,
   // a display with no controller attached is the most common idle case, and
   // hiding the branding there left no state that ever showed it. Link trouble is
   // reported in the status corner instead.
-  bool showLogo = !running && !fault;
+  // Jog only counts while the link is up: a stale flag must not hold the hint on
+  // a screen that can no longer hear the controller.
+  // [TH] นับโหมดขยับเองเฉพาะตอนลิงก์ใช้งานได้ ค่าเก่าที่ค้างอยู่ต้องไม่ทำให้คำแนะนำค้างบนจอที่ไม่ได้ยินคอนโทรลเลอร์แล้ว
+  bool jogShown = jog && linkUp && !running && !fault;
+  bool showLogo = !running && !fault && !jogShown;
   if (showLogo) {
     lv_obj_clear_flag(imgLogo, LV_OBJ_FLAG_HIDDEN);
     lv_obj_fade_in(imgLogo, 200, 0);
@@ -497,10 +502,26 @@ void uiUpdateMain(bool running, Phase phase, uint32_t elapsedSec, uint16_t reps,
   lv_obj_set_style_text_opa(lblClock, linkUp ? LV_OPA_COVER : LV_OPA_50, 0);
   lv_obj_set_style_text_opa(lblReps, linkUp ? LV_OPA_COVER : LV_OPA_50, 0);
 
+  // Jog mode: the clock, target row and phase timer mean nothing here, so the
+  // reps line becomes the mode name and the phase line the button hint. Wording
+  // keeps clear of vowel-over-tone stacks (no ขึ้น), the same rule as phaseName().
+  // [TH] โหมดขยับเอง: นาฬิกา แถวเป้าหมาย และตัวจับเวลาไม่มีความหมาย
+  //      บรรทัดจำนวนรอบจึงแสดงชื่อโหมด และบรรทัดสถานะแสดงคำแนะนำปุ่ม
+  //      ถ้อยคำเลี่ยงสระบนซ้อนวรรณยุกต์ (ไม่ใช้คำว่า ขึ้น) ตามกฎเดียวกับ phaseName()
+  if (jogShown) {
+    lv_obj_add_flag(lblClock, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(rowTarget, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(lblPhaseTimer, LV_OBJ_FLAG_HIDDEN);
+    lv_label_set_text(lblReps, "ปรับตำแหน่งขา");
+    lv_label_set_text(lblPhase, "ค้าง START ยก / STOP ลด");
+    lv_obj_set_style_text_color(lblPhase, lv_color_hex(COL_TEXT), 0);
+  }
+
   // While a session runs, STOP must stay one tap away - the settings screen has
   // no stop control, and the controller's UART watchdog will not help because
-  // the display keeps pinging from in there.
-  if (running) lv_obj_add_state(btnGear, LV_STATE_DISABLED);
+  // the display keeps pinging from in there. Jog moves the leg too, so the gear
+  // stays off for the same reason.
+  if (running || jogShown) lv_obj_add_state(btnGear, LV_STATE_DISABLED);
   else lv_obj_clear_state(btnGear, LV_STATE_DISABLED);
 
   if (linkUp) {

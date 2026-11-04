@@ -18,6 +18,16 @@
 //      และลอจิกต่ำคือระดับที่ปลอดภัยของขาสัญญาณทั้งสามขา
 #define PIN_MOT_RPWM 22 // P3 connector — ขา RPWM สั่งมอเตอร์ "ยกขึ้น"
 #define PIN_MOT_LPWM 27 // CN1 connector — ขา LPWM สั่งมอเตอร์ "ลดลง"
+// Which half-bridge lifts depends on which way round the motor leads sit on the
+// BTS7960's M+/M- terminals. On the first bench test the leg went DOWN during
+// Lift and UP during Lower, so this machine is wired reversed: 1 makes LPWM lift
+// and RPWM lower. Set 0 instead if the motor leads are ever swapped back.
+// Check it with the leg unloaded: START must raise it.
+// [TH] ซีกไหนเป็นตัวยกขึ้นอยู่กับว่าสายมอเตอร์ต่อเข้าขั้ว M+/M- ของ BTS7960 ด้านไหน
+//      ทดสอบครั้งแรกพบว่าตอนยกขาลง และตอนลดขาขึ้น เครื่องนี้จึงต่อกลับด้าน
+//      ค่า 1 ทำให้ LPWM เป็นตัวยกและ RPWM เป็นตัวลด ถ้าสลับสายมอเตอร์กลับเมื่อไรให้ตั้งเป็น 0
+//      ตรวจโดยไม่มีขาวางอยู่ กด START แล้วขาต้องยกขึ้น
+#define MOTOR_REVERSED 1
 // R_EN and L_EN wired together to this one pin. Separate pins would let each
 // half-bridge be enabled on its own, but nothing is lost by sharing: the
 // BTS7960 blocks cross-conduction inside each half-bridge on its own, and the

@@ -118,15 +118,21 @@ static volatile bool capTimerFired = false;
 //      นี่คือความหมายของ "ตัดก่อนต่อ" บนสะพานเอช
 //      การสั่ง RPWM และ LPWM สูงพร้อมกันคือการสั่งให้กระแสทะลุ
 //      และการที่ BTS7960 ปฏิเสธคำสั่งนั้นเองเป็นคุณสมบัติของชิป ไม่ใช่ของโค้ดนี้
+#if MOTOR_REVERSED
+static const uint8_t PIN_LIFT = PIN_MOT_LPWM, PIN_LOWER = PIN_MOT_RPWM;
+#else
+static const uint8_t PIN_LIFT = PIN_MOT_RPWM, PIN_LOWER = PIN_MOT_LPWM;
+#endif
+
 static void driveRaw(ActState dir, uint16_t d) {
-  if (dir != ACT_UP) ledcWrite(PIN_MOT_RPWM, 0);
-  if (dir != ACT_DOWN) ledcWrite(PIN_MOT_LPWM, 0);
+  if (dir != ACT_UP) ledcWrite(PIN_LIFT, 0);
+  if (dir != ACT_DOWN) ledcWrite(PIN_LOWER, 0);
   if (dir == ACT_OFF || d == 0) {
     digitalWrite(PIN_MOT_EN, LOW);
     return;
   }
   digitalWrite(PIN_MOT_EN, HIGH);
-  ledcWrite(dir == ACT_UP ? PIN_MOT_RPWM : PIN_MOT_LPWM, d);
+  ledcWrite(dir == ACT_UP ? PIN_LIFT : PIN_LOWER, d);
 }
 
 // Everything the emergency paths need, and nothing else — no bookkeeping, so it

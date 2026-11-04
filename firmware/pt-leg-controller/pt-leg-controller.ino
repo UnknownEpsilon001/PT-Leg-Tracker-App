@@ -983,7 +983,7 @@ void loop() {
   if (now - lastState >= 250) {  // [TH] ส่งสถานะให้จอ ~4 ครั้งต่อวินาที
     lastState = now;
     LinkState st{gSession.running(), (int)gSession.phase(), gSession.elapsedSec(now),
-                 gSession.reps(), gSession.target(), netWifiUp(), netServerUp()};
+                 gSession.reps(), gSession.target(), netWifiUp(), netServerUp(), gJogMode};
 #if LOOP_DEBUG
     LD_START(st);
 #endif

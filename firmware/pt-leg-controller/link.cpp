@@ -228,7 +228,7 @@ void Link::dispatch(const String& line) {
     if (onState) {
       LinkState s{d["running"] | false, d["phase"] | 0, d["elapsed"] | 0u,
                   (uint16_t)(d["reps"] | 0), (uint16_t)(d["target"] | 0), d["wifi"] | false,
-                  d["server"] | false};
+                  d["server"] | false, d["jog"] | false};
       onState(s);
     }
   } else if (!strcmp(t, "settings")) {
@@ -287,6 +287,7 @@ void Link::sendState(const LinkState& st) {
   d["elapsed"] = st.elapsed; d["reps"] = st.reps; d["target"] = st.target;
   d["wifi"] = st.wifi;
   d["server"] = st.server;
+  d["jog"] = st.jog;
   emit(_io, d);
 }
 // The three below go out reliably: each is a single event, and each has a
