@@ -92,6 +92,7 @@ class Link {
   void sendStarted();
   void sendPing();
   void sendTarget(uint16_t reps);
+  void sendJogExit();
   uint32_t lastRxMs() const { return _lastRx; }
 
   // Receive tallies. lastRxMs() is stamped for every complete line, before the
@@ -146,6 +147,7 @@ class Link {
   //      เพราะเส้นทางนั้นบันทึก NVS และรีสตาร์ต WiFi จึงถูกเลื่อนไปจนกว่ารอบจะจบ
   //      แต่เป้าหมายจำนวนครั้งที่ผู้ใช้กำลังหมุนอยู่รอแบบนั้นไม่ได้
   void (*onTarget)(uint16_t) = nullptr;  // controller side
+  void (*onJogExit)() = nullptr;         // controller side — ปุ่มออกจากโหมดขยับเองบนจอ
 
   // Retransmission tallies. txRetries counts resends, txDropped the messages
   // that were never acknowledged inside LINK_MAX_TRIES and are gone for good —

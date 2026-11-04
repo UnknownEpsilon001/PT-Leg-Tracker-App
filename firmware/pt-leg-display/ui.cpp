@@ -169,7 +169,7 @@ void uiBegin() {
 
 static lv_obj_t *scrMain, *lblClock, *lblReps, *lblPhase, *lblPhaseTimer, *lblStatus;
 static lv_obj_t *lblCode, *btnGear, *btnData, *imgLogo;
-static lv_obj_t *rowTarget;
+static lv_obj_t *rowTarget, *btnJogExit;
 // Declared here, ahead of the settings screen's other spinboxes further down, so
 // that uiUpdateMain (below) can keep it synced to the live target — see the
 // comment at that call site for why. Not grouped with spinMax/spinLift/etc. only
@@ -222,6 +222,12 @@ void uiSetCallbacks(void (*onOpenSettings)(), void (*onOpenData)()) {
 }
 
 void uiSetTargetChanged(void (*cb)(uint16_t)) { cbTarget = cb; }
+
+static void (*cbJogExit)() = nullptr;
+void uiSetJogExit(void (*cb)()) { cbJogExit = cb; }
+static void jogExitClicked(lv_event_t*) {
+  if (cbJogExit) cbJogExit();
+}
 
 static void gearClicked(lv_event_t*) {
   if (uiRunning) return;  // STOP must stay reachable during a session
@@ -345,6 +351,16 @@ static void buildMain() {
       makeBtn(rowTarget, "+", COL_SURFACE, &lv_font_montserrat_20, targetPlusClicked);
   lv_obj_set_size(btnTargetPlus, 38, 36);
   lv_obj_align(btnTargetPlus, LV_ALIGN_RIGHT_MID, 0, 0);
+
+  // Jog-mode exit, in the slot the phase timer leaves empty while jog is shown —
+  // high enough to clear the device code at the bottom edge. The controller
+  // lowers the leg on the way out, as for the panel exits.
+  // [TH] ปุ่มออกจากโหมดขยับเอง วางในตำแหน่งที่ตัวจับเวลาเว้นว่างไว้ตอนแสดงโหมดนี้
+  //      สูงพอที่จะไม่ทับรหัสเครื่องที่ขอบล่าง คอนโทรลเลอร์จะลดขาลงตอนออก เหมือนการออกด้วยปุ่มหน้าปัด
+  btnJogExit = makeBtn(scrMain, "ออกจากโหมด", COL_SURFACE, &thai20, jogExitClicked);
+  lv_obj_set_size(btnJogExit, 170, 40);
+  lv_obj_align(btnJogExit, LV_ALIGN_TOP_MID, 0, 166);
+  lv_obj_add_flag(btnJogExit, LV_OBJ_FLAG_HIDDEN);
 
   lblPhase = lv_label_create(scrMain);
   lv_obj_set_style_text_font(lblPhase, &thai20, 0);
@@ -515,6 +531,9 @@ void uiUpdateMain(bool running, Phase phase, uint32_t elapsedSec, uint16_t reps,
     lv_label_set_text(lblReps, "ปรับตำแหน่งขา");
     lv_label_set_text(lblPhase, "ค้าง START ยก / STOP ลด");
     lv_obj_set_style_text_color(lblPhase, lv_color_hex(COL_TEXT), 0);
+    lv_obj_clear_flag(btnJogExit, LV_OBJ_FLAG_HIDDEN);
+  } else {
+    lv_obj_add_flag(btnJogExit, LV_OBJ_FLAG_HIDDEN);
   }
 
   // While a session runs, STOP must stay one tap away - the settings screen has

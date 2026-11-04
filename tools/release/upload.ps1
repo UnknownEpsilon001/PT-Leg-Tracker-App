@@ -26,7 +26,15 @@ param(
 $ErrorActionPreference = "Stop"
 
 $esptool = Join-Path $PSScriptRoot "esptool.exe"
-if (-not (Test-Path $esptool)) { throw "esptool.exe is missing from $PSScriptRoot" }
+if (-not (Test-Path $esptool)) {
+    # Run straight from the repo, this is only the template: build-release.ps1
+    # copies it into the release zip next to esptool.exe and the firmware.
+    if (Test-Path (Join-Path $PSScriptRoot "..\build-release.ps1")) {
+        throw ("This is the source copy of the uploader, not a release. Unzip release\SmartOAKnee-*.zip " +
+               "and run upload.cmd from there, or flash from source with firmware\tools\flash.ps1 -Action auto -Board both.")
+    }
+    throw "esptool.exe is missing from $PSScriptRoot"
+}
 
 $vids = @{ controller = "VID_10C4"; display = "VID_1A86" }
 $explicit = @{ controller = $ControllerPort; display = $DisplayPort }

@@ -97,10 +97,11 @@ function New-ReleasePackage {
     Copy-Into (Join-Path $root "server\README.md") (Join-Path $server "README.md")
     Copy-Into (Join-Path $root "tools\release\start-server.cmd") (Join-Path $server "start-server.cmd")
 
-    Write-Host "  upload.cmd, README.txt, build-info.txt"
-    foreach ($file in "upload.ps1", "upload.cmd", "README.txt") {
+    Write-Host "  upload.cmd, load-sounds.cmd, README.txt, build-info.txt"
+    foreach ($file in "upload.ps1", "upload.cmd", "load-sounds.cmd", "README.txt") {
         Copy-Into (Join-Path $root "tools\release\$file") (Join-Path $stage $file)
     }
+    Copy-Into (Join-Path $root "firmware\tools\load-sounds.ps1") (Join-Path $stage "load-sounds.ps1")
     @(
         "version: $Version"
         "commit:  $commit$(if ($dirty) { ' (with uncommitted changes)' })"

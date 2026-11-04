@@ -112,6 +112,24 @@ static void stopAll() {
   gDrainStart = 0;
 }
 
+// CH1 is GPIO 26 alone. CH0 is GPIO 25, which is the touchscreen clock on this
+// board — the legacy I2S DAC path brings up both channels by default, and
+// enabling both here would trade the speaker for a dead panel.
+// [TH] CH1 คือขา 26 เท่านั้น ส่วน CH0 คือขา 25 ซึ่งเป็นสายนาฬิกาของทัชสกรีนบนบอร์ดนี้
+//      วิธีเดิมที่ใช้ I2S เปิดช่องสัญญาณทั้งสองช่องโดยปริยาย
+//      ถ้าเปิดทั้งคู่ตรงนี้จะได้ลำโพงมาแลกกับจอสัมผัสที่ใช้ไม่ได้
+static esp_err_t dacCreate() {
+  dac_continuous_config_t cfg = {};
+  cfg.chan_mask = DAC_CHANNEL_MASK_CH1;
+  cfg.desc_num = 4;
+  cfg.buf_size = 1024;  // 4 KB of DMA in total — รวมบัฟเฟอร์ DMA 4 กิโลไบต์
+  cfg.freq_hz = WAV_RATE;
+  cfg.offset = 0;
+  cfg.clk_src = DAC_DIGI_CLK_SRC_DEFAULT;
+  cfg.chan_mode = DAC_CHANNEL_MODE_SIMUL;  // one channel enabled, so this is moot
+  return dac_continuous_new_channels(&cfg, &gDac);
+}
+
 void audioBegin() {
   // Try each tier in turn. Unlike the LVGL draw buffer in ui.cpp this never
   // restarts the chip: a machine that cannot play sounds is a machine that
@@ -135,22 +153,7 @@ void audioBegin() {
     return;
   }
 
-  // CH1 is GPIO 26 alone. CH0 is GPIO 25, which is the touchscreen clock on this
-  // board — the legacy I2S DAC path brings up both channels by default, and
-  // enabling both here would trade the speaker for a dead panel.
-  // [TH] CH1 คือขา 26 เท่านั้น ส่วน CH0 คือขา 25 ซึ่งเป็นสายนาฬิกาของทัชสกรีนบนบอร์ดนี้
-  //      วิธีเดิมที่ใช้ I2S เปิดช่องสัญญาณทั้งสองช่องโดยปริยาย
-  //      ถ้าเปิดทั้งคู่ตรงนี้จะได้ลำโพงมาแลกกับจอสัมผัสที่ใช้ไม่ได้
-  dac_continuous_config_t cfg = {};
-  cfg.chan_mask = DAC_CHANNEL_MASK_CH1;
-  cfg.desc_num = 4;
-  cfg.buf_size = 1024;  // 4 KB of DMA in total — รวมบัฟเฟอร์ DMA 4 กิโลไบต์
-  cfg.freq_hz = WAV_RATE;
-  cfg.offset = 0;
-  cfg.clk_src = DAC_DIGI_CLK_SRC_DEFAULT;
-  cfg.chan_mode = DAC_CHANNEL_MODE_SIMUL;  // one channel enabled, so this is moot
-
-  esp_err_t err = dac_continuous_new_channels(&cfg, &gDac);
+  esp_err_t err = dacCreate();
   if (err != ESP_OK) {
     gDac = nullptr;
     // Give the buffer back. audioReady() is false from here on, so it could never
@@ -262,7 +265,28 @@ void audioLoop() {
     if (gHave < gWant) return;
 
     gFile.close();
-    esp_err_t err = dac_continuous_enable(gDac);
+    // A fresh channel for every clip. Reusing one across disable/enable left the
+    // driver short of DMA descriptors on about half the cues on the bench: the
+    // first 2 KB went out — a click — and every later write failed with "Get
+    // available descriptor timeout" until the stall guard gave up. Deleting and
+    // recreating resets the descriptor pool; it costs one 4 KB DMA allocation of
+    // the same size each time, so it does not fragment the heap.
+    // [TH] สร้างช่องสัญญาณใหม่ทุกคลิป การใช้ช่องเดิมข้ามการปิดแล้วเปิดใหม่
+    //      ทำให้ไดรเวอร์ขาดตัวอธิบาย DMA ราวครึ่งหนึ่งของเสียงที่ทดสอบ
+    //      ข้อมูล 2 กิโลไบต์แรกออกไปได้ (ได้ยินเป็นเสียงคลิก) แล้วการเขียนครั้งต่อๆ ไปล้มเหลวด้วย
+    //      "Get available descriptor timeout" จนตัวกันค้างยอมแพ้
+    //      การลบแล้วสร้างใหม่รีเซ็ตกลุ่มตัวอธิบาย แลกด้วยการจองหน่วยความจำ DMA 4 กิโลไบต์ขนาดเดิมทุกครั้ง
+    //      จึงไม่ทำให้หน่วยความจำแตกเป็นชิ้น
+    dac_continuous_del_channels(gDac);
+    gDac = nullptr;
+    esp_err_t err = dacCreate();
+    if (err != ESP_OK) {
+      gDac = nullptr;
+      Serial.printf("audio: dac_continuous_new_channels failed (%d), cues are off\n", (int)err);
+      stopAll();
+      return;
+    }
+    err = dac_continuous_enable(gDac);
     if (err != ESP_OK) {
       Serial.printf("audio: dac_continuous_enable failed (%d)\n", (int)err);
       stopAll();

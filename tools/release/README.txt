@@ -9,6 +9,7 @@ What is in this folder
   sd-card\                    Copy everything inside to the root of the CYD's microSD card
   server\                     FastAPI server. Run start-server.cmd on the clinic PC.
   upload.cmd                  Flashes the firmware onto whichever boards are plugged in
+  load-sounds.cmd             Copies sd-card\sounds onto the CYD's SD card in this PC's reader
   esptool.exe                 Espressif flasher used by upload.cmd (see Licenses below)
   build-info.txt              The commit and date this release was built from
 
@@ -28,6 +29,10 @@ Flashing the boards
   The upload leaves the settings stored on the boards alone.
 
 SD card
+
+  Put the CYD's microSD card in this PC and double-click load-sounds.cmd. It
+  finds the card, copies the four spoken cues into \sounds and checks each copy;
+  nothing else on the card is touched. The card must be FAT32.
 
   sd-card\sounds\ holds the four spoken cues. Device settings live in
   settings.json on the same card; its format is in firmware/README.md in the

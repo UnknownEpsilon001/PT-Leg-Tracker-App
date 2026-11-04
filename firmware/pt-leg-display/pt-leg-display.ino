@@ -408,6 +408,7 @@ static uint32_t uiElapsedNow(uint32_t now) {
 // — not through settings, which is deferred to the end of the session.
 // [TH] การกดปุ่ม -/+ ที่หน้าหลักส่งตรงไปคอนโทรลเลอร์ทันที ไม่ผ่านเส้นทางค่าตั้งค่าที่รอจนจบรอบ
 static void onTargetChanged(uint16_t reps) { gLink.sendTarget(reps); }
+static void onJogExitTapped() { gLink.sendJogExit(); }
 
 void setup() {
   // [TH] เริ่มพอร์ตดีบัก, ตั้งลิงก์ UART ไปคอนโทรลเลอร์, เริ่ม UI แล้วทักทายขอค่าตั้งค่า/สถานะ
@@ -492,6 +493,7 @@ void setup() {
   uiSetDataCallbacks(dataCount, dataGet, dataAdd, dataSetActive);
   uiSetSettingsSaved(onSaveFromUi);
   uiSetTargetChanged(onTargetChanged);
+  uiSetJogExit(onJogExitTapped);
   Serial.printf("controller link on %s\n", LINK_OVER_USB ? "USB (bench)" : "Serial2");
 #if LINK_OVER_USB
   gLink.begin(&Serial);

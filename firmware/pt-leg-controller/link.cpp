@@ -262,6 +262,8 @@ void Link::dispatch(const String& line) {
     }
   } else if (!strcmp(t, "started")) {
     if (onStarted) onStarted();
+  } else if (!strcmp(t, "jogexit")) {
+    if (onJogExit) onJogExit();
   } else if (!strcmp(t, "target")) {
     if (onTarget) onTarget((uint16_t)(d["reps"] | 0));
     return;
@@ -320,4 +322,10 @@ void Link::sendSettings(const LinkSettings& s) {
 }
 void Link::sendTarget(uint16_t reps) {
   JsonDocument d; d["t"] = "target"; d["reps"] = reps; sendReliable(d);
+}
+// The on-screen jog exit. Reliable for the same reason as the rest: a lost tap
+// is a button that did nothing.
+// [TH] ปุ่มออกจากโหมดขยับเองบนจอ ส่งแบบรอการตอบรับ เพราะการแตะที่หายไปคือปุ่มที่กดแล้วไม่เกิดอะไร
+void Link::sendJogExit() {
+  JsonDocument d; d["t"] = "jogexit"; sendReliable(d);
 }

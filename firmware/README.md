@@ -245,7 +245,7 @@ turns them off; the state is the `soundOn` key in `/settings.json`.
 | File | Spoken | Fires when |
 |---|---|---|
 | `/sounds/boot.wav` | เครื่องพร้อมใช้งาน | End of `setup()`, so hearing it means the whole init path finished |
-| `/sounds/start.wav` | เริ่มการทำงาน | The controller's `running` flag goes false → true |
+| `/sounds/start.wav` | เริ่มการทำงาน | The controller's one-shot `started` message, when a session's lift begins |
 | `/sounds/stop.wav` | หยุดการทำงาน | A `done` message with the target unmet, or no target set |
 | `/sounds/target.wav` | ครบตามเป้าหมายแล้ว | A `done` message with the rep target reached |
 
@@ -274,7 +274,10 @@ powershell -File firmware/tools/make-sounds.ps1 -In .\raw -Out .\sd\sounds
 
 The four shipped cues in `firmware/sd/sounds/` come from `make-cues.py`: a short
 UI effect from `assets/soundeffectthatifound/UI Sound/`, then the phrase spoken
-by the `th-TH-PremwadeeNeural` voice. Copy that folder to the card as `/sounds`.
+by the `th-TH-PremwadeeNeural` voice. To put them on the card, plug the card
+into the PC and double-click `load-sounds.cmd` at the repo root
+(`firmware/tools/load-sounds.ps1`): it finds the card, refuses anything that is
+not FAT32, copies the folder to `/sounds` and checks each copy by hash.
 To rebuild them (needs ffmpeg, `pip install edge-tts` and internet; the phrases
 go to Microsoft's online TTS):
 
@@ -797,8 +800,9 @@ duty). Release and the drive fades out. Both buttons held never moves the leg:
 two directions at once has no sensible answer, and guessing one would drive a
 leg the way the operator did not mean.
 
-**Leave:** hold **START and STOP together** for 2 s (`JOG_EXIT_HOLD_MS`), or let
-20 s pass with nothing held (`JOG_IDLE_EXIT_MS`). Either way the machine then
+**Leave:** hold **START and STOP together** for 2 s (`JOG_EXIT_HOLD_MS`), tap
+**ออกจากโหมด** on the CYD (sends `jogexit`), or let 20 s pass with nothing held
+(`JOG_IDLE_EXIT_MS`). Either way the machine then
 lowers the leg in full, the same quiet full-length descent a fault recovery
 uses: green lamp solid, no session, nothing on the card. After the two-button exit,
 STOP has to be let go before a new 2 s entry hold counts, so the exit does not

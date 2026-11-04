@@ -56,6 +56,7 @@ one-shots are single events whose loss is silent and permanent.
 | `started` | yes | the start cue — a lost one is a start the machine never announced |
 | `settings` | yes | a SAVE the operator watched succeed |
 | `target` | yes | a rep count they just changed |
+| `jogexit` | yes | a tap on the jog exit button |
 | `hello` | no | already re-sent every 3 s until settings arrive |
 | `state` | no | superseded 4× a second |
 | `ping` | no | superseded every second |
@@ -100,6 +101,9 @@ discarded as repeats.
   Applied immediately, including mid-session; the NVS write is deferred to the
   end of the session. Unlike `settings` it is never held, because that path
   commits NVS and restarts Wi-Fi.
+- `{"t":"jogexit"}` — the **ออกจากโหมด** button on the jog screen. The controller
+  leaves jog mode and lowers the leg in full, the same as the two-button panel
+  exit; ignored when jog mode is not on.
 - `{"t":"hello"}` — CYD boot; asks the controller for current settings + state.
 - `{"t":"ping"}` — 1 Hz keepalive that feeds the controller's UART watchdog.
 

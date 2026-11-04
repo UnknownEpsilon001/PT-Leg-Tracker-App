@@ -46,6 +46,8 @@ void uiSetDeviceCode(const char* code);  // ตั้งรหัสอุปก
 // [TH] ปุ่มปรับจำนวนครั้งเป้าหมายบนหน้าหลัก คอนโทรลเลอร์เป็นเจ้าของค่า ตรงนี้แค่รายงานการเปลี่ยนแปลง
 //      ป้ายตัวเลขจะเปลี่ยนตามข้อความสถานะครั้งถัดไปเท่านั้น
 void uiSetTargetChanged(void (*cb)(uint16_t));
+// Tapped the on-screen jog exit — แตะปุ่มออกจากโหมดขยับเองบนจอ
+void uiSetJogExit(void (*cb)());
 void uiOpenSettings(const DeviceSettings& current);  // เปิดหน้าตั้งค่าพร้อมค่าปัจจุบัน
 void uiSetSettingsSaved(void (*onSave)(const DeviceSettings&));
 // SAVE stays disabled until the controller has sent its settings at least once,

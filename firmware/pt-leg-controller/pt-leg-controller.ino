@@ -122,6 +122,15 @@ static void jogExit(uint32_t nowMs, const char* why) {
   Serial.printf("jog: mode off - %s, lowering the leg\n", why);
 }
 
+// The CYD's on-screen exit. Runs inside gLink.poll(), after this iteration's
+// jogLoop(), so the lowering begins on the next one — the same one-iteration lag
+// the panel exits have.
+// [TH] ปุ่มออกบนจอ CYD ทำงานใน gLink.poll() หลัง jogLoop() ของรอบนี้
+//      การลดขาจึงเริ่มในรอบถัดไป ช้าหนึ่งรอบเท่ากับการออกจากปุ่มหน้าปัด
+static void onLinkJogExit() {
+  if (gJogMode) jogExit(millis(), "screen button");
+}
+
 // Returns the direction the operator is asking for, and ACT_OFF for none. Both
 // buttons held is deliberately nothing: two directions at once has no sensible
 // answer, and picking one would drive a leg the way the operator did not mean.
@@ -609,6 +618,7 @@ void setup() {
   gLink.onSettings = onLinkSettings;
   gLink.onHello = onLinkHello;
   gLink.onTarget = onLinkTarget;
+  gLink.onJogExit = onLinkJogExit;
   Serial.printf("pt-leg-controller %s ssid=%s server=%s code=%s cycle lift/hold/lower/rest=%u/%u/%u/%u target=%u\n",
                 FW_VERSION, gSettings.wifiSsid.c_str(), gSettings.serverUrl.c_str(),
                 gSettings.deviceCode.c_str(), gSettings.liftSec, gSettings.holdSec,
