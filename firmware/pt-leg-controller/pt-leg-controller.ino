@@ -190,6 +190,11 @@ static bool jogLoop(uint32_t nowMs) {
   //      จึงใช้ได้แม้ทันทีหลังเข้าโหมดที่ STOP ยังกดค้างอยู่
   if (buttonStartHeld() && buttonStopHeld()) {
     if (gJogBothSince == 0) gJogBothSince = nowMs;
+    // An exit hold let go early must not turn into a jog: releasing START a beat
+    // first would otherwise lower the leg on the STOP still held.
+    // [TH] การกดค้างเพื่อออกที่ปล่อยก่อนครบเวลาต้องไม่กลายเป็นการขยับ
+    //      ถ้าปล่อย START ก่อนนิดเดียว STOP ที่ยังกดอยู่จะลดขาลงทันที
+    gJogNeedRelease = true;
     actuatorSoftOff();
     if (nowMs - gJogBothSince >= JOG_EXIT_HOLD_MS) jogExit(nowMs, "both buttons held");
     return true;

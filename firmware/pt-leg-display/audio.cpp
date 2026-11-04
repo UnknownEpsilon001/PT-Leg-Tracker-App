@@ -277,13 +277,21 @@ void audioLoop() {
     //      "Get available descriptor timeout" จนตัวกันค้างยอมแพ้
     //      การลบแล้วสร้างใหม่รีเซ็ตกลุ่มตัวอธิบาย แลกด้วยการจองหน่วยความจำ DMA 4 กิโลไบต์ขนาดเดิมทุกครั้ง
     //      จึงไม่ทำให้หน่วยความจำแตกเป็นชิ้น
-    dac_continuous_del_channels(gDac);
-    gDac = nullptr;
-    esp_err_t err = dacCreate();
-    if (err != ESP_OK) {
+    esp_err_t err = dac_continuous_del_channels(gDac);
+    if (err == ESP_OK) {
       gDac = nullptr;
-      Serial.printf("audio: dac_continuous_new_channels failed (%d), cues are off\n", (int)err);
+      err = dacCreate();
+    }
+    if (err != ESP_OK) {
+      // Cues are off for the rest of the boot, so hand the buffer back, as
+      // audioBegin() does on the same failure.
+      // [TH] เสียงจะปิดไปตลอดการเปิดเครื่องนี้ จึงคืนบัฟเฟอร์ แบบเดียวกับที่ audioBegin() ทำ
+      Serial.printf("audio: could not renew the DAC channel (%d), cues are off\n", (int)err);
       stopAll();
+      gDac = nullptr;
+      free(gBuf);
+      gBuf = nullptr;
+      gBufCap = 0;
       return;
     }
     err = dac_continuous_enable(gDac);

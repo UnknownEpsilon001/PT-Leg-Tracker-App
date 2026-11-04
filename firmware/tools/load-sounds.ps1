@@ -1,8 +1,10 @@
 # Copies the CYD's spoken cues onto its SD card.
 #
 # Finds the SD card plugged into this PC, copies the four cue files into
-# <card>\sounds\, and checks every copy byte for byte. Nothing else on the card
-# (patients, sessions.csv, settings.json) is touched.
+# <card>\sounds\, and compares each copy's hash with the original. The read-back
+# goes through the Windows file cache, so it catches a wrong or truncated copy,
+# not a card that silently fails to store what it was given. Nothing else on the
+# card (patients.csv, sessions.csv, settings.json) is touched.
 #
 #   .\firmware\tools\load-sounds.ps1            find the card, ask if there are several
 #   .\firmware\tools\load-sounds.ps1 -Drive E:  use this drive

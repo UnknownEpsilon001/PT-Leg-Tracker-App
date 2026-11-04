@@ -65,7 +65,10 @@ struct LinkDone {
 //      ข้อความ target ที่หาย = จำนวนครั้งที่ผู้ใช้เปลี่ยนแล้วเครื่องไม่รับรู้
 //      บนสายที่ใช้ทดสอบ ค่าตรวจสอบปฏิเสธราวครึ่งหนึ่งของข้อความทั้งหมด
 //      การหายของข้อความเหล่านี้จึงเป็นเรื่องพอๆ กับโยนหัวก้อย ไม่ใช่เรื่องนานๆ ครั้ง
-static const int LINK_TXQ = 4;         // outstanding unacked messages — ข้อความที่ยังไม่ได้รับการตอบรับ
+// Eight, not four: started and jogexit joined done/settings/target, and on a full
+// queue the overflow overwrites slot 0, which can be a session's unacked done.
+// [TH] แปดช่องแทนสี่ เพราะมี started และ jogexit เพิ่มมา ถ้าคิวเต็มจะเขียนทับช่องแรก ซึ่งอาจเป็น done ที่ยังไม่ได้รับการตอบรับ
+static const int LINK_TXQ = 8;         // outstanding unacked messages — ข้อความที่ยังไม่ได้รับการตอบรับ
 static const uint32_t LINK_ACK_MS = 300;  // wait before resending — รอเท่านี้ก่อนส่งซ้ำ
 static const uint8_t LINK_MAX_TRIES = 8;  // ~2.4 s total — รวมแล้วราว 2.4 วินาที
 static const int LINK_SEEN = 8;        // recent ids remembered for de-dup — จำรหัสล่าสุดไว้กันข้อความซ้ำ
