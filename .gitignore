@@ -2,7 +2,7 @@ node_modules/
 firmware/.build/
 PT-Leg-Tracker/.app-build/
 PT-Leg-Tracker/output/
-release/
+/release/
 
 # sound effect library (286 MB): only the UI sounds make-cues.py uses are kept
 assets/soundeffectthatifound/*
@@ -10,6 +10,7 @@ assets/soundeffectthatifound/*
 
 # Claude Code local state
 .claude/
+skills-lock.json
 
 # funding proposal PDF contains personal data (phones, bank account)
 docs/*.pdf
