@@ -5,10 +5,11 @@ const TAPPABLE = 'button, a, [role="button"], input[type="checkbox"], input[type
 export function installTapSound(): void {
   const tap = new Audio('/sounds/tap.mp3')
   tap.preload = 'auto'
-  // pointerdown, not click: the sound lands with the finger, not after release
-  // [TH] ใช้ pointerdown แทน click เสียงจะดังตอนนิ้วแตะ ไม่ใช่ตอนปล่อย
+  // click, not pointerdown: a finger that lands on a button to scroll the page
+  // fires pointerdown too, and every swipe would tick
+  // [TH] ใช้ click แทน pointerdown เพราะนิ้วที่แตะปุ่มเพื่อเลื่อนหน้าก็ทำให้เกิด pointerdown และจะมีเสียงทุกครั้งที่เลื่อน
   document.addEventListener(
-    'pointerdown',
+    'click',
     (e) => {
       const el = (e.target as Element | null)?.closest(TAPPABLE)
       if (!el || el.matches(':disabled')) return
