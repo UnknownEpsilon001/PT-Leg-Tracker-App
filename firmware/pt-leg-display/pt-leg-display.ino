@@ -55,14 +55,6 @@ static bool uiJog = false;  // controller's panel jog mode — โหมดข�
 static uint32_t uiElapsed = 0;
 static uint16_t uiReps = 0;
 static uint16_t uiTarget = 0;
-// Previous value of the running flag, for the start cue's edge. The sentinel
-// matters: the first state frame after boot seeds it without emitting, because a
-// display restarted beside a running machine must not announce a start that
-// already happened.
-// [TH] ค่าก่อนหน้าของสถานะกำลังทำงาน ใช้จับขอบขาขึ้นของเสียงเริ่ม
-//      ค่าพิเศษนี้สำคัญ ข้อความสถานะแรกหลังบูตจะใช้ตั้งค่าเริ่มต้นโดยไม่ส่งเสียง
-//      เพราะจอที่รีสตาร์ตข้างเครื่องที่กำลังทำงานอยู่ ต้องไม่ประกาศการเริ่มที่เกิดไปแล้ว
-static int8_t gPrevRunning = -1;  // -1 = ยังไม่เคยได้รับข้อความสถานะ
 static bool uiWifi = false, uiServer = false;
 
 // Last settings the controller told us about; the settings screen pre-fills from
@@ -310,10 +302,6 @@ static void onLinkDone(const LinkDone& d) {
   // [TH] ถ้าจะเพิ่มเสียงแจ้งความผิดพลาดภายหลัง ก็เพิ่มเงื่อนไขเดียวตรงนี้ เพราะ d.fault มีอยู่แล้ว
   if (uiTarget != 0 && d.reps >= uiTarget) audioPlay(Cue::Target);
   else audioPlay(Cue::Stop);
-
-  // The session is over; the next start is a real edge again.
-  // [TH] รอบจบแล้ว การเริ่มครั้งถัดไปจึงนับเป็นขอบขาขึ้นจริงอีกครั้ง
-  gPrevRunning = 0;
 }
 
 // When the last accepted state frame landed. The seconds shown on screen are
@@ -380,31 +368,16 @@ static void onLinkState(const LinkState& s) {
   uiWifi = s.wifi;
   uiServer = s.server;
   uiJog = s.jog;
-
-  // Start has no one-shot message, so it must edge-detect, and both ways that
-  // can go wrong are real.
-  //
-  // gLinkUp: a transition seen while the link is considered down is a reporting
-  // artifact, not a session. Without this, a glitching jumper wire makes the
-  // machine announce a start every time the watchdog clears and refills the
-  // state. Note gLinkUp is recomputed in loop() AFTER gLink.poll() has already
-  // delivered this callback, so it still holds the previous iteration's value —
-  // which is exactly what is wanted here: on the first frame after a link
-  // recovery it is still false, and the spurious start is suppressed. Do not
-  // "fix" that staleness; moving the recompute earlier defeats this guard.
-  //
-  // gPrevRunning < 0: the first frame after boot only seeds the value.
-  // [TH] สถานะเริ่มไม่มีข้อความส่งครั้งเดียวรองรับ จึงต้องจับขอบเอง และพลาดได้จริงสองทาง
-  //      gLinkUp: การเปลี่ยนสถานะที่เห็นตอนลิงก์ถือว่าขาด เป็นผลจากการรายงาน ไม่ใช่รอบการทำงานจริง
-  //      ถ้าไม่มีเงื่อนไขนี้ สายจัมเปอร์ที่สัญญาณกระตุกจะทำให้เครื่องประกาศเริ่มทุกครั้งที่ตัวเฝ้าระวังล้างและเติมสถานะใหม่
-  //      สังเกตว่า gLinkUp ถูกคำนวณใหม่ในลูปหลัง gLink.poll() ส่งข้อความนี้มาแล้ว
-  //      ค่าที่เห็นตรงนี้จึงเป็นค่าของรอบก่อนหน้า ซึ่งเป็นสิ่งที่ต้องการพอดี
-  //      เพราะข้อความแรกหลังลิงก์กลับมาจะยังเห็นเป็นเท็จ และเสียงเริ่มที่ไม่ควรดังจะถูกระงับ
-  //      ห้ามแก้ให้คำนวณเร็วขึ้น เพราะจะทำให้เงื่อนไขนี้ใช้ไม่ได้
-  //      gPrevRunning < 0: ข้อความแรกหลังบูตใช้ตั้งค่าเริ่มต้นเท่านั้น
-  if (gPrevRunning >= 0 && gLinkUp && s.running && gPrevRunning == 0) audioPlay(Cue::Start);
-  gPrevRunning = s.running ? 1 : 0;
 }
+
+// The start cue, from the controller's one-shot `started` message. It used to be
+// guessed from `running` rising in the state stream, but `running` is already
+// true through a recovery lowering and through a jog-exit lowering that is no
+// session at all, so the guess could not tell a start from a lowering.
+// [TH] เสียงเริ่ม มาจากข้อความ started ที่คอนโทรลเลอร์ส่งครั้งเดียว
+//      เดิมเดาจากสถานะกำลังทำงานที่เปลี่ยนเป็นจริง แต่สถานะนั้นเป็นจริงอยู่แล้วตลอดการลดขากู้สถานการณ์
+//      และตลอดการลดขาตอนออกจากโหมดขยับเองซึ่งไม่ใช่รอบการทำงานเลย การเดาจึงแยกการเริ่มออกจากการลดขาไม่ได้
+static void onLinkStarted() { audioPlay(Cue::Start); }
 
 // The controller's seconds, carried forward locally between frames.
 //
@@ -528,6 +501,7 @@ void setup() {
   gLink.onState = onLinkState;
   gLink.onSettingsReply = onLinkSettingsReply;
   gLink.onDone = onLinkDone;
+  gLink.onStarted = onLinkStarted;
   gLink.sendHello();  // ask controller for current settings + state
   // Last, so hearing it means the whole init path finished — not merely that the
   // DAC came up. It is the cheapest end-to-end self-test this board has.

@@ -89,6 +89,7 @@ class Link {
   void sendHello();
   void sendState(const LinkState& st);
   void sendDone(const LinkDone& d);
+  void sendStarted();
   void sendPing();
   void sendTarget(uint16_t reps);
   uint32_t lastRxMs() const { return _lastRx; }
@@ -137,6 +138,7 @@ class Link {
   void (*onState)(const LinkState&) = nullptr;         // display side — จอรับสถานะมาแสดง
   void (*onSettingsReply)(const LinkSettings&) = nullptr; // display side — จอรับค่าตั้งค่าที่คอนโทรลเลอร์ตอบกลับ
   void (*onDone)(const LinkDone&) = nullptr;           // display side — จอรับผลสรุปตอนจบรอบไปบันทึก
+  void (*onStarted)() = nullptr;                       // display side — จอรับสัญญาณว่ารอบเพิ่งเริ่ม (เสียงเริ่ม)
   // display -> controller, applied live. Kept off the `settings` path on purpose:
   // that one commits NVS and restarts Wi-Fi, so it is deferred until a session
   // ends, and a rep target the operator is turning right now cannot wait for that.

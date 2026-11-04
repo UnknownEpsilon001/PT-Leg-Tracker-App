@@ -53,6 +53,7 @@ one-shots are single events whose loss is silent and permanent.
 | message | reliable | why |
 |---|---|---|
 | `done` | yes | the session's only route to the SD card — a lost one is lost data |
+| `started` | yes | the start cue — a lost one is a start the machine never announced |
 | `settings` | yes | a SAVE the operator watched succeed |
 | `target` | yes | a rep count they just changed |
 | `hello` | no | already re-sent every 3 s until settings arrive |
@@ -116,6 +117,11 @@ discarded as repeats.
   is UTC seconds from the controller's clock — the DS3231 first, the SNTP system
   clock if the RTC is absent or unset — and 0 when neither has a time. See Notes
   for what that means for a datetime read off the card.
+- `{"t":"started"}` — sent once when a session's first Lift begins (after the
+  recovery lowering, when there is one); the display plays the start cue on it.
+  The cue used to be guessed from `running` rising in the state stream, which
+  could not tell a session from a lowering: `running` is already true through a
+  recovery lowering, and a jog-exit lowering raises it with no session at all.
 
 ## Notes
 

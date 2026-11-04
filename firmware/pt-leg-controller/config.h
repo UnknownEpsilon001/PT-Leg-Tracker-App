@@ -97,15 +97,24 @@
 // [TH] ต้องกดปุ่ม STOP ค้างนานเท่าใดตอนเครื่องว่างจึงจะเข้าโหมดขยับเอง
 //      นานพอที่การกด STOP สั้นๆ เพื่อล้างจำนวนครั้งจะไม่มีทางไปถึงค่านี้ได้
 #define JOG_ENTER_MS 2000
+// Hold START and STOP together this long to leave jog mode by hand. Both held is
+// "no direction" inside the mode, so the leg stays still while the hold counts.
+// [TH] กด START และ STOP พร้อมกันค้างนานเท่านี้เพื่อออกจากโหมดขยับเองด้วยมือ
+//      การกดสองปุ่มพร้อมกันในโหมดนี้แปลว่าไม่สั่งทิศใด ขาจึงอยู่นิ่งระหว่างที่จับเวลา
+#define JOG_EXIT_HOLD_MS 2000
 // Jog mode leaves itself after this long with no button held, so a machine is
-// never left sitting in a mode where START does not start a session.
+// never left sitting in a mode where START does not start a session. Every exit
+// (this one, the two-button hold, a line that never releases) lowers the leg in
+// full on the way out.
 // [TH] โหมดขยับเองจะออกเองเมื่อไม่มีการกดปุ่มนานเท่านี้
 //      เครื่องจะไม่ถูกทิ้งไว้ในโหมดที่ปุ่ม START ไม่ได้เริ่มรอบการทำงาน
+//      การออกทุกแบบ (แบบนี้ แบบกดสองปุ่มค้าง และแบบสายที่ไม่เคยถูกปล่อย) จะลดขาลงเต็มระยะก่อนออก
 #define JOG_IDLE_EXIT_MS 20000
 
 // The top and bottom limit switches are gone. Travel is timed now: LIFT drives
 // RPWM for liftSec and LOWER drives LPWM for lowerSec, both editable.
-// GPIO 32 became the yellow lamp; GPIO 33 is free.
+// GPIO 32 was the yellow lamp until both lamps moved onto one relay; 32 and 33
+// are free.
 //
 // There is no firmware-controlled cut in the motor supply, and deliberately so.
 // The machine's hardware cut is the panel emergency stop, which opens the whole
@@ -121,7 +130,7 @@
 // machine must not run unattended with a leg loaded on it.
 // [TH] ลิมิตสวิตช์บนและล่างถูกยกเลิกแล้ว ตอนนี้การเคลื่อนที่ใช้เวลาเป็นตัวกำหนด
 //      สถานะยกขาจ่ายกำลังทาง RPWM เป็นเวลา liftSec และสถานะลดลงจ่ายทาง LPWM เป็นเวลา lowerSec ปรับได้ทั้งคู่
-//      ขา 32 กลายเป็นไฟเหลือง ส่วนขา 33 ว่าง
+//      ขา 32 เคยเป็นไฟเหลืองจนไฟทั้งสองย้ายไปอยู่บนรีเลย์ตัวเดียว ตอนนี้ขา 32 และ 33 ว่าง
 //      ไม่มีการตัดไฟเลี้ยงมอเตอร์ที่สั่งด้วยเฟิร์มแวร์ และตั้งใจให้เป็นเช่นนั้น
 //      การตัดระดับฮาร์ดแวร์ของเครื่องคือปุ่มหยุดฉุกเฉินที่หน้าปัด
 //      ซึ่งตัดไฟ 12 โวลต์ทั้งระบบ ทั้งไฟมอเตอร์ ไฟหน้าปัด และไมโครคอนโทรลเลอร์ตัวนี้พร้อมกัน
@@ -170,52 +179,45 @@
 #endif
 #define BUTTON_DEBOUNCE_MS 25 // เวลากันเด้งของปุ่ม (มิลลิวินาที)
 
-// Panel lamps — 12 V, each switched by a mechanical relay off its pin.
-//   green only    a session is in progress and the actuator may move — keep clear
-//   yellow only   idle; nothing is going to move on its own
-//   both lit      a latched FAULT — the motor is cut, but the leg may be raised
-// Exactly one lamp is lit in both normal states, so both lit is unmistakably
-// abnormal without anything blinking. A fault used to read plain yellow, which
-// looked identical to idle; on a machine running without a CYD the panel is the
-// only indicator there is, and "ready" is the one impression it must not give
-// about a machine that faulted with the leg raised. What a fault IS is still
-// diagnosed on the CYD, the serial log and the card row — the lamps only ever
-// answer "is it about to move", plus this one exception.
+// Panel lamps — two 12 V lamps on ONE changeover relay, off GPIO 23.
+//   green         a session is in progress and the actuator may move — keep clear
+//   yellow        idle; nothing is going to move on its own
+//   blinking      jog mode, or a latched FAULT (motor cut, leg may be raised)
+// Green on the relay's NO contact, yellow on NC. The second relay channel (the
+// old yellow on GPIO 32) died on the bench machine, so the lamps were moved onto
+// one channel; with a changeover contact exactly one lamp is lit at any moment
+// and "both lit" can no longer be a fault signal, so a fault blinks instead.
 //
-// No blinking and no heartbeat, on either lamp. Each change of state is a contact
-// operation on a mechanical relay, so a 5 Hz blink is 18,000 operations an hour
-// and eats a ~100k-operation relay in a few hours of one latched fault. A fault
-// costs two extra contact operations over the old rule (both lamps flip instead
-// of one), not a blink, so this argument is untouched.
-// [TH] ไฟหน้าปัด 12 โวลต์ แต่ละดวงสั่งผ่านรีเลย์ของตัวเอง
-//      ติดเขียวดวงเดียว = อยู่ในรอบการทำงาน ชุดขับเคลื่อนอาจเคลื่อนที่ ให้อยู่ห่างไว้
-//      ติดเหลืองดวงเดียว = ว่าง จะไม่มีอะไรเคลื่อนที่เอง
-//      ติดทั้งสองดวง = ค้างสถานะผิดพลาด มอเตอร์ถูกตัดแล้วแต่ขาอาจยังยกอยู่
-//      สถานะปกติทั้งสองจะติดดวงเดียวเสมอ การติดทั้งคู่จึงผิดปกติอย่างชัดเจนโดยไม่ต้องกะพริบ
-//      เดิมความผิดพลาดแสดงเป็นสีเหลืองเฉยๆ ซึ่งดูเหมือนสถานะว่างตามปกติ
-//      บนเครื่องที่ใช้งานโดยไม่มีจอ CYD หน้าปัดคือตัวบอกสถานะเพียงอย่างเดียวที่มี
-//      การที่ผู้ใช้อ่านว่า "พร้อมใช้งาน" บนเครื่องที่ผิดพลาดค้างอยู่โดยขายังยกอยู่
-//      คือความเข้าใจผิดเดียวที่หน้าปัดนี้ต้องไม่สร้างขึ้น
-//      รายละเอียดว่าผิดพลาดอะไรยังดูได้จากจอ CYD บันทึกทางพอร์ตอนุกรม และแถวข้อมูลบนการ์ด
-//      ห้ามกะพริบและห้ามวาบเป็นจังหวะทั้งสองดวง ทุกการเปลี่ยนสถานะคือการตัดต่อหน้าสัมผัสของรีเลย์กลไก
-//      การกะพริบ 5 ครั้งต่อวินาทีคือ 18,000 ครั้งต่อชั่วโมง
-//      กินอายุรีเลย์ที่ทนได้ราวแสนครั้งจนหมดในไม่กี่ชั่วโมงจากความผิดพลาดที่ค้างอยู่ครั้งเดียว
-//      ความผิดพลาดหนึ่งครั้งเสียการตัดต่อหน้าสัมผัสเพิ่มสองครั้งจากกฎเดิม (ไฟติดทั้งสองดวงแทนดวงเดียว) ไม่ใช่การกะพริบ
-//      เหตุผลเรื่องอายุรีเลย์ข้างต้นจึงยังใช้ได้เหมือนเดิม
+// Blinking costs relay life: each toggle is a contact operation. At
+// LAMP_BLINK_HALF_MS 500 that is 7,200 an hour. Jog is short, so it is nothing
+// there; a fault blinks until STOP clears it, so a fault left latched overnight
+// is ~50k operations — half a ~100k relay. That is the trade the owner chose.
 //
-// 23 was already the status lamp. 32 is the pin the TOP limit switch freed; it is
-// not a strapping pin and does not glitch at boot the way 0/2/5/12/15 can.
-// [TH] ขา 23 เคยเป็นไฟแสดงสถานะอยู่แล้ว ส่วนขา 32 คือขาที่ว่างจากลิมิตสวิตช์บน
-//      ไม่ใช่ขา strapping และไม่มีสัญญาณแกว่งตอนบูตแบบขา 0/2/5/12/15
-#define PIN_LAMP_GREEN 23
-#define PIN_LAMP_YELLOW 32
-// The lamps are the only relay channels left on the machine — two channels of
-// one active-low board. This covers BOTH of them. Check before
+// Keep green on NO. A relay that is off — controller unpowered, mid-reset,
+// browned out — then shows yellow, never green.
+// [TH] ไฟหน้าปัด 12 โวลต์สองดวงบนรีเลย์แบบสองทางตัวเดียว สั่งจากขา 23
+//      เขียว = อยู่ในรอบการทำงาน ชุดขับเคลื่อนอาจเคลื่อนที่ ให้อยู่ห่างไว้
+//      เหลือง = ว่าง จะไม่มีอะไรเคลื่อนที่เอง
+//      กะพริบ = โหมดขยับเอง หรือค้างสถานะผิดพลาด (มอเตอร์ถูกตัดแล้วแต่ขาอาจยังยกอยู่)
+//      ไฟเขียวต่อที่หน้าสัมผัส NO ไฟเหลืองต่อที่ NC รีเลย์ช่องที่สอง (ไฟเหลืองเดิมที่ขา 32)
+//      เสียไปแล้วบนเครื่องทดสอบ จึงย้ายไฟทั้งสองมาไว้ช่องเดียว หน้าสัมผัสสองทางทำให้ติดได้ทีละดวงเสมอ
+//      "ติดทั้งสองดวง" จึงใช้บอกความผิดพลาดไม่ได้อีก ความผิดพลาดจึงใช้การกะพริบแทน
+//      การกะพริบกินอายุรีเลย์ ทุกครั้งที่สลับคือการตัดต่อหน้าสัมผัสหนึ่งครั้ง ที่ 500 มิลลิวินาทีคือ 7,200 ครั้งต่อชั่วโมง
+//      โหมดขยับเองใช้เวลาสั้นจึงไม่เป็นไร แต่ความผิดพลาดกะพริบจนกว่าจะกด STOP
+//      ถ้าค้างไว้ทั้งคืนจะราว 5 หมื่นครั้ง คือครึ่งหนึ่งของอายุรีเลย์ราวแสนครั้ง ซึ่งเป็นสิ่งที่เจ้าของเครื่องเลือกแล้ว
+//      ให้ต่อไฟเขียวที่ NO เสมอ รีเลย์ที่ดับอยู่ (ไม่มีไฟ กำลังรีเซ็ต หรือไฟตก) จะได้แสดงไฟเหลือง ไม่ใช่ไฟเขียว
+//
+// 23 was already the status lamp; 32 is free again.
+// [TH] ขา 23 เคยเป็นไฟแสดงสถานะอยู่แล้ว ส่วนขา 32 กลับมาว่าง
+#define PIN_LAMP_RELAY 23
+// Half a blink period: lamp swaps every this many ms. 500 = one full blink a second.
+// [TH] ครึ่งรอบการกะพริบ สลับไฟทุกเท่านี้มิลลิวินาที 500 = กะพริบหนึ่งรอบต่อวินาที
+#define LAMP_BLINK_HALF_MS 500
+// The relay board is active-low. Check before
 // first power-up: backwards, green is lit whenever the machine is idle, which is
 // the dangerous way round.
-// [TH] หลอดไฟเป็นช่องรีเลย์เพียงชุดเดียวที่เหลืออยู่บนเครื่อง คือสองช่องของบอร์ดสั่งงานด้วยลอจิกต่ำแผ่นเดียว
-//      ใช้กับหลอดทั้งสองดวง โดยถือว่าเป็นสองช่องของบอร์ดเดียวกัน
-//      ต้องตรวจก่อนเปิดเครื่องครั้งแรก ถ้ากลับด้าน ไฟเขียวจะติดตอนเครื่องว่าง ซึ่งเป็นด้านที่อันตราย
+// [TH] บอร์ดรีเลย์สั่งงานด้วยลอจิกต่ำ ต้องตรวจก่อนเปิดเครื่องครั้งแรก
+//      ถ้ากลับด้าน ไฟเขียวจะติดตอนเครื่องว่าง ซึ่งเป็นด้านที่อันตราย
 #define LED_ACTIVE_LOW
 
 // DS3231 real-time clock on the controller I2C bus. Not the ESP32 default pair

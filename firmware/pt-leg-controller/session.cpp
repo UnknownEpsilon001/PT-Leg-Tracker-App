@@ -201,6 +201,17 @@ void SessionSM::requestStop(uint32_t nowMs) {
   }
 }
 
+void SessionSM::lowerFromIdle(uint32_t nowMs) {
+  if (ph != Phase::Idle) return;
+  // The recovery path, so it ends quietly and clears legPositionUnknown once the
+  // full stroke has run. Entered from Idle, enter() gives it the full lowerMs.
+  // [TH] ใช้เส้นทางเดียวกับการลดขากู้สถานการณ์ จึงจบแบบเงียบ
+  //      และล้าง legPositionUnknown เมื่อลงครบเต็มระยะ เข้าจากสถานะว่าง enter() จึงให้เวลาเต็ม lowerMs
+  recovering = true;
+  startAfterRecovery = false;
+  enter(Phase::SafeLower, nowMs);
+}
+
 void SessionSM::forceFault(uint32_t nowMs) {
   if (ph == Phase::Idle || ph == Phase::Fault) return;
   // A recovery lower has no session of its own to end — the fault that preceded

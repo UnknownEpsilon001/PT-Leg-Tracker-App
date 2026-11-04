@@ -260,6 +260,8 @@ void Link::dispatch(const String& line) {
                   d["epoch"] | 0u, d["fault"] | false};
       onDone(dn);
     }
+  } else if (!strcmp(t, "started")) {
+    if (onStarted) onStarted();
   } else if (!strcmp(t, "target")) {
     if (onTarget) onTarget((uint16_t)(d["reps"] | 0));
     return;
@@ -290,12 +292,13 @@ void Link::sendState(const LinkState& st) {
   d["jog"] = st.jog;
   emit(_io, d);
 }
-// The three below go out reliably: each is a single event, and each has a
+// The four below go out reliably: each is a single event, and each has a
 // consequence that is silent when it is lost. `done` is the session's only route
-// to the SD card, `settings` is a SAVE the operator watched succeed, `target` is
-// a number they just turned.
-// [TH] สามข้อความด้านล่างส่งแบบรอการตอบรับ เพราะแต่ละอันเป็นเหตุการณ์ครั้งเดียว
+// to the SD card, `started` is the start cue, `settings` is a SAVE the operator
+// watched succeed, `target` is a number they just turned.
+// [TH] สี่ข้อความด้านล่างส่งแบบรอการตอบรับ เพราะแต่ละอันเป็นเหตุการณ์ครั้งเดียว
 //      และถ้าหายไปจะไม่มีอะไรฟ้อง ข้อความ done คือทางเดียวที่รอบจะถูกบันทึกลงการ์ด
+//      ข้อความ started คือเสียงเริ่มการทำงาน
 //      ข้อความ settings คือการกดบันทึกที่ผู้ใช้เห็นว่าสำเร็จ
 //      ข้อความ target คือตัวเลขที่ผู้ใช้เพิ่งปรับ
 void Link::sendDone(const LinkDone& dn) {
@@ -303,6 +306,9 @@ void Link::sendDone(const LinkDone& dn) {
   d["t"] = "done"; d["elapsed"] = dn.elapsed; d["reps"] = dn.reps;
   d["epoch"] = dn.epoch; d["fault"] = dn.fault;
   sendReliable(d);
+}
+void Link::sendStarted() {
+  JsonDocument d; d["t"] = "started"; sendReliable(d);
 }
 void Link::sendSettings(const LinkSettings& s) {
   JsonDocument d;

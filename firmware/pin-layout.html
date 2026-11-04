@@ -287,11 +287,8 @@ a{color:var(--pad)}
         <span class="lbl"><span class="en">Motor enable</span><span class="th">เปิดใช้งานตัวขับ</span></span>
         <span class="num">GPIO 4</span></div>
       <div class="pinstate green" id="ps23"><span class="led"></span>
-        <span class="lbl"><span class="en">Green lamp</span><span class="th">ไฟเขียว</span></span>
+        <span class="lbl"><span class="en">Lamp relay (on = green)</span><span class="th">รีเลย์ไฟ (ทำงาน = เขียว)</span></span>
         <span class="num">GPIO 23</span></div>
-      <div class="pinstate yellow" id="ps32"><span class="led"></span>
-        <span class="lbl"><span class="en">Yellow lamp</span><span class="th">ไฟเหลือง</span></span>
-        <span class="num">GPIO 32</span></div>
     </div>
 
     <div class="controls">
@@ -473,17 +470,14 @@ a{color:var(--pad)}
         <th><span class="en">Does</span><span class="th">หน้าที่</span></th>
       </tr></thead>
       <tbody>
-      <tr data-pin="23"><td><span class="en">Green lamp</span><span class="th">ไฟเขียว</span></td>
+      <tr data-pin="23"><td><span class="en">Lamp relay</span><span class="th">รีเลย์ไฟ</span></td>
         <td><span class="pad">GPIO 23</span></td>
-        <td><span class="en"><b>Output</b> — lit while a session is in progress and the actuator may move</span><span class="th"><b>ขาออก</b> ติดตอนอยู่ในรอบการทำงานและชุดขับเคลื่อนอาจเคลื่อนที่</span></td></tr>
-      <tr data-pin="32"><td><span class="en">Yellow lamp</span><span class="th">ไฟเหลือง</span></td>
-        <td><span class="pad">GPIO 32</span></td>
-        <td><span class="en"><b>Output</b> — lit when idle; nothing will move on its own. Lit together with green for a latched FAULT</span><span class="th"><b>ขาออก</b> ติดตอนว่าง จะไม่มีอะไรเคลื่อนที่เอง และติดพร้อมไฟเขียวเมื่อค้างสถานะผิดพลาด</span></td></tr>
+        <td><span class="en"><b>Output</b> — relay on lights green (NO): a session is in progress and the actuator may move. Off lights yellow (NC): idle. Blinks for jog mode and a latched FAULT</span><span class="th"><b>ขาออก</b> รีเลย์ทำงานติดไฟเขียว (NO) คืออยู่ในรอบการทำงานและชุดขับเคลื่อนอาจเคลื่อนที่ รีเลย์ดับติดไฟเหลือง (NC) คือว่าง และกะพริบในโหมดขยับเองและเมื่อค้างสถานะผิดพลาด</span></td></tr>
       </tbody>
     </table></div>
     <p class="sub" style="margin:8px 0 0">
-      <span class="en">Each lamp is a 12 V bulb through its own relay. Exactly one is lit in each normal state and both are lit for a latched FAULT, so "both" is unmistakably abnormal; neither ever blinks — every change is a relay contact operation. The lamps are two more channels of the same active-low board, so <code>LED_ACTIVE_LOW</code> is set in <code>config.h</code>; it covers both lamps.</span>
-      <span class="th">ไฟแต่ละดวงเป็นหลอด 12 โวลต์ผ่านรีเลย์ของตัวเอง สถานะปกติจะติดครั้งละดวงเดียว และจะติดทั้งสองดวงเมื่อค้างสถานะผิดพลาด การติดพร้อมกันจึงผิดปกติอย่างชัดเจน และไม่มีการกะพริบเลย เพราะทุกการเปลี่ยนสถานะคือการตัดต่อหน้าสัมผัสของรีเลย์ ไฟทั้งสองดวงเป็นอีกสองช่องของบอร์ด active-low แผ่นเดียวกัน จึงเปิด <code>LED_ACTIVE_LOW</code> ไว้ใน <code>config.h</code> แล้ว ซึ่งใช้กับไฟทั้งสองดวง</span>
+      <span class="en">Two 12 V bulbs on one changeover relay: green on NO, yellow on NC, so exactly one is lit at any moment and a dead controller shows yellow. Jog mode and a latched FAULT blink once a second; every toggle is a contact operation. The relay board is active-low, so <code>LED_ACTIVE_LOW</code> is set in <code>config.h</code>. GPIO 32 is free.</span>
+      <span class="th">หลอด 12 โวลต์สองดวงบนรีเลย์สองทางตัวเดียว ไฟเขียวต่อที่ NO ไฟเหลืองต่อที่ NC จึงติดได้ทีละดวงเสมอ และบอร์ดควบคุมที่ดับอยู่จะแสดงไฟเหลือง โหมดขยับเองและสถานะผิดพลาดที่ค้างอยู่จะกะพริบวินาทีละครั้ง ทุกการสลับคือการตัดต่อหน้าสัมผัสหนึ่งครั้ง บอร์ดรีเลย์สั่งงานด้วยลอจิกต่ำ จึงเปิด <code>LED_ACTIVE_LOW</code> ไว้ใน <code>config.h</code> ขา 32 ว่างแล้ว</span>
     </p>
 
     <h3 style="--dot:var(--btn)"><span class="en">Panel buttons</span><span class="th">ปุ่มหน้าปัด</span></h3>
@@ -662,8 +656,8 @@ a{color:var(--pad)}
 <div class="rules">
   <div class="rule" style="--k:var(--fault)">
     <h4><span class="en">GPIO 34, 35, 36, 39 have no pull-up</span><span class="th">ขา 34, 35, 36, 39 ไม่มีตัวต้านทานพูลอัป</span></h4>
-    <p><span class="en">Input-only. Never put a switch or button on them — it's why START and STOP sit on pins that support <code>INPUT_PULLUP</code> (25, 26). The two lamps land on 23 and 32 for a related but different reason: they're <code>OUTPUT</code>, not buttons, and 34–39 can't drive anything at all, input-only or otherwise.</span>
-       <span class="th">เป็นขารับสัญญาณอย่างเดียว ห้ามต่อสวิตช์หรือปุ่ม จึงต้องวางปุ่ม START และ STOP ไว้ที่ขาซึ่งรองรับ <code>INPUT_PULLUP</code> (25, 26) ส่วนไฟทั้งสองดวงมาอยู่ที่ขา 23 และ 32 ด้วยเหตุผลที่เกี่ยวข้องกันแต่ต่างกัน คือเป็นขา <code>OUTPUT</code> ไม่ใช่ปุ่ม และขา 34–39 ขับสัญญาณออกไม่ได้เลยไม่ว่าจะรับสัญญาณอย่างเดียวหรือไม่ก็ตาม</span></p>
+    <p><span class="en">Input-only. Never put a switch or button on them — it's why START and STOP sit on pins that support <code>INPUT_PULLUP</code> (25, 26). The lamp relay lands on 23 for a related but different reason: they're <code>OUTPUT</code>, not buttons, and 34–39 can't drive anything at all, input-only or otherwise.</span>
+       <span class="th">เป็นขารับสัญญาณอย่างเดียว ห้ามต่อสวิตช์หรือปุ่ม จึงต้องวางปุ่ม START และ STOP ไว้ที่ขาซึ่งรองรับ <code>INPUT_PULLUP</code> (25, 26) ส่วนรีเลย์ไฟมาอยู่ที่ขา 23 ด้วยเหตุผลที่เกี่ยวข้องกันแต่ต่างกัน คือเป็นขา <code>OUTPUT</code> ไม่ใช่ปุ่ม และขา 34–39 ขับสัญญาณออกไม่ได้เลยไม่ว่าจะรับสัญญาณอย่างเดียวหรือไม่ก็ตาม</span></p>
   </div>
   <div class="rule" style="--k:var(--green)">
     <h4><span class="en">An unwired NO input reads as released</span><span class="th">ขาที่ไม่ได้ต่อสายแบบ NO จะอ่านว่ายังไม่กด</span></h4>
@@ -702,11 +696,10 @@ a{color:var(--pad)}
   <tr data-pin="19"><td><span class="pad">19</span></td><td><span class="en">RTC SCL</span><span class="th">นาฬิกา SCL</span></td><td class="sub">I²C</td></tr>
   <tr data-pin="21"><td><span class="pad">21</span></td><td><span class="en">RTC SDA</span><span class="th">นาฬิกา SDA</span></td><td class="sub">I²C</td></tr>
   <tr data-pin="22"><td><span class="pad">22</span></td><td><span class="en">Motor RPWM — up</span><span class="th">RPWM ขับขึ้น</span></td><td class="sub">LEDC PWM</td></tr>
-  <tr data-pin="23"><td><span class="pad">23</span></td><td><span class="en">Green lamp</span><span class="th">ไฟเขียว</span> <span class="sub"><span class="en">via relay</span><span class="th">ผ่านรีเลย์</span></span></td><td class="sub">OUTPUT</td></tr>
+  <tr data-pin="23"><td><span class="pad">23</span></td><td><span class="en">Lamp relay</span><span class="th">รีเลย์ไฟ</span> <span class="sub"><span class="en">via relay</span><span class="th">ผ่านรีเลย์</span></span></td><td class="sub">OUTPUT</td></tr>
   <tr data-pin="25"><td><span class="pad">25</span></td><td>START <span class="sub"><span class="en">button</span><span class="th">ปุ่ม</span></span></td><td class="sub">INPUT_PULLUP</td></tr>
   <tr data-pin="26"><td><span class="pad">26</span></td><td>STOP <span class="sub"><span class="en">button</span><span class="th">ปุ่ม</span></span></td><td class="sub">INPUT_PULLUP + <span class="en">interrupt</span><span class="th">อินเทอร์รัปต์</span></td></tr>
   <tr data-pin="27"><td><span class="pad">27</span></td><td><span class="en">Motor LPWM — down</span><span class="th">LPWM ขับลง</span></td><td class="sub">LEDC PWM</td></tr>
-  <tr data-pin="32"><td><span class="pad">32</span></td><td><span class="en">Yellow lamp</span><span class="th">ไฟเหลือง</span> <span class="sub"><span class="en">via relay</span><span class="th">ผ่านรีเลย์</span></span></td><td class="sub">OUTPUT</td></tr>
   </tbody>
 </table></div>
 
@@ -740,7 +733,7 @@ a{color:var(--pad)}
   var USE={ '22':['var(--relay)','RPWM'], '27':['var(--relay)','LPWM'],
             '4':['var(--relay)','M-EN'],
             '25':['var(--btn)','START'], '26':['var(--btn)','STOP'],
-            '23':['var(--btn)','GREEN'], '32':['var(--btn)','YELLOW'],
+            '23':['var(--btn)','LAMP'],
             '21':['var(--i2c)','SDA'], '19':['var(--i2c)','SCL'],
             '16':['var(--uart)','RX'], '17':['var(--uart)','TX'] };
   var NS='http://www.w3.org/2000/svg', g=document.getElementById('ctrlPins');
@@ -806,7 +799,7 @@ a{color:var(--pad)}
       cTarget=document.getElementById('cTarget'),
       ps={22:document.getElementById('ps22'),27:document.getElementById('ps27'),
           4:document.getElementById('ps4'),
-          23:document.getElementById('ps23'),32:document.getElementById('ps32')};
+          23:document.getElementById('ps23')};
   if(!leg) return;
 
   var LIFT=7, LOWER=7, HOLD=10, REST=10;      // seconds, as the firmware ships
@@ -887,15 +880,13 @@ a{color:var(--pad)}
     ps[4].classList.toggle('on',driving);
   }
 
-  /* Panel lamps: exactly one lit at any moment, the same rule panelLampsSet()
-     drives from SessionSM::running() — green while a session is in progress
-     (including the safe-lower), yellow otherwise. No timer and no blinking,
-     because the real lamps are 12 V behind mechanical relays and every change
-     of state is a contact operation. Updated from the phase transitions like
-     motor(), not on an interval. */
+  /* Panel lamp relay: on (green) while a session is in progress, including the
+     safe-lower, off (yellow) otherwise — the same rule panelLampsSet() drives
+     from SessionSM::running(). The simulation has no jog or fault, so it never
+     blinks. Updated from the phase transitions like motor(), not on an
+     interval. */
   function lamps(){
     ps[23].classList.toggle('on', phase!=='idle');
-    ps[32].classList.toggle('on', phase==='idle');
   }
 
   var timer=0, posFrom=0, posTo=0, tStart=0, tDur=0;

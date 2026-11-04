@@ -104,6 +104,13 @@ class SessionSM {
   //      และปุ่ม START ครั้งถัดไปจะลดขาลงเต็มระยะก่อนยกขึ้น
   void markLegMoved() { legPositionUnknown = true; }
 
+  // Idle -> a full-length SafeLower -> Idle, quietly: no session, no stopped
+  // edge, no rep change. For leaving jog mode with the leg wherever the operator
+  // left it. A no-op in any other phase.
+  // [TH] ว่าง -> ลดขาเต็มระยะ -> ว่าง แบบเงียบ ไม่มีรอบ ไม่มีสัญญาณหยุด ไม่แตะจำนวนครั้ง
+  //      ใช้ตอนออกจากโหมดขยับเอง ซึ่งขาอาจค้างอยู่ตรงไหนก็ได้ ในสถานะอื่นไม่ทำอะไร
+  void lowerFromIdle(uint32_t nowMs);
+
   void tick(uint32_t nowMs);
   bool running() const { return ph != Phase::Idle && ph != Phase::Fault; }
   bool faulted() const { return ph == Phase::Fault; }

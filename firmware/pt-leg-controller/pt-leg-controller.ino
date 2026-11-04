@@ -58,7 +58,8 @@ static bool gNtpDone = false;
 
 // Jog mode: hold a button to move the leg by hand, for bench tuning and for
 // nudging a leg into place. Entered by holding STOP while idle for JOG_ENTER_MS,
-// left after JOG_IDLE_EXIT_MS with nothing held.
+// left by holding both buttons for JOG_EXIT_HOLD_MS or after JOG_IDLE_EXIT_MS
+// with nothing held — and every exit lowers the leg in full.
 //
 // It lives here and not in SessionSM on purpose. Jog is not a phase of a therapy
 // session — it reports nothing, logs nothing, counts no reps, and belongs to no
@@ -75,7 +76,8 @@ static bool gNtpDone = false;
 // instant.
 // [TH] โหมดขยับเอง: กดปุ่มค้างเพื่อขยับขาด้วยมือ ใช้ปรับค่าบนโต๊ะและจัดตำแหน่งขา
 //      เข้าโหมดโดยกดปุ่ม STOP ค้างตอนเครื่องว่างเป็นเวลา JOG_ENTER_MS
-//      และออกจากโหมดเมื่อไม่มีการกดอะไรนาน JOG_IDLE_EXIT_MS
+//      ออกจากโหมดโดยกดสองปุ่มค้าง JOG_EXIT_HOLD_MS หรือเมื่อไม่มีการกดอะไรนาน JOG_IDLE_EXIT_MS
+//      และการออกทุกครั้งจะลดขาลงเต็มระยะ
 //      โหมดนี้อยู่ที่ไฟล์นี้ ไม่ได้อยู่ใน SessionSM โดยตั้งใจ
 //      เพราะการขยับเองไม่ใช่สถานะหนึ่งของรอบการรักษา ไม่รายงาน ไม่บันทึก ไม่นับจำนวนครั้ง
 //      และไม่เป็นของรอบไหนเลย การเพิ่มค่าใน Phase จะทำให้มันไปอยู่บนสายสื่อสาร
@@ -99,6 +101,26 @@ static uint32_t gJogLastInput = 0;  // last time a jog button was held
 //      สาย START ที่ลัดวงจรจะยกขาขึ้นทันทีที่ปล่อย STOP
 //      และปุ่มที่กดค้างจะขับใหม่ 50 มิลลิวินาทีหลังเพดานเวลาตัด เพดานจึงไม่เคยคุมการขยับเองได้เลย
 static bool gJogNeedRelease = false;
+static uint32_t gJogBothSince = 0;  // when START+STOP began being held together
+// Set on every exit: STOP has to be let go before a new entry hold can count, so
+// the two-button exit (STOP still down) does not walk straight back in 2 s later.
+// [TH] ตั้งค่าทุกครั้งที่ออกจากโหมด ต้องปล่อย STOP ก่อนการกดค้างเพื่อเข้าโหมดครั้งใหม่จะเริ่มนับ
+//      การออกด้วยสองปุ่ม (ซึ่ง STOP ยังกดอยู่) จึงไม่วนกลับเข้าโหมดเองใน 2 วินาทีถัดมา
+static bool gJogEntryBlocked = false;
+
+// Leaves jog mode and lowers the leg in full: after a jog the position is unknown,
+// and down is the one place a leg can always be left safely.
+// [TH] ออกจากโหมดขยับเองแล้วลดขาลงเต็มระยะ เพราะหลังขยับเองไม่ทราบตำแหน่งขา
+//      และด้านล่างคือที่เดียวที่ทิ้งขาไว้ได้อย่างปลอดภัยเสมอ
+static void jogExit(uint32_t nowMs, const char* why) {
+  gJogMode = false;
+  gJogHeldSince = 0;
+  gJogBothSince = 0;
+  gJogEntryBlocked = true;
+  actuatorSoftOff();
+  gSession.lowerFromIdle(nowMs);
+  Serial.printf("jog: mode off - %s, lowering the leg\n", why);
+}
 
 // Returns the direction the operator is asking for, and ACT_OFF for none. Both
 // buttons held is deliberately nothing: two directions at once has no sensible
@@ -128,10 +150,15 @@ static bool jogLoop(uint32_t nowMs) {
   if (gSession.running() || gSession.faulted()) {
     gJogMode = false;
     gJogHeldSince = 0;
+    gJogBothSince = 0;
     return false;
   }
 
   if (!gJogMode) {
+    if (gJogEntryBlocked) {
+      if (buttonStopHeld()) return false;
+      gJogEntryBlocked = false;
+    }
     // Hold STOP while idle to enter. The hold is timed from the debounced level,
     // not from the edge, so a tap that clears the rep count never accumulates.
     // [TH] กดปุ่ม STOP ค้างตอนเครื่องว่างเพื่อเข้าโหมด
@@ -144,9 +171,21 @@ static bool jogLoop(uint32_t nowMs) {
     gJogHeldSince = 0;
     gJogLastInput = nowMs;
     gJogNeedRelease = true;  // the entry hold is not itself a jog — ไม่ถือว่าการกดค้างเพื่อเข้าโหมดเป็นการสั่งขยับ
-    Serial.println("jog: mode on - release STOP, then hold START to raise, STOP to lower");
+    Serial.println("jog: mode on - release STOP, then hold START to raise, STOP to lower, both to leave");
     return true;
   }
+
+  // Both held: the manual exit. Checked ahead of the release wait, so it works
+  // even straight after entry with STOP still down.
+  // [TH] กดค้างทั้งสองปุ่ม: ออกจากโหมดด้วยมือ ตรวจก่อนการรอปล่อยปุ่ม
+  //      จึงใช้ได้แม้ทันทีหลังเข้าโหมดที่ STOP ยังกดค้างอยู่
+  if (buttonStartHeld() && buttonStopHeld()) {
+    if (gJogBothSince == 0) gJogBothSince = nowMs;
+    actuatorSoftOff();
+    if (nowMs - gJogBothSince >= JOG_EXIT_HOLD_MS) jogExit(nowMs, "both buttons held");
+    return true;
+  }
+  gJogBothSince = 0;
 
   // gJogLastInput is not refreshed while waiting, so a button that never lets go
   // (a shorted line) still times the mode out.
@@ -154,10 +193,7 @@ static bool jogLoop(uint32_t nowMs) {
   if (gJogNeedRelease) {
     if (buttonStartHeld() || buttonStopHeld()) {
       actuatorSoftOff();
-      if (nowMs - gJogLastInput >= JOG_IDLE_EXIT_MS) {
-        gJogMode = false;
-        Serial.println("jog: mode off - a button never released");
-      }
+      if (nowMs - gJogLastInput >= JOG_IDLE_EXIT_MS) jogExit(nowMs, "a button never released");
       return true;
     }
     gJogNeedRelease = false;
@@ -178,10 +214,7 @@ static bool jogLoop(uint32_t nowMs) {
   // Nothing held. Fade out, and leave the mode if it has been quiet long enough.
   // [TH] ไม่มีการกดอะไร ให้ผ่อนกำลังลง และออกจากโหมดถ้าเงียบนานพอแล้ว
   actuatorSoftOff();
-  if (nowMs - gJogLastInput >= JOG_IDLE_EXIT_MS) {
-    gJogMode = false;
-    Serial.println("jog: mode off - idle timeout");
-  }
+  if (nowMs - gJogLastInput >= JOG_IDLE_EXIT_MS) jogExit(nowMs, "idle timeout");
   return true;
 }
 
@@ -582,10 +615,10 @@ void setup() {
                 gSettings.lowerSec, gSettings.restSec, gSettings.targetReps);
 #if BENCH_DEBUG
   // ASCII only: an em dash here reaches a serial monitor as mojibake.
-  Serial.printf("debug prints ON - btn start=%d(%s) stop=%d(%s), lamps green=%d yellow=%d\n",
+  Serial.printf("debug prints ON - btn start=%d(%s) stop=%d(%s), lamp relay=%d\n",
                 PIN_BTN_START, BTN_START_NC ? "NC" : "NO",
                 PIN_BTN_STOP, BTN_STOP_NC ? "NC" : "NO",
-                PIN_LAMP_GREEN, PIN_LAMP_YELLOW);
+                PIN_LAMP_RELAY);
 #endif
 }
 
@@ -700,19 +733,18 @@ void loop() {
   // Right after the motor command, and before the network work: the lamp agrees
   // with the actuator command issued in the same iteration, and it still updates
   // on the iterations where netLoop() later blocks on an unreachable server.
-  // Two arguments now. running() is still "the actuator may move" — true for
-  // Lift/Hold/Lower/Rest and for the safe-lower, false for Idle and for a
-  // latched Fault. faulted() is passed alongside it so a latched Fault lights
-  // both lamps instead of reading identically to ordinary Idle, which matters
-  // on a panel-only machine with no CYD to say which one it is.
+  // running() is still "the actuator may move" — true for Lift/Hold/Lower/Rest
+  // and for the safe-lower, false for Idle and for a latched Fault. A latched
+  // Fault and jog mode both blink, so neither reads as ordinary Idle on a
+  // panel-only machine with no CYD to say which one it is.
   // [TH] วางไว้ต่อจากการสั่งขับมอเตอร์และก่อนงานเครือข่าย
   //      หลอดจะได้ตรงกับคำสั่งชุดขับเคลื่อนที่ออกไปในลูปรอบเดียวกัน
   //      และยังถูกอัปเดตในรอบที่ netLoop() ไปค้างรอเซิร์ฟเวอร์ที่ติดต่อไม่ได้ด้วย
-  //      ตอนนี้รับสองอาร์กิวเมนต์ running() ยังคงหมายถึง "ชุดขับเคลื่อนอาจเคลื่อนที่"
+  //      running() ยังคงหมายถึง "ชุดขับเคลื่อนอาจเคลื่อนที่"
   //      เป็นจริงตอนยกขึ้น/ค้าง/ลดลง/พัก และตอนลดขาเพื่อหยุด เป็นเท็จตอนว่างและตอนค้างสถานะผิดพลาด
-  //      ส่วน faulted() ถูกส่งเข้าไปด้วยเพื่อให้สถานะผิดพลาดที่ค้างอยู่ติดไฟทั้งสองดวง
-  //      แทนที่จะดูเหมือนสถานะว่างตามปกติ ซึ่งสำคัญบนเครื่องที่มีแค่หน้าปัดโดยไม่มีจอ CYD บอกว่าเป็นสถานะไหน
-  panelLampsSet(gSession.running() || jogActive, gSession.faulted());
+  //      สถานะผิดพลาดที่ค้างอยู่และโหมดขยับเองจะกะพริบทั้งคู่
+  //      จึงไม่ดูเหมือนสถานะว่างตามปกติบนเครื่องที่มีแค่หน้าปัดโดยไม่มีจอ CYD บอก
+  panelLampsSet(gSession.running(), gSession.faulted(), jogActive);
   // The trip raised by actuatorTick's own software check is consumed at the top of
   // the NEXT iteration, alongside the hardware timer's. Both go through the one
   // place above, so a trip can never be charged to a session that started after
@@ -927,7 +959,10 @@ void loop() {
     gLink.sendDone(d);
   }
   // [TH] ส่งเหตุการณ์ "เพิ่งเริ่ม" (ตรวจจับขอบสัญญาณครั้งเดียว)
-  if (gSession.takeStartedEdge()) netQueueEvent("started", gSession.elapsedSec(now), gSession.reps());
+  if (gSession.takeStartedEdge()) {
+    netQueueEvent("started", gSession.elapsedSec(now), gSession.reps());
+    gLink.sendStarted();  // the CYD's start cue — เสียงเริ่มการทำงานบนจอ
+  }
 
   // Settings that arrived mid-session land here, once the motor is stopped. After
   // the done message on purpose: applySettings restarts WiFi, and the session's

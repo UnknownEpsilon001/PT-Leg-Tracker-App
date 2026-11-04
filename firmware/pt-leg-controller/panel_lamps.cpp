@@ -1,12 +1,13 @@
-// ขับไฟหน้าปัดสองดวงผ่านรีเลย์ เขียนขาเฉพาะตอนสถานะเปลี่ยน
-// Drives the two panel lamps through their relays. The only cleverness here is
-// that a pin is written on change and never per loop: behind a mechanical relay a
-// redundant write is a contact operation and a click, not a no-op.
+// ขับไฟหน้าปัดสองดวงผ่านรีเลย์สองทางตัวเดียว เขียนขาเฉพาะตอนสถานะเปลี่ยน
+// Drives the two panel lamps through one changeover relay. The only cleverness
+// here is that the pin is written on change and never per loop: behind a
+// mechanical relay a redundant write is a contact operation and a click, not a
+// no-op.
 #include "panel_lamps.h"
 #include <Arduino.h>
 #include "config.h"
 
-static int gLastGreen = -1, gLastYellow = -1;  // -1 = ยังไม่เคยเขียนขา
+static int gLastLevel = -1;  // -1 = ยังไม่เคยเขียนขา
 
 static void writeLamp(uint8_t pin, int& last, bool on) {
 #ifdef LED_ACTIVE_LOW
@@ -39,9 +40,8 @@ static void beginLamp(uint8_t pin) {
 }
 
 void panelLampsBegin() {
-  beginLamp(PIN_LAMP_GREEN);
-  beginLamp(PIN_LAMP_YELLOW);
-  gLastGreen = gLastYellow = -1;  // force the first set to write — ให้การเรียกครั้งแรกเขียนขาเสมอ
+  beginLamp(PIN_LAMP_RELAY);
+  gLastLevel = -1;  // force the first set to write — ให้การเรียกครั้งแรกเขียนขาเสมอ
   // Idle is the boot state, so yellow comes on and stays on. That is not a lamp
   // test and must not become one: boot is a normal (non-fault) idle state, so it
   // shows exactly one lamp like every other normal state, and a green flash at
@@ -52,19 +52,13 @@ void panelLampsBegin() {
   //      ตอนเปิดเครื่องคือสถานะว่างตามปกติ (ไม่ใช่ความผิดพลาด) จึงติดไฟดวงเดียวเหมือนสถานะปกติอื่นๆ
   //      การวาบไฟเขียวตอนเปิดเครื่องจะถูกอ่านว่าเครื่องเริ่มทำงานเอง
   //      ซึ่งเป็นความรู้สึกเดียวที่หน้าปัดนี้ต้องไม่สร้างขึ้นเลย
-  panelLampsSet(false, false);
+  panelLampsSet(false, false, false);
 }
 
-void panelLampsSet(bool inProgress, bool faulted) {
-  // A fault lights both, so green no longer means "may move" on its own — it
-  // must be read together with yellow. Green-alone (yellow off) still means the
-  // actuator may move; green-with-yellow means the opposite, a latched fault
-  // with the relays off. The ambiguity is bounded to those two cases, both
-  // documented in panel_lamps.h.
-  // [TH] ความผิดพลาดจะติดทั้งสองดวง ไฟเขียวเพียงลำพังจึงไม่ได้แปลว่า "อาจเคลื่อนที่" อีกต่อไป
-  //      ต้องอ่านคู่กับไฟเหลืองเสมอ ไฟเขียวติดดวงเดียว (เหลืองดับ) ยังคงแปลว่าชุดขับเคลื่อนอาจเคลื่อนที่ได้
-  //      ส่วนไฟเขียวติดพร้อมเหลืองแปลว่าตรงข้ามกัน คือค้างสถานะผิดพลาดและรีเลย์ดับแล้ว
-  //      ความกำกวมถูกจำกัดอยู่แค่สองกรณีนี้ ซึ่งอธิบายไว้ใน panel_lamps.h
-  writeLamp(PIN_LAMP_GREEN, gLastGreen, inProgress || faulted);
-  writeLamp(PIN_LAMP_YELLOW, gLastYellow, !inProgress || faulted);
+void panelLampsSet(bool inProgress, bool faulted, bool jog) {
+  // Blink phase from the clock, not from a counter: every caller sees the same
+  // phase, and a loop that stalls in the network code just stretches one half.
+  // [TH] จังหวะกะพริบคิดจากนาฬิกา ไม่ใช่ตัวนับ ลูปที่ค้างในงานเครือข่ายจะแค่ยืดครึ่งรอบนั้นออกไป
+  bool green = (faulted || jog) ? ((millis() / LAMP_BLINK_HALF_MS) & 1) != 0 : inProgress;
+  writeLamp(PIN_LAMP_RELAY, gLastLevel, green);  // relay on = NO = green — รีเลย์ทำงาน = NO = เขียว
 }

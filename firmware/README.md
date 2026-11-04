@@ -357,6 +357,8 @@ between pin and speaker instead. The firmware is identical either way.
 | Stop cue | Fires on a STOP before the target, once; the target clip does not. |
 | Target cue | With a target of 2, the target clip plays and the stop clip does not. |
 | Target 0 | Target 0, run, press STOP: stop clip, never target. |
+| Start after a stop | Run, STOP, wait for the leg to come down, START again: the start cue plays every time, including the first START after a boot or a jog (which lowers first; the cue comes when the lift begins). |
+| Jog exit | Leave jog by holding both buttons: the leg lowers, and no start cue plays. |
 | Link drop | Pull a UART jumper mid-session and reseat it. **No start cue.** |
 | Display reboot | Reset the display while the controller runs. **No start cue.** |
 | Cue against the SD write | Stop cue and the `sessions.csv` append fire together: audio must not stutter **and** the row must still be written. |
@@ -620,11 +622,10 @@ finishes; from IDLE it zeroes the rep count instead — the job the retired RESE
 button used to do. The debug build prints `EDGE STOP` followed by the phase(s)
 that follow.
 
-Both lamps are the out-of-band readout for the whole bench run: green lit while a
+The lamps are the out-of-band readout for the whole bench run: green lit while a
 session is in progress (including a recovery lowering out of FAULT), yellow lit
-otherwise, and both lit for a latched FAULT. Neither blinks, so the only thing to
-watch is that exactly one is lit outside a fault, and that they swap at the phase
-boundaries and nowhere else. Details in
+otherwise, and blinking for jog mode and a latched FAULT. Outside those two,
+watch that they swap at the phase boundaries and nowhere else. Details in
 [The panel lamps](#the-panel-lamps) below.
 
 `firmware/tools/button-bench.ps1` walks that test as a pass/fail checklist: it
@@ -664,42 +665,37 @@ suspicion; until then a starting press prints
 
 ## The panel lamps
 
-Two 12 V lamps, each switched by its own mechanical relay: green on **GPIO 23**,
-yellow on **GPIO 32**. Exactly one is lit in each of the two normal states, and
-both are lit for a fault:
+Two 12 V lamps on **one changeover relay**, driven from **GPIO 23**: green on the
+relay's NO contact, yellow on NC. The bench machine's second relay channel (the
+old yellow on GPIO 32) died, so both lamps moved onto one channel. The contact
+lights exactly one lamp at any moment:
 
 | Lamps | Means |
 | ----- | ----- |
-| Green only  | a session is in progress and the actuator may move — keep clear |
-| Yellow only | idle; nothing will move on its own |
-| **Both lit** | a latched FAULT — the motor is cut, but the leg may be raised |
+| Green  | a session is in progress and the actuator may move — keep clear |
+| Yellow | idle; nothing will move on its own |
+| **Blinking** green/yellow, 1 s | jog mode, or a latched FAULT — motor cut, leg may be raised |
 
 Green is lit on `SessionSM::running()` — LIFT, HOLD, LOWER, REST **and** the
-safe-lower — plus a latched FAULT; yellow is lit whenever the machine is not
-running, plus that same FAULT. So green still answers "may it move" on its own,
-and the both-lit combination is unmistakably abnormal without anything blinking.
-
-A fault used to read plain yellow, identical to an ordinary idle. That is fine
-when a CYD is attached, and wrong without one: on a machine running standalone
+safe-lower, including the lowering that ends jog mode. Jog and a latched FAULT
+blink, so neither reads as an ordinary idle. On a machine running without a CYD
 the panel is the only indicator there is, and an operator reading "ready" on a
 machine that faulted with the leg raised is the one impression this panel must
-not give. It costs two extra contact operations per fault, not a blink, so the
-relay-life argument for never blinking is untouched. What a fault *is* is still
-diagnosed on the CYD, the serial log and the card row.
+not give. What a fault *is* is still diagnosed on the CYD, the serial log and
+the card row. With two relays a fault lit both lamps instead; one changeover
+contact cannot do that.
 
-**Why there is no blinking.** The relay makes every state change a contact
-operation and an audible click. A 5 Hz fault blink is 18,000 operations an hour,
-which retires a ~100k-operation relay in about six hours of one latched fault —
-and an idle heartbeat would grind it down while the machine sat doing nothing at
-all. Solid states cost four operations per session across the pair (both lamps,
-each switching on and off once): at twenty sessions a day that is still roughly
-three and a half years. An earlier version of this file specified 2.5 Hz / 5 Hz /
-heartbeat patterns; those were written for a 3.3 V LED driven straight off the pin
-and do not survive contact with a relay.
+**Keep green on NO.** A relay that is off — controller unpowered, resetting,
+browned out — then shows yellow. Green on NC would light "may move" on a dead
+controller.
 
-If the lamps are ever moved onto MOSFETs or SSRs the constraint disappears and
-patterns become free again — but the semantics above are the ones the panel is
-built and documented around.
+**What blinking costs.** Every toggle is a contact operation and a click. At
+`LAMP_BLINK_HALF_MS` 500 that is 7,200 operations an hour. Jog is short, so it is
+nothing there. A fault blinks until STOP clears it, so a fault left latched
+overnight is about 50k operations, half the life of a ~100k-operation relay.
+That trade was chosen deliberately; solid green and yellow still cost two
+operations per session. If the lamps ever move onto MOSFETs or SSRs the cost
+disappears.
 
 `panelLampsBegin()` and `actuatorBegin()` both write the level **before**
 `pinMode(OUTPUT)`. A pin leaves reset as a high-Z input, and `pinMode(OUTPUT)`
@@ -711,21 +707,16 @@ two.
 
 There is deliberately **no power-on lamp test**. Idle is the boot state, so
 yellow comes on and stays on — that is not a lamp test and must not become one:
-the panel is specified to show exactly one lamp at all times, and a green flash
-at power-up would read as the machine starting by itself, the one impression it
-must never give. Test the lamps by starting a session.
+a green flash at power-up would read as the machine starting by itself, the one
+impression it must never give. Test the lamps by starting a session.
 
-`LED_ACTIVE_LOW` is **set** in `config.h`, because the lamps are two more
-channels of the one active-low relay board left on the machine — the two lamps
-are now its only load. It covers **both** lamps. Clear it only for a board
-that energizes on HIGH, and **check this before first power-up**: backwards,
-green is lit whenever the machine is idle and yellow while it is working, which
-is the dangerous way round.
+`LED_ACTIVE_LOW` is **set** in `config.h`, because the lamp relay is a channel of
+an active-low relay board. Clear it only for a board that energizes on HIGH, and
+**check this before first power-up**: backwards, green is lit whenever the
+machine is idle and yellow while it is working, which is the dangerous way round.
 
-**Why 23 and 32.** GPIO 23 was already the lamp pin under the single-LED design,
-kept for green. GPIO 32 is the pin the retired TOP limit switch freed — it is not
-a strapping pin and does not glitch at boot the way 0/2/5/12/15 can, and nothing
-else reads it or reserves it.
+GPIO 23 was already the lamp pin under the single-LED design. GPIO 32 is free
+again.
 
 ## The motor drive
 
@@ -802,28 +793,36 @@ nothing drives until both buttons have been let go, so the entry hold never
 turns into a lower and a START line that reads permanently pressed never lifts.
 
 **Use:** hold **START** to raise, **STOP** to lower, at `MOTOR_JOG_DUTY` (half
-duty). Release and the drive fades out. Both buttons held does nothing on
-purpose: two directions at once has no sensible answer, and guessing one would
-drive a leg the way the operator did not mean.
+duty). Release and the drive fades out. Both buttons held never moves the leg:
+two directions at once has no sensible answer, and guessing one would drive a
+leg the way the operator did not mean.
 
-**Leave:** 20 s with nothing held (`JOG_IDLE_EXIT_MS`), or anything that gives
-the motor to the state machine — a session starting, a fault latching.
+**Leave:** hold **START and STOP together** for 2 s (`JOG_EXIT_HOLD_MS`), or let
+20 s pass with nothing held (`JOG_IDLE_EXIT_MS`). Either way the machine then
+lowers the leg in full, the same quiet full-length descent a fault recovery
+uses: green lamp solid, no session, nothing on the card. After the two-button exit,
+STOP has to be let go before a new 2 s entry hold counts, so the exit does not
+walk straight back into the mode. A session starting or a fault latching also
+ends the mode, without the lowering, because the state machine takes the motor.
 
 Entry is a hold on STOP rather than anything involving START because the START
 edge starts a session the instant it is seen: there is no gesture beginning with
 START that does not run the machine first.
 
-Three things worth knowing:
+Things worth knowing:
 
 - **A jog marks the leg position unknown.** It moved the leg somewhere this
   firmware cannot know, which is the same state a power cut mid-stroke leaves
   behind, so it is recorded the same way — the next START lowers in full before
   it lifts.
-- **The green lamp is lit for the whole mode**, not only while a button is held.
-  A held button moves the leg immediately, so "the motor may move" is true the
-  entire time the mode is on.
+- **The lamps blink green/yellow for the whole mode**, not only while a button
+  is held. A held button moves the leg immediately, so the panel must not read
+  as an ordinary idle at any point while the mode is on.
 - **The CYD shows it too.** The state message carries `"jog":true`, and the main
   screen swaps the logo for **ปรับตำแหน่งขา** with the hint *ค้าง START ยก / STOP ลด*.
+  The exit lowering shows as an ordinary descent, and plays no start cue: the
+  cue now comes from the controller's one-shot `started` message, not from
+  `running` going true.
   The settings gear is disabled for the same reason it is during a session.
 - **Direction is a setting, not a wiring rule.** `MOTOR_REVERSED` in `config.h`
   picks which BTS7960 input lifts. The first bench machine had its motor leads
@@ -977,10 +976,10 @@ patient-facing machine it recovers instead of appearing bricked.
 - Panel buttons: START GPIO 25, STOP GPIO 26. Momentary, INPUT_PULLUP, other
   side to GND; both normally-open (`BTN_START_NC` / `BTN_STOP_NC`, both `0` in
   `config.h`). GPIO 33 is free — nothing reads it and nothing reserves it.
-- Panel lamps: green GPIO 23, yellow GPIO 32, each a 12 V lamp through its own
-  relay. Green lit while a session is in progress, yellow while idle, **both**
-  lit for a latched FAULT — one lamp in each normal state, never blinking. The
-  relay board is active-low, so `LED_ACTIVE_LOW` is set; it covers both lamps.
+- Panel lamps: one relay on GPIO 23, green on its NO contact and yellow on NC.
+  Green while a session is in progress, yellow while idle, blinking for jog mode
+  and a latched FAULT. The relay board is active-low, so `LED_ACTIVE_LOW` is set.
+  GPIO 32 is free.
 - UART: controller GPIO 16 (RX) / 17 (TX) ↔ CYD GPIO 22 (RX) / 27 (TX),
   cross-wired, common GND. 19200 8N1, bench-confirmed. Both RX pins enable their
   internal pull-up in `setup()`; a floating RX prefixes every frame with `0xFF`
