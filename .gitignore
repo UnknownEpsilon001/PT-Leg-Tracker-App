@@ -1,4 +1,12 @@
 node_modules/
+firmware/.build/
+PT-Leg-Tracker/.app-build/
+PT-Leg-Tracker/output/
+release/
+
+# sound effect library (286 MB): only the UI sounds make-cues.py uses are kept
+assets/soundeffectthatifound/*
+!assets/soundeffectthatifound/UI Sound/
 
 # Claude Code local state
 .claude/
@@ -11,3 +19,6 @@ docs/*.pdf
 
 # local isolated implementation worktrees
 .worktrees/
+
+# Local Claude instructions
+CLAUDE.md

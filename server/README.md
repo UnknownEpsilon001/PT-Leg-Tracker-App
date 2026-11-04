@@ -1,4 +1,4 @@
-# PT Leg Tracker Server
+# Smart OA Knee — Server
 
 FastAPI + SQLite server for the Smart OA Knee project. Owns therapy-session
 state and relays control between the Android app and the ESP32 device.
