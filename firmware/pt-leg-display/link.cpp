@@ -257,7 +257,7 @@ void Link::dispatch(const String& line) {
   } else if (!strcmp(t, "done")) {
     if (onDone) {
       LinkDone dn{d["elapsed"] | 0u, (uint16_t)(d["reps"] | 0),
-                  d["epoch"] | 0u, d["fault"] | false};
+                  d["epoch"] | 0u, d["fault"] | false, (const char*)(d["uid"] | "")};
       onDone(dn);
     }
   } else if (!strcmp(t, "started")) {
@@ -266,6 +266,15 @@ void Link::dispatch(const String& line) {
     if (onJogExit) onJogExit();
   } else if (!strcmp(t, "time")) {
     if (onTime) onTime(d["epoch"] | 0u);
+  } else if (!strcmp(t, "upload")) {
+    if (onUpload) {
+      LinkUpload u{d["seq"] | 0u, (const char*)(d["uid"] | ""), (const char*)(d["when"] | "?"),
+                   (const char*)(d["code"] | "-"), d["dur"] | 0u, (uint16_t)(d["reps"] | 0),
+                   d["fault"] | false};
+      onUpload(u);
+    }
+  } else if (!strcmp(t, "uploaded")) {
+    if (onUploaded) onUploaded(d["seq"] | 0u);
   } else if (!strcmp(t, "target")) {
     if (onTarget) onTarget((uint16_t)(d["reps"] | 0));
     return;
@@ -332,7 +341,7 @@ void Link::sendState(const LinkState& st) {
 void Link::sendDone(const LinkDone& dn) {
   JsonDocument d;
   d["t"] = "done"; d["elapsed"] = dn.elapsed; d["reps"] = dn.reps;
-  d["epoch"] = dn.epoch; d["fault"] = dn.fault;
+  d["epoch"] = dn.epoch; d["fault"] = dn.fault; d["uid"] = dn.uid;
   sendReliable(d);
 }
 void Link::sendStarted() {
@@ -360,6 +369,19 @@ void Link::sendJogExit() {
 // [TH] วันเวลาที่ตั้งจากหน้าจอ CYD ส่งแบบรอการตอบรับ ถ้าหายไป ทุกรอบหลังจากนั้นจะบันทึกเวลาเป็น "?"
 void Link::sendTime(uint32_t epochUtc) {
   JsonDocument d; d["t"] = "time"; d["epoch"] = epochUtc; sendReliable(d);
+}
+// The catch-up sync's two halves. Reliable like the rest, though a lost one is
+// never data loss here: the row stays on the card and is offered again.
+// [TH] สองส่วนของการซิงก์ย้อนหลัง ส่งแบบรอการตอบรับเหมือนข้อความอื่น
+//      แต่ถ้าหายก็ไม่ทำให้ข้อมูลหาย เพราะแถวยังอยู่บนการ์ดและจะถูกส่งใหม่อีกครั้ง
+void Link::sendUpload(const LinkUpload& u) {
+  JsonDocument d;
+  d["t"] = "upload"; d["seq"] = u.seq; d["uid"] = u.uid; d["when"] = u.when;
+  d["code"] = u.code; d["dur"] = u.dur; d["reps"] = u.reps; d["fault"] = u.fault;
+  sendReliable(d);
+}
+void Link::sendUploaded(uint32_t seq) {
+  JsonDocument d; d["t"] = "uploaded"; d["seq"] = seq; sendReliable(d);
 }
 // The confirmation screen's two messages go out reliably too: on the bench link
 // half the frames are rejected, and a lost confirm is a tap on START that did

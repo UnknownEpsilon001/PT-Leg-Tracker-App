@@ -19,6 +19,7 @@ struct SessionRow {
   bool fault;
   String patientCode;    // "-" if none — ใส่ "-" เมื่อไม่ได้เลือกผู้ป่วย
   String patientName;
+  String uid;            // the controller's session number — หมายเลขรอบจากคอนโทรลเลอร์
 };
 
 void sdlogEnsureHeader();           // write /sessions.csv header if the file is new
@@ -46,3 +47,25 @@ struct HistRow {
 // [TH] ใส่แถวล่าสุดไม่เกิน max แถวลงใน out[] เรียงจากใหม่ไปเก่า แล้วคืนจำนวนแถว
 //      อ่านเฉพาะท้ายไฟล์ การ์ดที่มีข้อมูลหลายปีจึงใช้เวลาเท่ากับการ์ดที่มีข้อมูลหนึ่งสัปดาห์ คืน -1 ถ้าเปิดไฟล์ไม่ได้
 int sdlogReadRecent(HistRow* out, int max);
+
+// The catch-up sync to the server. /synced.txt on the card holds how far into
+// sessions.csv the server has confirmed; the file is append-only, so a byte
+// offset is all the state there is.
+// [TH] การซิงก์ย้อนหลังไปเซิร์ฟเวอร์ ไฟล์ /synced.txt บนการ์ดเก็บว่าเซิร์ฟเวอร์ยืนยันรับไปถึงไหนแล้วใน sessions.csv
+//      ไฟล์นั้นเขียนต่อท้ายอย่างเดียว ตำแหน่งไบต์ตำแหน่งเดียวจึงเป็นสถานะทั้งหมดที่ต้องมี
+struct SyncRow {
+  uint32_t endOffset;    // byte offset just past this row — ตำแหน่งไบต์ถัดจากแถวนี้
+  String uid;
+  String when;           // as written on the card — ตามที่เขียนบนการ์ด
+  String code;
+  uint32_t durationSec;
+  uint16_t reps;
+  bool fault;
+};
+// The first row the server has not confirmed; false when there is none (or no
+// card). A row from before session numbers existed gets one made from its own
+// contents, so a repeated upload of it still lands on the same server row.
+// [TH] แถวแรกที่เซิร์ฟเวอร์ยังไม่ยืนยัน คืน false ถ้าไม่มี (หรือไม่มีการ์ด)
+//      แถวจากก่อนที่จะมีหมายเลขรอบจะได้หมายเลขที่สร้างจากเนื้อหาของมันเอง การส่งซ้ำจึงยังลงแถวเดิมบนเซิร์ฟเวอร์
+bool sdlogNextUnsynced(SyncRow& out);
+void sdlogMarkSynced(uint32_t endOffset);

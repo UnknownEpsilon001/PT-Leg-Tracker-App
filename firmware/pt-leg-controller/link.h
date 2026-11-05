@@ -47,6 +47,24 @@ struct LinkDone {
   uint16_t reps;      // finalReps — จำนวนครั้งที่ทำได้
   uint32_t epoch;     // controller RTC UTC seconds, 0 if unset — เวลาจริงจากนาฬิกา 0 = ไม่ทราบ
   bool fault;         // true if the session ended in FAULT — จบเพราะขึ้นสถานะ FAULT
+  String uid;         // the controller's number for this session — หมายเลขรอบจากคอนโทรลเลอร์
+};
+
+// One sessions.csv row on its way from the CYD's card to the server, relayed by
+// the controller because it owns the network. seq is the byte offset just past
+// the row in the file; the CYD advances its sync mark to it once the controller
+// answers "uploaded" with the same seq.
+// [TH] หนึ่งแถวของ sessions.csv ที่กำลังส่งจากการ์ดของจอไปเซิร์ฟเวอร์ โดยคอนโทรลเลอร์เป็นตัวส่งต่อ
+//      เพราะคอนโทรลเลอร์เป็นเจ้าของเครือข่าย seq คือตำแหน่งไบต์ถัดจากแถวนั้นในไฟล์
+//      จอจะเลื่อนตำแหน่งที่ซิงก์แล้วไปที่ค่านี้เมื่อคอนโทรลเลอร์ตอบ uploaded ด้วย seq เดียวกัน
+struct LinkUpload {
+  uint32_t seq;
+  String uid;
+  String when;        // card local time, "?" if unknown — เวลาบนการ์ด "?" ถ้าไม่ทราบ
+  String code;        // patient code, "-" if none — รหัสคนไข้ "-" ถ้าไม่มี
+  uint32_t dur;
+  uint16_t reps;
+  bool fault;
 };
 
 // Retransmission of the one-shot messages. `state` and `ping` are deliberately
@@ -69,7 +87,7 @@ struct LinkDone {
 // Eight, not four: started and jogexit joined done/settings/target, and on a full
 // queue the overflow overwrites slot 0, which can be a session's unacked done.
 // [TH] แปดช่องแทนสี่ เพราะมี started และ jogexit เพิ่มมา ถ้าคิวเต็มจะเขียนทับช่องแรก ซึ่งอาจเป็น done ที่ยังไม่ได้รับการตอบรับ
-static const int LINK_TXQ = 8;         // outstanding unacked messages — ข้อความที่ยังไม่ได้รับการตอบรับ
+static const int LINK_TXQ = 10;         // outstanding unacked messages — ข้อความที่ยังไม่ได้รับการตอบรับ
 static const uint32_t LINK_ACK_MS = 300;  // wait before resending — รอเท่านี้ก่อนส่งซ้ำ
 static const uint8_t LINK_MAX_TRIES = 8;  // ~2.4 s total — รวมแล้วราว 2.4 วินาที
 static const int LINK_SEEN = 8;        // recent ids remembered for de-dup — จำรหัสล่าสุดไว้กันข้อความซ้ำ
@@ -100,6 +118,8 @@ class Link {
   void sendConfirm(bool ok);      // display -> controller, commit or cancel
   void sendJogExit();
   void sendTime(uint32_t epochUtc);
+  void sendUpload(const LinkUpload& u);
+  void sendUploaded(uint32_t seq);
   uint32_t lastRxMs() const { return _lastRx; }
 
   // Receive tallies. lastRxMs() is stamped for every complete line, before the
@@ -158,6 +178,8 @@ class Link {
   void (*onConfirm)(bool) = nullptr;     // controller side
   void (*onJogExit)() = nullptr;         // controller side — ปุ่มออกจากโหมดขยับเองบนจอ
   void (*onTime)(uint32_t) = nullptr;    // controller side — ตั้งวันเวลาจากหน้าจอ
+  void (*onUpload)(const LinkUpload&) = nullptr;  // controller side — แถวจากการ์ดที่จะส่งเซิร์ฟเวอร์
+  void (*onUploaded)(uint32_t) = nullptr;         // display side — เซิร์ฟเวอร์รับแถวนั้นแล้ว
 
   // Retransmission tallies. txRetries counts resends, txDropped the messages
   // that were never acknowledged inside LINK_MAX_TRIES and are gone for good —

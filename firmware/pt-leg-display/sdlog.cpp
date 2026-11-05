@@ -45,7 +45,12 @@ static String isoLocal(uint32_t epochUtc) {
 // [TH] ไฟล์ขึ้นต้นด้วยเครื่องหมาย BOM ของ UTF-8 ถ้าไม่มี Excel จะเปิดด้วยรหัสอักษรของเครื่อง ชื่อภาษาไทยจะกลายเป็นตัวอ่านไม่ออก
 //      ถ้ามีจะดับเบิลคลิกแล้วแสดงถูกต้อง การ์ดที่สร้างไฟล์ไว้ก่อนหน้านี้ยังเป็นหัวตารางเดิม (BOM เขียนเฉพาะตอนสร้างไฟล์)
 //      จึงต้องเปลี่ยนชื่อหรือลบไฟล์เดิมหนึ่งครั้งเพื่อให้ได้ไฟล์ใหม่
-static const char* HEADER = "\xEF\xBB\xBF" "datetime,patientCode,patientName,durationSec,reps,fault\n";
+// sessionId is last so every column before it keeps its place for anyone who
+// reads the file by position.
+// [TH] sessionId อยู่ท้ายสุด คอลัมน์ก่อนหน้าจึงอยู่ตำแหน่งเดิมสำหรับคนที่อ่านไฟล์ตามตำแหน่งคอลัมน์
+static const char* HEADER =
+    "\xEF\xBB\xBF" "datetime,patientCode,patientName,durationSec,reps,fault,sessionId\n";
+#define SYNCED "/synced.txt"
 
 // Written in one checked call, like the data rows. An unchecked println on a full
 // card leaves a fragment of the header behind with a non-zero size, so no later
@@ -103,7 +108,7 @@ bool sdlogWrite(const SessionRow& r) {
   //      และบรรทัดที่เขียนค้างครึ่งเดียวยังทำให้แถวถัดไปเสียด้วย
   String line = isoLocal(r.epoch) + "," + r.patientCode + "," + r.patientName + "," +
                 String((unsigned long)r.durationSec) + "," + String(r.reps) + "," +
-                (r.fault ? "1" : "0") + "\n";
+                (r.fault ? "1" : "0") + "," + r.uid + "\n";
   size_t want = line.length();
   size_t wrote = f.write((const uint8_t*)line.c_str(), want);
   // The bytes of a short write stay on the card and the FS layer has no truncate,
@@ -192,7 +197,11 @@ int sdlogReadRecent(HistRow* out, int max) {
     if (!r.who.length()) r.who = code;
     r.durationSec = (uint32_t)line.substring(c[2] + 1, c[3]).toInt();
     r.reps = (uint16_t)line.substring(c[3] + 1, c[4]).toInt();
-    r.fault = line.substring(c[4] + 1) == "1";
+    // The fault column is followed by sessionId on new files and by nothing on old
+    // ones, so it ends at the next comma or at the end of the line.
+    // [TH] คอลัมน์ fault ตามด้วย sessionId ในไฟล์ใหม่ และไม่มีอะไรตามในไฟล์เก่า จึงจบที่จุลภาคถัดไปหรือท้ายบรรทัด
+    int c5 = line.indexOf(',', c[4] + 1);
+    r.fault = line.substring(c[4] + 1, c5 < 0 ? line.length() : c5) == "1";
     head = (head + 1) % max;
     if (n < max) n++;
   }
@@ -205,4 +214,75 @@ int sdlogReadRecent(HistRow* out, int max) {
   for (int i = 0; i < n; i++) out[i] = tmp[i];
   delete[] tmp;
   return n;
+}
+
+static uint32_t readSyncedOffset() {
+  File f = SD.open(SYNCED, FILE_READ);
+  if (!f) return 0;
+  uint32_t v = (uint32_t)f.readStringUntil('\n').toInt();
+  f.close();
+  return v;
+}
+
+// Overwritten whole each time: it is one number, and FILE_WRITE truncating it is
+// the point. A torn write leaves a short number, which only means a few rows are
+// offered again, and the server answers repeats with the row it already has.
+// [TH] เขียนทับทั้งไฟล์ทุกครั้ง เพราะเป็นตัวเลขตัวเดียว และการล้างไฟล์ของ FILE_WRITE คือสิ่งที่ต้องการ
+//      ถ้าเขียนค้างครึ่งทางจะได้ตัวเลขที่น้อยกว่า ซึ่งแค่ทำให้บางแถวถูกส่งซ้ำ และเซิร์ฟเวอร์ตอบการส่งซ้ำด้วยแถวเดิม
+void sdlogMarkSynced(uint32_t endOffset) {
+  File f = SD.open(SYNCED, FILE_WRITE);
+  if (!f) return;
+  f.print(endOffset);
+  f.print("\n");
+  f.close();
+}
+
+bool sdlogNextUnsynced(SyncRow& out) {
+  File f = SD.open(SESSIONS, FILE_READ);
+  if (!f) return false;
+  uint32_t size = f.size();
+  uint32_t at = readSyncedOffset();
+  // A mark past the end means the card's sessions.csv was replaced or deleted:
+  // start over from the top of the new one.
+  // [TH] ตำแหน่งที่เลยท้ายไฟล์แปลว่า sessions.csv บนการ์ดถูกเปลี่ยนหรือลบไปแล้ว จึงเริ่มใหม่จากต้นไฟล์ใหม่
+  if (at > size) at = 0;
+  f.seek(at);
+  while (f.available()) {
+    String line = f.readStringUntil('\n');
+    uint32_t end = f.position();
+    line.trim();
+    if (!line.length() || line.indexOf("datetime,") >= 0) {
+      sdlogMarkSynced(end);  // header or blank: nothing to send — หัวตารางหรือบรรทัดว่าง ไม่มีอะไรต้องส่ง
+      continue;
+    }
+    int c[6], pos = -1, k = 0;
+    while (k < 6 && (pos = line.indexOf(',', pos + 1)) >= 0) c[k++] = pos;
+    if (k < 5) {
+      sdlogMarkSynced(end);  // a torn row: skip it rather than stall on it — แถวที่ขาด ข้ามไปแทนการค้างอยู่ที่แถวนั้น
+      continue;
+    }
+    out.endOffset = end;
+    out.when = line.substring(0, c[0]);
+    out.code = line.substring(c[0] + 1, c[1]);
+    out.durationSec = (uint32_t)line.substring(c[2] + 1, c[3]).toInt();
+    out.reps = (uint16_t)line.substring(c[3] + 1, c[4]).toInt();
+    out.fault = line.substring(c[4] + 1, k > 5 ? c[5] : line.length()) == "1";
+    out.uid = k > 5 ? line.substring(c[5] + 1) : String("");
+    if (!out.uid.length()) {
+      // Made from the row itself: the same row always gets the same number. The
+      // offset is added only when the time is unknown, so two identical "?" rows
+      // stay two sessions.
+      // [TH] สร้างจากเนื้อหาของแถว แถวเดิมจึงได้หมายเลขเดิมเสมอ ใส่ตำแหน่งไบต์เพิ่มเฉพาะตอนที่ไม่ทราบเวลา
+      //      แถว "?" สองแถวที่เหมือนกันจึงยังเป็นสองรอบ
+      String w = out.when;
+      w.replace("-", ""); w.replace(" ", ""); w.replace(":", ""); w.replace("T", "");
+      out.uid = "csv-" + w + "-" + out.code + "-" + String(out.durationSec) + "-" + String(out.reps);
+      if (out.when == "?") out.uid += "-" + String(end);
+      if (out.uid.length() > 64) out.uid = out.uid.substring(0, 64);
+    }
+    f.close();
+    return true;
+  }
+  f.close();
+  return false;
 }

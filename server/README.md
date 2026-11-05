@@ -50,6 +50,6 @@ Press `b` to simulate the physical start/stop button, `q` to quit.
 
 ## API
 
-- ESP32: `GET /api/device/command`, `POST /api/device/event`, `POST /api/device/heartbeat`
+- ESP32: `GET /api/device/command`, `POST /api/device/event`, `POST /api/device/heartbeat`, `POST /api/device/session` (a finished session from the device's SD card, sent after the fact; merged by `uid`, safe to repeat)
 - App: `POST /api/sessions/start|stop`, `GET /api/sessions/current`,
   `POST /api/sessions/{id}/claim`, `GET /api/sessions?patientCode=X`

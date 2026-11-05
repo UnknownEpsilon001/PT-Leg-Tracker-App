@@ -20,7 +20,7 @@ static uint32_t lastReconnect = 0;  // เวลาที่ลองเชื�
 //      ถูกทับด้วย "stopped" เมื่อเน็ตช้า เซิร์ฟเวอร์เลยเห็นแค่การหยุดของรอบที่ไม่เคยเห็นเริ่ม
 //      สี่ช่องพอสำหรับ start+stop ที่ค้างอยู่ ถ้าเต็มจะทิ้งตัวเก่าสุด
 static const int EV_MAX = 4;
-struct Ev { String type; uint32_t elapsed; uint16_t reps; };
+struct Ev { String type; uint32_t elapsed; uint16_t reps; String uid; };
 static Ev evq[EV_MAX];
 static int evHead = 0, evCount = 0;
 
@@ -194,13 +194,13 @@ String netPollCommand(int16_t* targetOut, NetTimings* timingsOut) {
   return cmd;
 }
 
-void netQueueEvent(const char* type, uint32_t elapsedSec, uint16_t reps) {
+void netQueueEvent(const char* type, uint32_t elapsedSec, uint16_t reps, const String& uid) {
   if (evCount == EV_MAX) {  // full: drop the oldest so the newest is never lost
     evHead = (evHead + 1) % EV_MAX;
     evCount--;
   }
   int tail = (evHead + evCount) % EV_MAX;
-  evq[tail] = {String(type), elapsedSec, reps};
+  evq[tail] = {String(type), elapsedSec, reps, uid};
   evCount++;
 }
 
@@ -218,6 +218,7 @@ static void tryFlushEvent(uint32_t nowMs) {
   d["elapsedSec"] = e.elapsed;
   d["reps"] = e.reps;
   d["deviceId"] = devCode;
+  if (e.uid.length()) d["sessionUid"] = e.uid;
   String body;
   serializeJson(d, body);
   if (post("/api/device/event", body)) {
@@ -258,6 +259,22 @@ void netRadioOff() {
 }
 
 bool netHasServer() { return baseUrl.length() > 0; }
+
+bool netPostSession(const String& uid, const String& whenLocal, const String& patientCode,
+                    uint32_t durationSec, uint16_t reps, bool fault) {
+  JsonDocument d;
+  d["uid"] = uid;
+  if (whenLocal.length() && whenLocal != "?") d["endedAt"] = whenLocal;
+  else d["endedAt"] = nullptr;  // the device did not know the time — อุปกรณ์ไม่ทราบเวลา
+  d["durationSec"] = durationSec;
+  d["reps"] = reps;
+  d["fault"] = fault;
+  if (patientCode.length() && patientCode != "-") d["patientCode"] = patientCode;
+  d["deviceId"] = devCode;
+  String body;
+  serializeJson(d, body);
+  return post("/api/device/session", body);
+}
 
 void netLoop(uint32_t nowMs) {
   // [TH] งานเครือข่ายประจำลูป: ถ้า WiFi หลุดให้ลองเชื่อมใหม่ทุก 10 วินาที และส่งเหตุการณ์ที่ค้าง

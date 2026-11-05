@@ -68,6 +68,38 @@ static bool gNtpDone = false;
 //      หลังจาก SNTP หรือหน้าตั้งวันเวลาบนจอ CYD ตั้งให้แล้ว ค่า 0 แปลว่าไม่มีใครรู้เวลา
 //      การ์ดจะบันทึก "?" แทนวันที่ที่แต่งขึ้น ถ้าไม่มีชิป นาฬิการะบบจะหายทุกครั้งที่ไฟดับ
 //      หน้าจอตั้งเวลาจึงมีไว้ให้เครื่องที่ไม่มีอินเทอร์เน็ตและไม่มีชิปยังบันทึกเวลาจริงได้ หลังตั้งเวลาหนึ่งครั้งต่อการเปิดเครื่อง
+// The number of the session running now, or of the last one. Random rather than
+// counted so a reboot cannot hand out a number the server already holds, which
+// would merge two different sessions into one row. Sent with the live started
+// event and in the done message, so the CYD's card row and the server's row carry
+// the same one and the catch-up upload can tell them apart from new sessions.
+// [TH] หมายเลขของรอบที่กำลังทำงาน หรือรอบล่าสุด ใช้ค่าสุ่มแทนการนับ เพื่อไม่ให้การรีบูต
+//      แจกหมายเลขที่เซิร์ฟเวอร์มีอยู่แล้ว ซึ่งจะรวมสองรอบที่ต่างกันเป็นแถวเดียว
+//      ส่งไปกับเหตุการณ์ started แบบสดและข้อความ done แถวบนการ์ดกับแถวบนเซิร์ฟเวอร์จึงมีหมายเลขเดียวกัน
+//      การอัปโหลดย้อนหลังจึงแยกออกได้ว่าแถวไหนเซิร์ฟเวอร์มีแล้ว
+static String gSessionUid;
+
+static String newSessionUid() {
+  char buf[17];
+  snprintf(buf, sizeof(buf), "%08lx%08lx", (unsigned long)esp_random(), (unsigned long)esp_random());
+  return String(buf);
+}
+
+// One SD row waiting for the server, handed over by the CYD. A single slot: the
+// CYD offers the next row only after this one is answered.
+// [TH] แถวจากการ์ดหนึ่งแถวที่รอส่งเซิร์ฟเวอร์ จอเป็นคนส่งมา มีช่องเดียว
+//      เพราะจอจะส่งแถวถัดไปก็ต่อเมื่อแถวนี้ได้คำตอบแล้ว
+static LinkUpload gUpload;
+static bool gUploadPending = false;
+static uint32_t gUploadNextTryMs = 0;
+
+static void onLinkUpload(const LinkUpload& u) {
+  if (!netHasServer() || !u.uid.length()) return;  // nowhere to send it — ไม่มีที่ให้ส่ง
+  gUpload = u;
+  gUploadPending = true;
+  gUploadNextTryMs = 0;
+}
+
 static uint32_t clockNow() {
   uint32_t e = rtcEpoch();
   if (e) return e;
@@ -699,6 +731,7 @@ void setup() {
   gLink.onConfirm = onLinkConfirm;
   gLink.onJogExit = onLinkJogExit;
   gLink.onTime = onLinkTime;
+  gLink.onUpload = onLinkUpload;
   Serial.printf("pt-leg-controller %s ssid=%s server=%s code=%s cycle lift/hold/lower/rest=%u/%u/%u/%u target=%u\n",
                 FW_VERSION, gSettings.wifiSsid.c_str(), gSettings.serverUrl.c_str(),
                 gSettings.deviceCode.c_str(), gSettings.liftSec, gSettings.holdSec,
@@ -911,6 +944,20 @@ void loop() {
   LD_START(net);
 #endif
   netLoop(now);
+  // The catch-up upload, never while the motor may move: each try can block for a
+  // connect timeout, and a session in progress is the one time the loop must not
+  // wait on the network for something that can just as well wait for the rest.
+  // [TH] การอัปโหลดย้อนหลัง ไม่ทำระหว่างที่มอเตอร์อาจเคลื่อนที่ เพราะแต่ละครั้งอาจบล็อกนานเท่าเวลารอเชื่อมต่อ
+  //      และช่วงที่รอบกำลังทำงานคือเวลาเดียวที่ลูปต้องไม่รอเครือข่ายเพื่อสิ่งที่รอถึงช่วงพักได้
+  if (gUploadPending && !gSession.running() && (int32_t)(now - gUploadNextTryMs) >= 0) {
+    if (netPostSession(gUpload.uid, gUpload.when, gUpload.code, gUpload.dur, gUpload.reps,
+                       gUpload.fault)) {
+      gUploadPending = false;
+      gLink.sendUploaded(gUpload.seq);
+    } else {
+      gUploadNextTryMs = now + 10000;
+    }
+  }
 #if LOOP_DEBUG
   LD_END(net, dSeg_net);
 #endif
@@ -1196,7 +1243,7 @@ void loop() {
   // [TH] ขอบสัญญาณหยุดใช้บันทึกสองที่ที่ไม่ขึ้นต่อกัน: เหตุการณ์ฝั่งเซิร์ฟเวอร์ (ตอนออนไลน์)
   //      กับแถวข้อมูลใน SD ของจอ (ตอนออฟไลน์)
   if (gSession.takeStoppedEdge()) {
-    netQueueEvent("stopped", gSession.finalElapsedSec(), gSession.finalReps());
+    netQueueEvent("stopped", gSession.finalElapsedSec(), gSession.finalReps(), gSessionUid);
     // The clock chip first, then NTP. Taking the epoch from the DS3231 alone meant
     // that on a machine with no chip fitted — which is every machine until the RTC
     // is wired — every session on the card got "?" as its datetime, even with WiFi
@@ -1207,12 +1254,14 @@ void loop() {
     //      จึงบันทึกวันเวลาเป็น "?" ทุกรอบ ทั้งที่ต่อ WiFi ได้และเวลาในระบบถูกต้อง
     //      ใช้เกณฑ์เดียวกับตอนซิงก์ด้านบนเพื่อแยก "SNTP ยังไม่ตอบ" ออกจากเวลาจริง
     uint32_t epoch = clockNow();
-    LinkDone d{gSession.finalElapsedSec(), gSession.finalReps(), epoch, gSession.finalFaulted()};
+    LinkDone d{gSession.finalElapsedSec(), gSession.finalReps(), epoch, gSession.finalFaulted(),
+               gSessionUid};
     gLink.sendDone(d);
   }
   // [TH] ส่งเหตุการณ์ "เพิ่งเริ่ม" (ตรวจจับขอบสัญญาณครั้งเดียว)
   if (gSession.takeStartedEdge()) {
-    netQueueEvent("started", gSession.elapsedSec(now), gSession.reps());
+    gSessionUid = newSessionUid();
+    netQueueEvent("started", gSession.elapsedSec(now), gSession.reps(), gSessionUid);
     gLink.sendStarted();  // the CYD's start cue — เสียงเริ่มการทำงานบนจอ
   }
 

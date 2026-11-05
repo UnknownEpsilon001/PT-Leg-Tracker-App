@@ -6,13 +6,17 @@
 """
 
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from . import db
 from .db import DEFAULT_DEVICE_ID
 from .state import DeviceState
 
 AUTO_CLOSE_AFTER_SEC = 60
+
+# The device writes its card in Thai local time, which has no DST.
+# [TH] อุปกรณ์เขียนเวลาลงการ์ดเป็นเวลาไทย ซึ่งไม่มีการปรับเวลาตามฤดูกาล
+DEVICE_TZ = timezone(timedelta(hours=7))
 
 
 class ConflictError(Exception):
@@ -66,10 +70,22 @@ class SessionService:
         elapsed_sec: int,
         reps: int,
         device_id: str = DEFAULT_DEVICE_ID,
+        uid: str | None = None,
     ) -> str | None:
         # [TH] จัดการเหตุการณ์จากอุปกรณ์: "started" เปิดเซสชันใหม่ อื่นๆ ปิดเซสชันที่เปิดอยู่
         dev = self._device(device_id)
         if event_type == "started":
+            # A started event whose uid the server already holds is a retry of one
+            # it acted on (the reply was lost, not the request). Answering with the
+            # same row matters more than it looks: falling through would treat that
+            # very session as a stale one and close it seconds after it began.
+            # [TH] เหตุการณ์ started ที่มี uid ซึ่งเซิร์ฟเวอร์มีอยู่แล้ว คือการส่งซ้ำของเหตุการณ์ที่ทำไปแล้ว
+            #      (คำตอบหาย ไม่ใช่คำขอหาย) การตอบด้วยแถวเดิมสำคัญกว่าที่เห็น ถ้าปล่อยผ่านไป
+            #      เซสชันนั้นเองจะถูกมองว่าค้างและถูกปิดไม่กี่วินาทีหลังเริ่ม
+            if uid:
+                again = db.get_session_by_uid(device_id, uid)
+                if again is not None:
+                    return again["id"]
             stale = db.get_open_session(device_id)
             if stale is not None:
                 # power-glitch recovery: close stale session with last-known numbers
@@ -81,7 +97,7 @@ class SessionService:
             # the start intent is satisfied; a still-queued "start" would otherwise
             # be fetched stale by the device's next poll
             dev.clear_pending_start()
-            session_id = db.create_session(self._iso_now(), origin, device_id)
+            session_id = db.create_session(self._iso_now(), origin, device_id, uid)
             # an event is proof of life: refresh liveness so a fresh session isn't
             # immediately auto-closed by silence that preceded this event
             # target is carried through, not defaulted -- this is a lifecycle
@@ -99,6 +115,49 @@ class SessionService:
             return None
         db.close_session(open_session["id"], self._iso_now(), elapsed_sec, reps)
         return open_session["id"]
+
+    def handle_upload(
+        self,
+        uid: str,
+        ended_at: str | None,
+        duration_sec: int,
+        reps: int,
+        fault: bool,
+        patient_code: str | None,
+        device_id: str = DEFAULT_DEVICE_ID,
+    ) -> str:
+        """A session row from the device's SD card, sent after the fact.
+
+        ended_at is the card's local "YYYY-MM-DD HH:MM:SS", or None when the device
+        did not know the time. Unknown or unreadable times fall back to now: the
+        row still counts, it is just dated when it arrived.
+
+        [TH] แถวรอบการทำงานจากการ์ด SD ของอุปกรณ์ ที่ส่งมาทีหลัง
+             ended_at คือเวลาท้องถิ่นบนการ์ด หรือ None ถ้าอุปกรณ์ไม่ทราบเวลา
+             เวลาที่ไม่ทราบหรืออ่านไม่ออกจะใช้เวลาปัจจุบันแทน แถวยังถูกนับ แค่ลงวันที่ตอนที่มาถึง
+        """
+        ended = None
+        if ended_at:
+            try:
+                ended = datetime.strptime(ended_at, "%Y-%m-%d %H:%M:%S").replace(
+                    tzinfo=DEVICE_TZ
+                )
+            except ValueError:
+                ended = None
+        if ended is None:
+            ended = datetime.fromtimestamp(self._now(), tz=timezone.utc)
+        started = ended - timedelta(seconds=max(duration_sec, 0))
+        code = patient_code if patient_code and patient_code != "-" else None
+        return db.record_device_session(
+            device_id,
+            uid,
+            started.isoformat(),
+            ended.isoformat(),
+            duration_sec,
+            reps,
+            fault,
+            code,
+        )
 
     def handle_heartbeat(
         self,

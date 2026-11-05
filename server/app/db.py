@@ -22,9 +22,26 @@ CREATE TABLE IF NOT EXISTS sessions (
   duration_sec INTEGER,
   reps INTEGER NOT NULL DEFAULT 0,
   patient_code TEXT,
-  origin TEXT NOT NULL CHECK (origin IN ('app', 'device'))
+  origin TEXT NOT NULL CHECK (origin IN ('app', 'device')),
+  uid TEXT,
+  fault INTEGER NOT NULL DEFAULT 0
 )
 """
+
+# Columns added after the first release, so a database created by an older server
+# gains them in place instead of needing to be thrown away.
+# [TH] คอลัมน์ที่เพิ่มหลังรุ่นแรก ฐานข้อมูลที่สร้างจากเซิร์ฟเวอร์รุ่นเก่าจะได้คอลัมน์เหล่านี้เพิ่มเข้าไปเอง ไม่ต้องทิ้งไฟล์
+_ADDED_COLUMNS = {"uid": "TEXT", "fault": "INTEGER NOT NULL DEFAULT 0"}
+
+# The controller numbers every session it runs (uid), and sends that number with
+# the live started event and again with the SD-card row it uploads later. One
+# row per (device, uid) is what makes the upload safe to repeat.
+# [TH] คอนโทรลเลอร์ให้หมายเลขกับทุกรอบที่ทำงาน (uid) และส่งหมายเลขนี้ทั้งกับเหตุการณ์ started แบบสด
+#      และกับแถวจากการ์ด SD ที่อัปโหลดทีหลัง การมีแถวเดียวต่อ (อุปกรณ์, uid) ทำให้ส่งซ้ำได้อย่างปลอดภัย
+_UID_INDEX = (
+    "CREATE UNIQUE INDEX IF NOT EXISTS sessions_device_uid"
+    " ON sessions (device_id, uid) WHERE uid IS NOT NULL"
+)
 
 
 @contextmanager
@@ -34,21 +51,85 @@ def _db():
     try:
         with conn:
             conn.execute(_SCHEMA)
+            have = {r["name"] for r in conn.execute("PRAGMA table_info(sessions)")}
+            for name, decl in _ADDED_COLUMNS.items():
+                if name not in have:
+                    conn.execute(f"ALTER TABLE sessions ADD COLUMN {name} {decl}")
+            conn.execute(_UID_INDEX)
             yield conn
     finally:
         conn.close()
 
 
 def create_session(
-    started_at: str, origin: str, device_id: str = DEFAULT_DEVICE_ID
+    started_at: str,
+    origin: str,
+    device_id: str = DEFAULT_DEVICE_ID,
+    uid: str | None = None,
 ) -> str:
     session_id = str(uuid.uuid4())
     with _db() as conn:
         conn.execute(
-            "INSERT INTO sessions (id, device_id, started_at, origin) VALUES (?, ?, ?, ?)",
-            (session_id, device_id, started_at, origin),
+            "INSERT INTO sessions (id, device_id, started_at, origin, uid)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (session_id, device_id, started_at, origin, uid),
         )
     return session_id
+
+
+def get_session_by_uid(device_id: str, uid: str) -> sqlite3.Row | None:
+    with _db() as conn:
+        return conn.execute(
+            "SELECT * FROM sessions WHERE device_id = ? AND uid = ?", (device_id, uid)
+        ).fetchone()
+
+
+def record_device_session(
+    device_id: str,
+    uid: str,
+    started_at: str,
+    ended_at: str,
+    duration_sec: int,
+    reps: int,
+    fault: bool,
+    patient_code: str | None,
+) -> str:
+    """A finished session from the device's SD card, inserted or merged by uid.
+
+    If the live events already created the row, the card's numbers close it if it
+    is still open, and its patient code fills the row only when the app has not
+    claimed it: a claim made in the app is the stronger statement of who it was.
+
+    [TH] รอบที่จบแล้วจากการ์ด SD ของอุปกรณ์ เพิ่มใหม่หรือรวมกับแถวเดิมตาม uid
+         ถ้าเหตุการณ์สดสร้างแถวไว้แล้ว ตัวเลขจากการ์ดจะปิดแถวนั้นถ้ายังเปิดอยู่
+         และรหัสผู้ป่วยจะใส่ให้เฉพาะเมื่อแอปยังไม่ได้ระบุ เพราะการระบุในแอปเชื่อถือได้มากกว่า
+    """
+    with _db() as conn:
+        row = conn.execute(
+            "SELECT id, ended_at FROM sessions WHERE device_id = ? AND uid = ?",
+            (device_id, uid),
+        ).fetchone()
+        if row is None:
+            session_id = str(uuid.uuid4())
+            conn.execute(
+                "INSERT INTO sessions (id, device_id, started_at, ended_at, duration_sec,"
+                " reps, patient_code, origin, uid, fault)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, 'device', ?, ?)",
+                (session_id, device_id, started_at, ended_at, duration_sec, reps,
+                 patient_code, uid, int(fault)),
+            )
+            return session_id
+        if row["ended_at"] is None:
+            conn.execute(
+                "UPDATE sessions SET ended_at = ?, duration_sec = ?, reps = ? WHERE id = ?",
+                (ended_at, duration_sec, reps, row["id"]),
+            )
+        conn.execute(
+            "UPDATE sessions SET fault = ?, patient_code = COALESCE(patient_code, ?)"
+            " WHERE id = ?",
+            (int(fault), patient_code, row["id"]),
+        )
+        return row["id"]
 
 
 def close_session(session_id: str, ended_at: str, duration_sec: int, reps: int) -> None:

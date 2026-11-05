@@ -218,6 +218,23 @@ missing server cannot stall the safety loop with a 400 ms timeout every second.
   sessions with time, patient, reps and duration. A faulted session is red and
   marked ขัดข้อง.
 
+**Catch-up sync to the server.** The card is the record; the server gets a copy
+whenever it can be reached. Every session has a number (`sessionId`, the last
+column of `sessions.csv`) that the controller makes up at the start and sends
+with the live `started` event and in the `done` message. When the controller
+reports the server up, the CYD offers the rows the server has not confirmed,
+one at a time, oldest first; the controller posts each to `/api/device/session`
+between sessions and answers back, and the CYD moves its mark in `/synced.txt`.
+The server keeps one row per `(device, sessionId)`, so a session it already saw
+live is merged, not doubled, and a repeated upload changes nothing. Rows from
+before session numbers existed get one made from their own contents.
+
+Nothing depends on any of it. No server address: the radio turns off after the
+clock is set and nothing is ever offered. Server down: rows wait on the card. No
+card: sessions still run, the finish screen says the row is not saved, and it
+waits in RAM for a card. Deleting `sessions.csv` or `synced.txt` is safe: a mark
+past the end of the file starts over from the top, and the server ignores repeats.
+
 ## Device settings live on the card (`/settings.json`)
 
 Settings are stored twice: as JSON on the CYD's microSD card, and in the

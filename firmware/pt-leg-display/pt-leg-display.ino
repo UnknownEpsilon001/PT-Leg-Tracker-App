@@ -268,6 +268,7 @@ static void onLinkDone(const LinkDone& d) {
   r.reps = d.reps;
   r.durationSec = d.elapsed;
   r.fault = d.fault;
+  r.uid = d.uid;
   // The identity was copied when the patient was picked, so nothing here depends
   // on the roster still holding the same rows it held then.
   // [TH] ตัวตนของคนไข้ถูกคัดลอกไว้ตั้งแต่ตอนเลือก ตรงนี้จึงไม่ต้องพึ่งว่าทะเบียนยังมีแถวเดิมอยู่หรือไม่
@@ -379,6 +380,47 @@ static void onLinkState(const LinkState& s) {
 //      เดิมเดาจากสถานะกำลังทำงานที่เปลี่ยนเป็นจริง แต่สถานะนั้นเป็นจริงอยู่แล้วตลอดการลดขากู้สถานการณ์
 //      และตลอดการลดขาตอนออกจากโหมดขยับเองซึ่งไม่ใช่รอบการทำงานเลย การเดาจึงแยกการเริ่มออกจากการลดขาไม่ได้
 static void onLinkStarted() { audioPlay(Cue::Start); }
+
+// Catch-up sync: rows on the card the server has not confirmed are offered to the
+// controller one at a time, and only while the controller reports the server up.
+// With no server, nothing here ever runs past that check, so a machine without
+// one loses nothing and does nothing extra. A row is re-offered after a minute
+// without an answer; the server keeps one row per session number either way.
+// [TH] การซิงก์ย้อนหลัง แถวบนการ์ดที่เซิร์ฟเวอร์ยังไม่ยืนยันจะถูกส่งให้คอนโทรลเลอร์ทีละแถว
+//      และเฉพาะตอนที่คอนโทรลเลอร์รายงานว่าเซิร์ฟเวอร์ใช้งานได้ ถ้าไม่มีเซิร์ฟเวอร์ ส่วนนี้จะไม่ทำงานเกินการตรวจนั้น
+//      เครื่องที่ไม่มีเซิร์ฟเวอร์จึงไม่เสียอะไรและไม่ต้องทำงานเพิ่ม ถ้าไม่ได้คำตอบภายในหนึ่งนาทีจะส่งแถวเดิมใหม่
+//      และเซิร์ฟเวอร์เก็บหนึ่งแถวต่อหนึ่งหมายเลขรอบไม่ว่ากรณีใด
+static bool gSyncInFlight = false;
+static uint32_t gSyncSeq = 0;
+static uint32_t gSyncSentMs = 0;
+
+static void onLinkUploaded(uint32_t seq) {
+  if (!gSyncInFlight || seq != gSyncSeq) return;  // a late answer to an older offer — คำตอบที่มาช้าของแถวก่อนหน้า
+  sdlogMarkSynced(seq);
+  gSyncInFlight = false;
+}
+
+static void syncLoop(uint32_t now) {
+  // Every 2 s while rows are waiting, every 30 s once the card is caught up, so a
+  // synced card is not reopened for nothing.
+  // [TH] ทุก 2 วินาทีตอนที่ยังมีแถวรอ และทุก 30 วินาทีเมื่อส่งครบแล้ว การ์ดที่ซิงก์ครบจะได้ไม่ถูกเปิดเปล่าๆ
+  static uint32_t lastTry = 0, gap = 2000;
+  if (gSyncInFlight && now - gSyncSentMs > 60000) gSyncInFlight = false;
+  if (gSyncInFlight || now - lastTry < gap) return;
+  lastTry = now;
+  if (!gLinkUp || !uiServer || uiRunning || !storeCardPresent()) return;
+  SyncRow r;
+  if (!sdlogNextUnsynced(r)) {
+    gap = 30000;
+    return;
+  }
+  gap = 2000;
+  LinkUpload u{r.endOffset, r.uid, r.when, r.code, r.durationSec, r.reps, r.fault};
+  gLink.sendUpload(u);
+  gSyncInFlight = true;
+  gSyncSeq = r.endOffset;
+  gSyncSentMs = now;
+}
 
 // The controller's seconds, carried forward locally between frames.
 //
@@ -521,6 +563,7 @@ void setup() {
   gLink.onSettingsReply = onLinkSettingsReply;
   gLink.onDone = onLinkDone;
   gLink.onStarted = onLinkStarted;
+  gLink.onUploaded = onLinkUploaded;
   gLink.sendHello();  // ask controller for current settings + state
   // Last, so hearing it means the whole init path finished — not merely that the
   // DAC came up. It is the cheapest end-to-end self-test this board has.
@@ -603,6 +646,7 @@ void loop() {
   //      ที่นี่แค่ไฟสถานะกะพริบ ต่างจากฝั่งคอนโทรลเลอร์ที่การเทียบแบบเดียวกันสั่งหยุดรอบการทำงาน
   uint32_t lastRx = gLink.lastRxMs();
   gLinkUp = lastRx != 0 && (int32_t)(now - lastRx) < 2500;
+  syncLoop(now);
 
   static uint32_t lastUi = 0, lastPing = 0, lastHello = 0;
   if (now - lastUi >= 250) {  // [TH] รีเฟรชหน้าจอ ~4 ครั้ง/วินาที

@@ -58,6 +58,7 @@ one-shots are single events whose loss is silent and permanent.
 | `target` | yes | a rep count they just changed |
 | `jogexit` | yes | a tap on the jog exit button |
 | `time` | yes | a lost one leaves every later session logged with `?` for a time |
+| `upload` / `uploaded` | yes | the catch-up sync; a lost one only delays it, the row stays on the card |
 | `sets` | yes | the number a confirmed session would run toward |
 | `confirm` | yes | the tap that starts the machine moving |
 | `hello` | no | already re-sent every 3 s until settings arrive |
@@ -123,6 +124,12 @@ discarded as repeats.
 - `{"t":"time","epoch":unixUTC}` — the date and time typed on the CYD's
   **วันและเวลา** screen. The controller sets its system clock and, when a
   DS3231 answers, the chip too. Values outside 2023-11..2100 are refused.
+- `{"t":"upload","seq":n,"uid":s,"when":s,"code":s,"dur":n,"reps":n,"fault":bool}`
+  — one `sessions.csv` row the server has not confirmed yet, sent only while the
+  state message reports `"server":true`. `seq` is the byte offset just past the
+  row; `when` is the card's local time or `?`. The controller posts it to
+  `/api/device/session` (never while a session runs) and answers `uploaded`. With
+  no server address set it drops the message.
 - `{"t":"hello"}` — CYD boot; asks the controller for current settings + state.
 - `{"t":"ping"}` — 1 Hz keepalive that feeds the controller's UART watchdog.
 
@@ -137,7 +144,9 @@ discarded as repeats.
   screen pre-fills and the main screen can show the device code. Carries the
   same fields as the `settings` message above, including `lift`, `lower` and
   `target`.
-- `{"t":"done","elapsed":int,"reps":int,"epoch":unixUTC|0,"fault":bool}` — sent
+- `{"t":"uploaded","seq":n}` — the server took the row ending at `seq`; the CYD
+  moves its mark in `/synced.txt` there and offers the next row.
+- `{"t":"done","elapsed":int,"reps":int,"epoch":unixUTC|0,"fault":bool,"uid":s}` — sent
   once at session end (clean stop or FAULT); the display logs it to SD. `epoch`
   is UTC seconds from the controller's clock — the DS3231 first, the SNTP system
   clock if the RTC is absent or unset — and 0 when neither has a time. See Notes
