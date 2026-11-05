@@ -9,6 +9,8 @@ void netBegin(const DeviceSettings& s);      // starts Wi-Fi (non-blocking) — 
 void netLoop(uint32_t nowMs);                // reconnect + retry pending event — เชื่อมต่อใหม่ + ส่งเหตุการณ์ค้างซ้ำ
 bool netWifiUp();                            // WiFi เชื่อมต่ออยู่หรือไม่
 bool netServerUp();                          // last HTTP call succeeded — คำขอ HTTP ล่าสุดสำเร็จหรือไม่
+bool netHasServer();                         // a server URL is configured — ตั้งที่อยู่เซิร์ฟเวอร์ไว้หรือไม่
+void netRadioOff();                          // Wi-Fi fully off until the next netBegin — ปิด WiFi จนกว่าจะเรียก netBegin อีกครั้ง
 // Returns "start" | "stop" | "". `targetOut`, when given, receives the target the
 // server wants this device to use, or -1 when the server named none. The two ride
 // the same poll because the device already makes it once a second; a second

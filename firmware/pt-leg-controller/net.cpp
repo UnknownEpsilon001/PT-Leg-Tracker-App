@@ -37,6 +37,40 @@ static int evHead = 0, evCount = 0;
 static const uint32_t EV_RETRY_MS = 3000;
 static uint32_t evNextTryMs = 0;
 
+// After a request that never reached a server (no route, connect timeout),
+// every HTTP call stays off for this long. A typed server URL with nothing behind
+// it would otherwise cost a 400 ms connect timeout on the poll every second and
+// on each heartbeat, and the safety loop would spend most of its time waiting on
+// a machine that is not there.
+// [TH] หลังจากคำขอที่ไปไม่ถึงเซิร์ฟเวอร์ (ไม่มีเส้นทาง หรือเชื่อมต่อไม่ทันเวลา) จะหยุดเรียก HTTP ทุกชนิดไว้นานเท่านี้
+//      ไม่อย่างนั้นที่อยู่เซิร์ฟเวอร์ที่พิมพ์ไว้แต่ไม่มีเครื่องอยู่จริง จะกินเวลารอเชื่อมต่อ 400 มิลลิวินาที
+//      ทุกวินาทีตอนถามคำสั่งและทุกครั้งที่ส่งสัญญาณชีพ ลูปความปลอดภัยจะเสียเวลาส่วนใหญ่ไปกับการรอเครื่องที่ไม่มีอยู่
+static const uint32_t NET_QUIET_MS = 30000;
+static uint32_t quietUntilMs = 0;
+static bool quietActive = false;
+
+// Whether an HTTP call may run now. Clears serverOk whenever it says no, for the
+// reason the comment in post() gives.
+// [TH] ตอนนี้เรียก HTTP ได้หรือไม่ ถ้าไม่ได้จะล้าง serverOk ด้วยเหตุผลตามคอมเมนต์ใน post()
+static bool canTalk() {
+  if (quietActive && (int32_t)(millis() - quietUntilMs) < 0) { serverOk = false; return false; }
+  quietActive = false;
+  if (!netWifiUp() || !baseUrl.length()) { serverOk = false; return false; }
+  return true;
+}
+
+// A negative HTTPClient code is a transport failure: nothing answered. An HTTP
+// status, even 500, means a server is there, so it does not start the quiet time.
+// [TH] รหัสติดลบจาก HTTPClient คือการส่งล้มเหลว ไม่มีอะไรตอบกลับ
+//      ส่วนรหัสสถานะ HTTP แม้แต่ 500 แปลว่ามีเซิร์ฟเวอร์อยู่ จึงไม่เริ่มช่วงหยุดพัก
+static void noteResult(int code) {
+  serverOk = code >= 200 && code < 300;
+  if (code < 0) {
+    quietActive = true;
+    quietUntilMs = millis() + NET_QUIET_MS;
+  }
+}
+
 void netBegin(const DeviceSettings& s) {
   // [TH] ตั้งค่า URL เซิร์ฟเวอร์และรหัสอุปกรณ์ แล้วเริ่มเชื่อมต่อ WiFi ถ้ามี SSID
   baseUrl = s.serverUrl;
@@ -79,7 +113,7 @@ static String urlEncode(const String& s) {
 static bool post(const String& path, const String& body) {
   // Not reachable -> not "up". Returning without clearing serverOk left it frozen
   // at the last success, so the UI showed a live server while WiFi was down.
-  if (!netWifiUp() || !baseUrl.length()) { serverOk = false; return false; }
+  if (!canTalk()) return false;
   HTTPClient http;
   // Timeouts are the loop's blocking budget: this runs on the same core that
   // services the limit switches and the actuator cap, so keep it short. The
@@ -91,7 +125,7 @@ static bool post(const String& path, const String& body) {
   http.addHeader("Content-Type", "application/json");
   int code = http.POST(body);
   http.end();
-  serverOk = code >= 200 && code < 300;
+  noteResult(code);
   return serverOk;
 }
 
@@ -103,7 +137,7 @@ String netPollCommand(int16_t* targetOut, NetTimings* timingsOut) {
   //      ส่งค่ากลับเป็น -1 / ศูนย์ทั้งหมด ไม่ใช่ค่าค้างจากการถามครั้งก่อน
   if (targetOut) *targetOut = -1;
   if (timingsOut) *timingsOut = NetTimings{0, 0, 0, 0, 0};
-  if (!netWifiUp() || !baseUrl.length()) { serverOk = false; return ""; }
+  if (!canTalk()) return "";
   HTTPClient http;
   http.setConnectTimeout(400);
   http.setTimeout(400);
@@ -156,7 +190,7 @@ String netPollCommand(int16_t* targetOut, NetTimings* timingsOut) {
     }
   }
   http.end();
-  serverOk = code >= 200 && code < 300;
+  noteResult(code);
   return cmd;
 }
 
@@ -208,6 +242,22 @@ void netHeartbeat(const char* state, uint32_t elapsedSec, uint16_t reps, uint16_
   serializeJson(d, body);
   post("/api/device/heartbeat", body);
 }
+
+// With no server configured the radio has one job, setting the clock, and once
+// that is done it is switched off: an idle machine then makes no reconnect
+// attempts at all. WIFI_OFF also stops netLoop's reconnect below, which only
+// runs in STA mode. netBegin() turns it back on after a settings change.
+// [TH] ถ้าไม่ได้ตั้งเซิร์ฟเวอร์ไว้ วิทยุมีหน้าที่เดียวคือตั้งนาฬิกา พอเสร็จแล้วจึงปิด
+//      เครื่องที่ว่างอยู่จะไม่พยายามเชื่อมต่อใหม่อีกเลย WIFI_OFF ยังหยุดการเชื่อมต่อใหม่ใน netLoop ด้านล่างด้วย
+//      เพราะส่วนนั้นทำงานเฉพาะโหมด STA ส่วน netBegin() จะเปิดกลับมาเมื่อมีการเปลี่ยนค่าตั้งค่า
+void netRadioOff() {
+  if (WiFi.getMode() == WIFI_OFF) return;
+  WiFi.disconnect(true);
+  WiFi.mode(WIFI_OFF);
+  Serial.println("wifi: clock is set and no server is configured, radio off");
+}
+
+bool netHasServer() { return baseUrl.length() > 0; }
 
 void netLoop(uint32_t nowMs) {
   // [TH] งานเครือข่ายประจำลูป: ถ้า WiFi หลุดให้ลองเชื่อมใหม่ทุก 10 วินาที และส่งเหตุการณ์ที่ค้าง

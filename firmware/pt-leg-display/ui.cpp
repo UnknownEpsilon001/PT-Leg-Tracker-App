@@ -3,6 +3,7 @@
 // All LVGL UI for the CYD touchscreen: output-only main screen and settings screen.
 #include "ui.h"
 #include <Arduino.h>  // millis() for the in-phase timer — ใช้ millis() จับเวลาในสถานะ
+#include <time.h>     // gmtime_r for the clock — ใช้แปลงเวลาสำหรับนาฬิกา
 #include <lvgl.h>
 #include <TFT_eSPI.h>
 #include "touch_bb.h"  // touch pins live there — ขาทัชสกรีนอยู่ในไฟล์นั้น
@@ -34,6 +35,8 @@ static void leaveSubScreenForRun();  // defined with the settings screen below
 static void hideAddKeyboard();       // defined with the add-patient form below
 static bool settingsScreenOpen();    // defined with the settings screen below
 static bool confirmScreenActive();   // defined with the confirm screen below
+static void openTimeScreen();        // defined with the date/time screen below
+static void openHistory();           // defined with the history screen below
 
 static void flushCb(lv_disp_drv_t* disp, const lv_area_t* area, lv_color_t* pixels) {
   // [TH] LVGL เรียกฟังก์ชันนี้เพื่อผลักพิกเซลลงหน้าจอจริงตามพื้นที่ที่เปลี่ยน
@@ -226,6 +229,16 @@ void uiSetTargetChanged(void (*cb)(uint16_t)) { cbTarget = cb; }
 
 static void (*cbJogExit)() = nullptr;
 void uiSetJogExit(void (*cb)()) { cbJogExit = cb; }
+
+static uint32_t uiNowUtc = 0;  // controller clock, 0 = unknown — เวลาของคอนโทรลเลอร์ 0 = ไม่ทราบ
+void uiSetClock(uint32_t nowUtc) { uiNowUtc = nowUtc; }
+
+// Local time from a UTC epoch, gmtime on purpose: the offset is already added.
+// [TH] เวลาท้องถิ่นจากวินาที UTC ใช้ gmtime โดยตั้งใจ เพราะบวกเวลาไทยไว้แล้ว
+static void localTm(uint32_t utc, struct tm* out) {
+  time_t t = (time_t)utc + TZ_OFFSET_SEC;
+  gmtime_r(&t, out);
+}
 static void jogExitClicked(lv_event_t*) {
   if (cbJogExit) cbJogExit();
 }
@@ -425,11 +438,16 @@ void uiUpdateMain(bool running, Phase phase, uint32_t elapsedSec, uint16_t reps,
   static uint32_t pElapsed;
   static uint16_t pReps, pTarget;
   static uint32_t phaseTimerStartMs = 0;  // display's own millis() at the last phase edge
+  // The status corner shows the time to the minute, so a new minute is a change.
+  // [TH] มุมสถานะแสดงเวลาถึงหลักนาที นาทีที่เปลี่ยนจึงนับเป็นการเปลี่ยนแปลง
+  static uint32_t pMinute = 0;
+  uint32_t minute = uiNowUtc / 60;
   if (!first && running == pRunning && phase == pPhase && elapsedSec == pElapsed &&
       reps == pReps && target == pTarget && wifiUp == pWifi && serverUp == pServer &&
-      linkUp == pLink && jog == pJog)
+      linkUp == pLink && jog == pJog && minute == pMinute)
     return;
   pJog = jog;
+  pMinute = minute;
   // The wire only carries total session elapsed, not per-phase, so the in-phase
   // timer below is clocked locally from the phase edge. The mirrored 250 ms
   // UI/state refresh keeps the drift within a tick.
@@ -591,8 +609,24 @@ void uiUpdateMain(bool running, Phase phase, uint32_t elapsedSec, uint16_t reps,
   else lv_obj_clear_state(btnGear, LV_STATE_DISABLED);
 
   if (linkUp) {
-    lv_label_set_text_fmt(lblStatus, "%s %s", wifiUp ? LV_SYMBOL_WIFI : "--",
-                          serverUp ? LV_SYMBOL_OK : LV_SYMBOL_CLOSE);
+    // Date and time first, because a machine run offline logs whatever this says.
+    // The Wi-Fi and server marks appear only when they are up: with no server the
+    // radio switches itself off once the clock is set, and a permanent "-- X"
+    // there would read as a fault.
+    // [TH] แสดงวันเวลาก่อน เพราะเครื่องที่ใช้งานแบบออฟไลน์จะบันทึกตามเวลาที่แสดงตรงนี้
+    //      เครื่องหมาย WiFi และเซิร์ฟเวอร์แสดงเฉพาะตอนใช้งานได้ เพราะถ้าไม่มีเซิร์ฟเวอร์ วิทยุจะปิดตัวเองหลังตั้งนาฬิกาเสร็จ
+    //      ถ้าแสดง "-- X" ค้างไว้ตลอดจะดูเหมือนเครื่องเสีย
+    char clk[40];  // Thai is 3 bytes a character — อักษรไทยใช้ 3 ไบต์ต่อตัว
+    if (uiNowUtc) {
+      struct tm t;
+      localTm(uiNowUtc, &t);
+      snprintf(clk, sizeof(clk), "%02d/%02d %02d:%02d", t.tm_mday, t.tm_mon + 1, t.tm_hour,
+               t.tm_min);
+    } else {
+      snprintf(clk, sizeof(clk), "%s", "ไม่ทราบเวลา");
+    }
+    lv_label_set_text_fmt(lblStatus, "%s%s%s", clk, wifiUp ? "  " LV_SYMBOL_WIFI : "",
+                          serverUp ? " " LV_SYMBOL_OK : "");
   } else {
     lv_label_set_text(lblStatus, LV_SYMBOL_WARNING " ไม่พบตัวควบคุม");
   }
@@ -1145,6 +1179,16 @@ static void buildSettings() {
   // [TH] ปิดแป้นพิมพ์ก่อนเปิดกล่องยืนยัน ทั้งสองทางออกของกล่องนั้นกลับมาด้วย lv_scr_load(scrSettings)
   //      ไม่ได้ผ่าน uiOpenSettings จึงไม่มีอะไรคืนสถานะแป้นพิมพ์ให้ตอนกลับมา
   //      สิ่งที่ค้างไว้บนหน้านี้จะยังอยู่ รวมถึงกล่องช่องกรอกที่ถูกย่อไว้ด้วย
+  // Opens the date/time screen. Sits with the settings rather than on the main
+  // screen: it is set once per power-on at most, not touched during a session.
+  // [TH] เปิดหน้าตั้งวันเวลา วางไว้กับค่าตั้งค่าแทนที่จะอยู่หน้าหลัก เพราะตั้งอย่างมากครั้งเดียวต่อการเปิดเครื่อง
+  lv_obj_t* btnTime = makeBtn(col, LV_SYMBOL_BELL " วันและเวลา", COL_SURFACE, &thai20,
+                              [](lv_event_t*) {
+                                hideKeyboard();
+                                openTimeScreen();
+                              });
+  lv_obj_set_size(btnTime, lv_pct(100), 40);
+
   btnReset = makeBtn(col, "คืนค่าเริ่มต้น", COL_SURFACE, &thai20,
                      [](lv_event_t*) {
                        hideKeyboard();
@@ -1217,6 +1261,119 @@ void uiOpenSettings(const DeviceSettings& cur) {
   lv_obj_scroll_to_y(lv_obj_get_parent(taSsid), 0, LV_ANIM_OFF);
 
   lv_scr_load(scrSettings);
+}
+
+// ----------------------------------------------------------- date/time screen
+
+// For a machine with no internet: whoever is at the panel types the date and
+// time once, and every session after that is logged with a real timestamp.
+// Without the DS3231 the controller forgets it at power-off, which the hint on
+// the screen says. Wording avoids vowel-over-tone stacks (no ตั้ง, no ชั่วโมง).
+// [TH] สำหรับเครื่องที่ไม่มีอินเทอร์เน็ต ผู้ใช้ตั้งวันเวลาครั้งเดียว ทุกรอบหลังจากนั้นจะบันทึกเวลาจริง
+//      ถ้าไม่มีชิป DS3231 คอนโทรลเลอร์จะลืมเวลาเมื่อไฟดับ ซึ่งข้อความบนจอบอกไว้
+//      ถ้อยคำเลี่ยงสระบนซ้อนวรรณยุกต์ (ไม่ใช้ ตั้ง และ ชั่วโมง)
+static void (*cbTimeSet)(uint32_t) = nullptr;
+static lv_obj_t *scrTime, *spDay, *spMonth, *spYear, *spHour, *spMin;
+
+void uiSetTimeSet(void (*cb)(uint32_t)) { cbTimeSet = cb; }
+
+static int daysInMonth(int month, int year) {
+  static const uint8_t DAYS[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+  bool leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+  return (month == 2 && leap) ? 29 : DAYS[month - 1];
+}
+
+// Days since 1970-01-01 for a civil date (Howard Hinnant's algorithm), so the
+// conversion does not depend on whatever TZ the C library thinks it is in.
+// [TH] จำนวนวันนับจาก 1970-01-01 สำหรับวันที่ปฏิทิน ไม่ต้องพึ่งเขตเวลาที่ไลบรารี C เข้าใจ
+static int32_t daysFromCivil(int y, int m, int d) {
+  y -= m <= 2;
+  int32_t era = (y >= 0 ? y : y - 399) / 400;
+  int32_t yoe = y - era * 400;
+  int32_t doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+  int32_t doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+  return era * 146097 + doe - 719468;
+}
+
+static void timeSaveClicked(lv_event_t*) {
+  int year = 2000 + lv_spinbox_get_value(spYear);
+  int month = lv_spinbox_get_value(spMonth);
+  int day = lv_spinbox_get_value(spDay);
+  // Clamped, not rolled over: 31 in a 30-day month means the last day, never the
+  // 1st of the next month.
+  // [TH] บีบให้อยู่ในช่วง ไม่ใช่ปัดไปเดือนถัดไป วันที่ 31 ในเดือนที่มี 30 วันจึงหมายถึงวันสุดท้าย
+  int dim = daysInMonth(month, year);
+  if (day > dim) day = dim;
+  int64_t local = (int64_t)daysFromCivil(year, month, day) * 86400 +
+                  lv_spinbox_get_value(spHour) * 3600 + lv_spinbox_get_value(spMin) * 60;
+  uint32_t utc = (uint32_t)(local - TZ_OFFSET_SEC);
+  if (cbTimeSet) cbTimeSet(utc);
+  // Shown at once rather than after the controller echoes it, so the corner does
+  // not flash the old time; the next state frame confirms or corrects it.
+  // [TH] แสดงทันทีโดยไม่รอคอนโทรลเลอร์ตอบกลับ มุมจอจะได้ไม่วาบเวลาเก่า ข้อความสถานะถัดไปจะยืนยันหรือแก้ให้เอง
+  uiNowUtc = utc;
+  lv_scr_load(scrSettings);
+}
+
+static void buildTime() {
+  scrTime = lv_obj_create(nullptr);
+  styleScreen(scrTime);
+
+  lv_obj_t* bar = lv_obj_create(scrTime);
+  lv_obj_set_size(bar, lv_pct(100), 44);
+  lv_obj_align(bar, LV_ALIGN_TOP_MID, 0, 0);
+  lv_obj_set_style_bg_color(bar, lv_color_hex(COL_SURFACE), 0);
+  lv_obj_set_style_border_width(bar, 0, 0);
+  lv_obj_set_style_radius(bar, 0, 0);
+  lv_obj_clear_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
+
+  lv_obj_t* back = makeBtn(bar, LV_SYMBOL_LEFT " กลับ", COL_BG, &thai20,
+                           [](lv_event_t*) { lv_scr_load(scrSettings); });
+  lv_obj_set_size(back, 110, 34);
+  lv_obj_align(back, LV_ALIGN_LEFT_MID, -8, 0);
+
+  lv_obj_t* save = makeBtn(bar, "บันทึก", COL_BG, &thai20, timeSaveClicked);
+  lv_obj_set_size(save, 90, 34);
+  lv_obj_align(save, LV_ALIGN_RIGHT_MID, 8, 0);
+
+  lv_obj_t* col = lv_obj_create(scrTime);
+  lv_obj_set_size(col, lv_pct(100), 196);
+  lv_obj_align(col, LV_ALIGN_BOTTOM_MID, 0, 0);
+  lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_style_pad_all(col, 8, 0);
+  lv_obj_set_style_pad_row(col, 4, 0);
+  lv_obj_set_style_bg_opa(col, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(col, 0, 0);
+
+  spDay = makeSpinRow(col, "วัน", 1, 1, 31);
+  spMonth = makeSpinRow(col, "เดือน", 1, 1, 12);
+  spYear = makeSpinRow(col, "ปี ค.ศ. 20__", 26, 25, 99);  // two digits: the row's box holds two
+  spHour = makeSpinRow(col, "ชม. (0-23)", 9, 0, 23);
+  spMin = makeSpinRow(col, "นาที", 0, 0, 59);
+
+  lv_obj_t* hint = lv_label_create(col);
+  lv_obj_set_width(hint, lv_pct(100));
+  lv_label_set_long_mode(hint, LV_LABEL_LONG_WRAP);
+  lv_obj_set_style_text_font(hint, &thai14, 0);
+  lv_obj_set_style_text_color(hint, lv_color_hex(COL_MUTED), 0);
+  lv_label_set_text(hint, "ถ้าไม่มีชิปนาฬิกา DS3231 ไฟดับแล้วเวลาจะหาย ต่อ WiFi ได้ก็จะใช้เวลาจากอินเทอร์เน็ตแทน");
+}
+
+static void openTimeScreen() {
+  if (!scrTime) buildTime();
+  // Seeded from the controller's clock when it has one, so a small correction is
+  // a tap or two rather than five fields from scratch.
+  // [TH] ตั้งค่าเริ่มต้นจากนาฬิกาของคอนโทรลเลอร์ถ้ามี การแก้นิดหน่อยจึงแตะแค่หนึ่งสองครั้ง ไม่ต้องตั้งใหม่ทั้งห้าช่อง
+  if (uiNowUtc) {
+    struct tm t;
+    localTm(uiNowUtc, &t);
+    lv_spinbox_set_value(spDay, t.tm_mday);
+    lv_spinbox_set_value(spMonth, t.tm_mon + 1);
+    lv_spinbox_set_value(spYear, (t.tm_year + 1900) % 100);
+    lv_spinbox_set_value(spHour, t.tm_hour);
+    lv_spinbox_set_value(spMin, t.tm_min);
+  }
+  lv_scr_load(scrTime);
 }
 
 // ---------------------------------------------------------------- data screen
@@ -1314,6 +1471,11 @@ static void buildData() {
   lv_label_set_text(lblDataTitle, "");
   lv_obj_align(lblDataTitle, LV_ALIGN_TOP_LEFT, 10, 50);
 
+  lv_obj_t* hist = makeBtn(scrData, LV_SYMBOL_FILE " ประวัติ", COL_SURFACE, &thai14,
+                           [](lv_event_t*) { openHistory(); });
+  lv_obj_set_size(hist, 100, 26);
+  lv_obj_align(hist, LV_ALIGN_TOP_RIGHT, -6, 46);
+
   lstPatients = lv_list_create(scrData);
   lv_obj_set_size(lstPatients, lv_pct(100), 168);
   lv_obj_align(lstPatients, LV_ALIGN_BOTTOM_MID, 0, 0);
@@ -1326,6 +1488,88 @@ void uiOpenData() {
   if (!scrData) buildData();
   fillPatientList();
   lv_scr_load(scrData);
+}
+
+// ------------------------------------------------------------- history screen
+
+// The newest sessions on the card, so a machine used without the app can still
+// show what was done. Twenty rows: about two screens of scrolling, and a fixed
+// cost in LVGL's pool however long the card has been in use.
+// [TH] รอบล่าสุดบนการ์ด เครื่องที่ใช้โดยไม่มีแอปจึงยังดูได้ว่าทำอะไรไปแล้ว
+//      ยี่สิบแถวคือเลื่อนราวสองหน้าจอ และกินพูลของ LVGL เท่าเดิมไม่ว่าการ์ดจะใช้มานานเท่าไร
+static const int HIST_MAX = 20;
+static int (*cbHistory)(HistRow*, int) = nullptr;
+static lv_obj_t *scrHistory, *lblHistTitle, *lstHistory;
+
+void uiSetHistorySource(int (*read)(HistRow*, int)) { cbHistory = read; }
+
+static void buildHistory() {
+  scrHistory = lv_obj_create(nullptr);
+  styleScreen(scrHistory);
+
+  lv_obj_t* bar = lv_obj_create(scrHistory);
+  lv_obj_set_size(bar, lv_pct(100), 44);
+  lv_obj_align(bar, LV_ALIGN_TOP_MID, 0, 0);
+  lv_obj_set_style_bg_color(bar, lv_color_hex(COL_SURFACE), 0);
+  lv_obj_set_style_border_width(bar, 0, 0);
+  lv_obj_set_style_radius(bar, 0, 0);
+  lv_obj_clear_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
+
+  lv_obj_t* back = makeBtn(bar, LV_SYMBOL_LEFT " กลับ", COL_BG, &thai20,
+                           [](lv_event_t*) { lv_scr_load(scrData); });
+  lv_obj_set_size(back, 110, 34);
+  lv_obj_align(back, LV_ALIGN_LEFT_MID, -8, 0);
+
+  lblHistTitle = lv_label_create(bar);
+  lv_obj_set_style_text_font(lblHistTitle, &thai14, 0);
+  lv_obj_set_style_text_color(lblHistTitle, lv_color_hex(COL_MUTED), 0);
+  lv_label_set_text(lblHistTitle, "");
+  lv_obj_align(lblHistTitle, LV_ALIGN_RIGHT_MID, 0, 0);
+
+  lstHistory = lv_list_create(scrHistory);
+  lv_obj_set_size(lstHistory, lv_pct(100), 196);
+  lv_obj_align(lstHistory, LV_ALIGN_BOTTOM_MID, 0, 0);
+  lv_obj_set_style_bg_color(lstHistory, lv_color_hex(COL_BG), 0);
+  lv_obj_set_style_border_width(lstHistory, 0, 0);
+  lv_obj_set_style_pad_all(lstHistory, 4, 0);
+}
+
+// Rows rebuilt per open, like the patient list: lv_obj_clean frees the old ones.
+// The rows live on the heap only while this runs, not for the life of the boot.
+// [TH] สร้างแถวใหม่ทุกครั้งที่เปิดเหมือนรายการคนไข้ lv_obj_clean คืนหน่วยความจำแถวเก่า
+//      ข้อมูลแถวอยู่ในหน่วยความจำเฉพาะตอนที่ฟังก์ชันนี้ทำงาน ไม่ได้ค้างไว้ตลอดการเปิดเครื่อง
+static void fillHistory() {
+  lv_obj_clean(lstHistory);
+  HistRow* rows = new HistRow[HIST_MAX];
+  int n = cbHistory ? cbHistory(rows, HIST_MAX) : -1;
+  if (n < 0) {
+    lv_label_set_text(lblHistTitle, "ไม่พบการ์ด SD");
+  } else if (n == 0) {
+    lv_label_set_text(lblHistTitle, "ยังไม่มีประวัติ");
+  } else {
+    lv_label_set_text_fmt(lblHistTitle, "ล่าสุด %d รอบ", n);
+  }
+  for (int i = 0; i < n; i++) {
+    const HistRow& r = rows[i];
+    lv_obj_t* b = lv_list_add_btn(lstHistory, nullptr, "");
+    lv_obj_set_style_text_font(b, &thai14, 0);
+    lv_obj_set_style_bg_color(b, lv_color_hex(COL_SURFACE), 0);
+    lv_obj_set_style_text_color(b, lv_color_hex(r.fault ? COL_FAULT : COL_TEXT), 0);
+    lv_obj_set_style_border_width(b, 0, 0);
+    lv_obj_clear_flag(b, LV_OBJ_FLAG_CLICKABLE);  // a record, not a control — เป็นข้อมูล ไม่ใช่ปุ่ม
+    lv_obj_t* lbl = lv_obj_get_child(b, -1);
+    lv_label_set_text_fmt(lbl, "%s  %s\n%u รอบ  %lu:%02lu%s", r.when.c_str(), r.who.c_str(),
+                          (unsigned)r.reps, (unsigned long)(r.durationSec / 60),
+                          (unsigned long)(r.durationSec % 60), r.fault ? "  ขัดข้อง" : "");
+  }
+  delete[] rows;
+}
+
+static void openHistory() {
+  if (!scrHistory) buildHistory();
+  fillHistory();
+  lv_obj_scroll_to_y(lstHistory, 0, LV_ANIM_OFF);
+  lv_scr_load(scrHistory);
 }
 
 // ------------------------------------------------------------- add-patient form
@@ -1936,6 +2180,8 @@ const char* uiTestScreenName() {
   if (s == scrMain) return "main";
   if (s == scrSettings) return "settings";
   if (s == scrData) return "data";
+  if (s == scrHistory) return "history";
+  if (s == scrTime) return "time";
   if (s == scrAdd) return "add";
   if (s == scrFinish) return "finish";
   if (s == scrConfirmReset) return "confirm";

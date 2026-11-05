@@ -182,6 +182,42 @@ controller, so this board is the resistive XPT2046 variant it claims to be.
      ให้ปรับค่าโดยอ้างอิงปุ่มที่รู้พิกัดบนจอ ไม่ใช่การแตะที่มุมจอซึ่งกำกวมเพราะจอถูกหมุน
      และการอ่านค่าจะพิมพ์เฉพาะตอนเริ่มกด ถ้าเก็บ log ไม่ทันจะดูเหมือนไม่มีการแตะเลย
 
+## Running without the app or the internet
+
+The machine is meant to work on its own: the panel buttons and the CYD run a
+session, and every finished session is a row in `/sessions.csv` on the CYD's
+card. Wi-Fi is only for setting the clock.
+
+**The clock.** A session row carries the time it ended. The controller takes it
+from, in order:
+
+1. the DS3231 chip, when one is fitted (SDA 21, SCL 19, 3.3 V) and set. It has a
+   battery, so the time survives a power cut;
+2. the system clock, once SNTP has answered over Wi-Fi or someone has set it on
+   the CYD under ตั้งค่า → **วันและเวลา**. Without the chip this is lost at every
+   power cut, so a machine with neither chip nor internet has to be set once per
+   power-on.
+
+With no time at all the row says `?`, never a made-up date. The CYD's main
+screen shows the current time top left, or **ไม่ทราบเวลา** when there is none.
+
+**Wi-Fi only for the clock.** With no server address set, the controller turns
+its radio off as soon as SNTP has answered, so an idle machine makes no network
+traffic at all. If a server address is set but nothing answers it, every HTTP
+call stops for 30 s after a failed connect (`NET_QUIET_MS` in `net.cpp`), so a
+missing server cannot stall the safety loop with a 400 ms timeout every second.
+
+**Reading the data.**
+
+- On a PC: take the card out and double-click `sessions.csv`. The file starts
+  with a UTF-8 byte order mark, so Excel shows Thai names correctly, and the
+  date is written `2026-11-05 14:32:10` so Excel sorts and filters it as a date.
+  A card made before this change keeps its old header with no mark; rename or
+  delete that `sessions.csv` once and the next session starts a fresh one.
+- On the CYD: the list button (top right), then **ประวัติ**, shows the newest 20
+  sessions with time, patient, reps and duration. A faulted session is red and
+  marked ขัดข้อง.
+
 ## Device settings live on the card (`/settings.json`)
 
 Settings are stored twice: as JSON on the CYD's microSD card, and in the

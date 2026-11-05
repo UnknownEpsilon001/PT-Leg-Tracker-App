@@ -3,6 +3,7 @@
 #include "session.h"
 #include "settings.h"
 #include "store.h"  // Patient — โครงสร้างข้อมูลคนไข้
+#include "sdlog.h"  // HistRow, TZ_OFFSET_SEC — แถวประวัติและเวลาไทย
 
 // ส่วนติดต่อผู้ใช้บนจอสัมผัส CYD (สร้างด้วยไลบรารี LVGL)
 // หน้าจอหลักแสดงเวลา/จำนวนครั้ง/สถานะแบบอย่างเดียว (แสดงผลเท่านั้น) และมีปุ่มเฟืองไปหน้าตั้งค่า
@@ -120,6 +121,22 @@ void uiSetConfirmCallbacks(void (*onSets)(uint16_t), void (*onConfirm)(bool));
 
 // Tapped the on-screen jog exit — แตะปุ่มออกจากโหมดขยับเองบนจอ
 void uiSetJogExit(void (*cb)());
+
+// The controller's clock from the state stream, UTC seconds, 0 = unknown. Shown
+// in the main screen's status corner and used to seed the date/time screen.
+// [TH] เวลาของคอนโทรลเลอร์จากข้อความสถานะ เป็นวินาที UTC ค่า 0 = ไม่ทราบ
+//      แสดงที่มุมสถานะของหน้าหลัก และใช้เป็นค่าตั้งต้นของหน้าตั้งวันเวลา
+void uiSetClock(uint32_t nowUtc);
+// The date/time screen (opened from settings) hands the typed time over as UTC
+// seconds; the sketch sends it to the controller.
+// [TH] หน้าตั้งวันเวลา (เปิดจากหน้าตั้งค่า) ส่งเวลาที่ตั้งเป็นวินาที UTC ให้สเก็ตช์ส่งต่อไปที่คอนโทรลเลอร์
+void uiSetTimeSet(void (*cb)(uint32_t epochUtc));
+// Session history (opened from the patient screen) reads the card through this,
+// so this file still never touches SD: fill out[] newest first, return the
+// count, -1 for no card.
+// [TH] หน้าประวัติ (เปิดจากหน้าคนไข้) อ่านการ์ดผ่านฟังก์ชันนี้ ไฟล์นี้จึงยังไม่แตะการ์ดเอง
+//      ใส่ out[] จากใหม่ไปเก่า คืนจำนวนแถว และ -1 เมื่อไม่มีการ์ด
+void uiSetHistorySource(int (*read)(HistRow* out, int max));
 void uiOpenSettings(const DeviceSettings& current);  // เปิดหน้าตั้งค่าพร้อมค่าปัจจุบัน
 void uiSetSettingsSaved(void (*onSave)(const DeviceSettings&));
 // SAVE stays disabled until the controller has sent its settings at least once,

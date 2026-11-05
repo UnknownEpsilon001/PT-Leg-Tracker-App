@@ -228,7 +228,7 @@ void Link::dispatch(const String& line) {
     if (onState) {
       LinkState s{d["running"] | false, d["phase"] | 0, d["elapsed"] | 0u,
                   (uint16_t)(d["reps"] | 0), (uint16_t)(d["target"] | 0), d["wifi"] | false,
-                  d["server"] | false, d["jog"] | false};
+                  d["server"] | false, d["jog"] | false, d["now"] | 0u};
       onState(s);
     }
   } else if (!strcmp(t, "settings")) {
@@ -264,6 +264,8 @@ void Link::dispatch(const String& line) {
     if (onStarted) onStarted();
   } else if (!strcmp(t, "jogexit")) {
     if (onJogExit) onJogExit();
+  } else if (!strcmp(t, "time")) {
+    if (onTime) onTime(d["epoch"] | 0u);
   } else if (!strcmp(t, "target")) {
     if (onTarget) onTarget((uint16_t)(d["reps"] | 0));
     return;
@@ -315,6 +317,7 @@ void Link::sendState(const LinkState& st) {
   d["wifi"] = st.wifi;
   d["server"] = st.server;
   d["jog"] = st.jog;
+  d["now"] = st.now;
   emit(_io, d);
 }
 // The four below go out reliably: each is a single event, and each has a
@@ -351,6 +354,12 @@ void Link::sendTarget(uint16_t reps) {
 // [TH] ปุ่มออกจากโหมดขยับเองบนจอ ส่งแบบรอการตอบรับ เพราะการแตะที่หายไปคือปุ่มที่กดแล้วไม่เกิดอะไร
 void Link::sendJogExit() {
   JsonDocument d; d["t"] = "jogexit"; sendReliable(d);
+}
+// The date and time typed on the CYD. Reliable: a lost one leaves every session
+// after it logged with "?" for a time.
+// [TH] วันเวลาที่ตั้งจากหน้าจอ CYD ส่งแบบรอการตอบรับ ถ้าหายไป ทุกรอบหลังจากนั้นจะบันทึกเวลาเป็น "?"
+void Link::sendTime(uint32_t epochUtc) {
+  JsonDocument d; d["t"] = "time"; d["epoch"] = epochUtc; sendReliable(d);
 }
 // The confirmation screen's two messages go out reliably too: on the bench link
 // half the frames are rejected, and a lost confirm is a tap on START that did

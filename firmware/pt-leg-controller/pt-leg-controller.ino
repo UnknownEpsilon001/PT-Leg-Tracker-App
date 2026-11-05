@@ -42,6 +42,8 @@
 #include "link.h"
 #include "rtc.h"
 #include <time.h>
+#include <sys/time.h>
+#include <esp_sntp.h>
 #include <esp_log.h>
 #include <driver/gpio.h>
 
@@ -55,6 +57,23 @@ Link gLink;                // ลิงก์ UART ไปยังบอร์�
 // [TH] ซิงก์เวลาจาก NTP ครั้งเดียวต่อการเปิดเครื่อง เพราะ DS3231 เดินเวลาเองต่อได้
 //      และเครื่องต้องใช้งานแบบออฟไลน์ได้ ไม่จำเป็นต้องซิงก์ซ้ำเรื่อยๆ
 static bool gNtpDone = false;
+
+// The machine's clock: the DS3231 when one is fitted and set, otherwise the system
+// clock once SNTP or the CYD's date/time screen has set it. 0 means nobody knows
+// the time, and the card then logs "?" rather than a made-up date. Without a
+// chip the system clock is lost at every power cut, which is why the screen
+// exists: a machine with no internet and no chip can still log real times after
+// someone sets it once per power-on.
+// [TH] นาฬิกาของเครื่อง ใช้ DS3231 ถ้าติดตั้งและตั้งเวลาไว้แล้ว ไม่อย่างนั้นใช้นาฬิการะบบ
+//      หลังจาก SNTP หรือหน้าตั้งวันเวลาบนจอ CYD ตั้งให้แล้ว ค่า 0 แปลว่าไม่มีใครรู้เวลา
+//      การ์ดจะบันทึก "?" แทนวันที่ที่แต่งขึ้น ถ้าไม่มีชิป นาฬิการะบบจะหายทุกครั้งที่ไฟดับ
+//      หน้าจอตั้งเวลาจึงมีไว้ให้เครื่องที่ไม่มีอินเทอร์เน็ตและไม่มีชิปยังบันทึกเวลาจริงได้ หลังตั้งเวลาหนึ่งครั้งต่อการเปิดเครื่อง
+static uint32_t clockNow() {
+  uint32_t e = rtcEpoch();
+  if (e) return e;
+  time_t t = time(nullptr);
+  return t > 1700000000 ? (uint32_t)t : 0;  // ~2023-11: below it SNTP has not answered
+}
 
 // Jog mode: hold a button to move the leg by hand, for bench tuning and for
 // nudging a leg into place. Entered by holding STOP while idle for JOG_ENTER_MS,
@@ -129,6 +148,24 @@ static void jogExit(uint32_t nowMs, const char* why) {
 //      การลดขาจึงเริ่มในรอบถัดไป ช้าหนึ่งรอบเท่ากับการออกจากปุ่มหน้าปัด
 static void onLinkJogExit() {
   if (gJogMode) jogExit(millis(), "screen button");
+}
+
+// The date and time set on the CYD. Goes into the system clock, so it is used at
+// once, and into the DS3231 when one answers, so it survives a power cut. The
+// range check keeps a garbled frame from setting 1970 or the far future, both of
+// which would then be logged as if real.
+// [TH] วันเวลาที่ตั้งจากจอ CYD ใส่ลงนาฬิการะบบเพื่อใช้ทันที และลงชิป DS3231 ถ้าตอบรับ เพื่อให้รอดไฟดับ
+//      การตรวจช่วงค่ากันไม่ให้ข้อความที่เสียหายตั้งเวลาเป็นปี 1970 หรืออนาคตไกลๆ ซึ่งจะถูกบันทึกราวกับเป็นเวลาจริง
+static void onLinkTime(uint32_t epochUtc) {
+  if (epochUtc < 1700000000u || epochUtc > 4102444800u) {  // 2023-11 .. 2100-01
+    Serial.printf("clock: refused time %lu from the screen\n", (unsigned long)epochUtc);
+    return;
+  }
+  struct timeval tv = {(time_t)epochUtc, 0};
+  settimeofday(&tv, nullptr);
+  bool chip = rtcSetFromEpoch(epochUtc);
+  Serial.printf("clock: set from the screen to %lu (%s)\n", (unsigned long)epochUtc,
+                chip ? "DS3231 too" : "system clock only, lost at power-off");
 }
 
 // Returns the direction the operator is asking for, and ACT_OFF for none. Both
@@ -661,6 +698,7 @@ void setup() {
   gLink.onSets = onLinkSets;
   gLink.onConfirm = onLinkConfirm;
   gLink.onJogExit = onLinkJogExit;
+  gLink.onTime = onLinkTime;
   Serial.printf("pt-leg-controller %s ssid=%s server=%s code=%s cycle lift/hold/lower/rest=%u/%u/%u/%u target=%u\n",
                 FW_VERSION, gSettings.wifiSsid.c_str(), gSettings.serverUrl.c_str(),
                 gSettings.deviceCode.c_str(), gSettings.liftSec, gSettings.holdSec,
@@ -896,6 +934,11 @@ void loop() {
     time_t t = time(nullptr);
     if (t > 1700000000) gNtpDone = rtcSetFromEpoch((uint32_t)t);  // ~2023-11
   }
+  // Wi-Fi only for the clock: with no server configured, once SNTP has answered
+  // there is nothing left for the radio to do. See netRadioOff().
+  // [TH] ใช้ WiFi แค่ตั้งนาฬิกา ถ้าไม่ได้ตั้งเซิร์ฟเวอร์ไว้ พอ SNTP ตอบแล้ววิทยุก็ไม่มีงานเหลือ ดู netRadioOff()
+  if (!netHasServer() && netWifiUp() && sntp_get_sync_status() == SNTP_SYNC_STATUS_COMPLETED)
+    netRadioOff();
 #if LOOP_DEBUG
   LD_END(ntp, dSeg_ntp);
   LD_START(lp);
@@ -1163,11 +1206,7 @@ void loop() {
     //      เดิมใช้ค่าจาก DS3231 อย่างเดียว เครื่องที่ยังไม่ได้ติดชิป ซึ่งคือทุกเครื่องตอนนี้
     //      จึงบันทึกวันเวลาเป็น "?" ทุกรอบ ทั้งที่ต่อ WiFi ได้และเวลาในระบบถูกต้อง
     //      ใช้เกณฑ์เดียวกับตอนซิงก์ด้านบนเพื่อแยก "SNTP ยังไม่ตอบ" ออกจากเวลาจริง
-    uint32_t epoch = rtcEpoch();
-    if (epoch == 0) {
-      time_t t = time(nullptr);
-      if (t > 1700000000) epoch = (uint32_t)t;
-    }
+    uint32_t epoch = clockNow();
     LinkDone d{gSession.finalElapsedSec(), gSession.finalReps(), epoch, gSession.finalFaulted()};
     gLink.sendDone(d);
   }
@@ -1231,7 +1270,8 @@ void loop() {
   if (now - lastState >= 250) {  // [TH] ส่งสถานะให้จอ ~4 ครั้งต่อวินาที
     lastState = now;
     LinkState st{gSession.running(), (int)gSession.phase(), gSession.elapsedSec(now),
-                 gSession.reps(), gSession.target(), netWifiUp(), netServerUp(), gJogMode};
+                 gSession.reps(), gSession.target(), netWifiUp(), netServerUp(), gJogMode,
+                 clockNow()};
 #if LOOP_DEBUG
     LD_START(st);
 #endif

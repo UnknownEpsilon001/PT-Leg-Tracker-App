@@ -368,6 +368,7 @@ static void onLinkState(const LinkState& s) {
   uiWifi = s.wifi;
   uiServer = s.server;
   uiJog = s.jog;
+  uiSetClock(s.now);
 }
 
 // The start cue, from the controller's one-shot `started` message. It used to be
@@ -409,6 +410,11 @@ static uint32_t uiElapsedNow(uint32_t now) {
 // [TH] การกดปุ่ม -/+ ที่หน้าหลักส่งตรงไปคอนโทรลเลอร์ทันที ไม่ผ่านเส้นทางค่าตั้งค่าที่รอจนจบรอบ
 static void onTargetChanged(uint16_t reps) { gLink.sendTarget(reps); }
 static void onJogExitTapped() { gLink.sendJogExit(); }
+static void onTimeSet(uint32_t epochUtc) { gLink.sendTime(epochUtc); }
+// -1 for no card, the same contract the patient list uses — ไม่มีการ์ดคืน -1 แบบเดียวกับรายการคนไข้
+static int readHistory(HistRow* out, int max) {
+  return storeCardPresent() ? sdlogReadRecent(out, max) : -1;
+}
 
 // The confirm screen's own -/+ taps, mirrored to the controller the same
 // immediate way as onTargetChanged just above — see ui.cpp's confirmStep().
@@ -503,6 +509,8 @@ void setup() {
   uiSetTargetChanged(onTargetChanged);
   uiSetConfirmCallbacks(onConfirmSets, onConfirmDecision);
   uiSetJogExit(onJogExitTapped);
+  uiSetTimeSet(onTimeSet);
+  uiSetHistorySource(readHistory);
   Serial.printf("controller link on %s\n", LINK_OVER_USB ? "USB (bench)" : "Serial2");
 #if LINK_OVER_USB
   gLink.begin(&Serial);

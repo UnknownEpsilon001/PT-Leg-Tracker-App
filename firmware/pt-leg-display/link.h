@@ -16,6 +16,7 @@ struct LinkState {  // สถานะที่คอนโทรลเลอร
   bool wifi;        // สถานะเชื่อมต่อ WiFi
   bool server;      // สถานะเชื่อมต่อเซิร์ฟเวอร์
   bool jog;         // panel jog mode is on — โหมดขยับเองเปิดอยู่ (absent on old images = false)
+  uint32_t now;     // controller clock, UTC seconds, 0 = unknown — เวลาปัจจุบันของคอนโทรลเลอร์ 0 = ไม่ทราบ
 };
 
 // LinkSettings.target's wire sentinel for "this settings message did not carry
@@ -98,6 +99,7 @@ class Link {
   void sendSets(uint16_t reps);   // display -> controller, pending target
   void sendConfirm(bool ok);      // display -> controller, commit or cancel
   void sendJogExit();
+  void sendTime(uint32_t epochUtc);
   uint32_t lastRxMs() const { return _lastRx; }
 
   // Receive tallies. lastRxMs() is stamped for every complete line, before the
@@ -155,6 +157,7 @@ class Link {
   void (*onSets)(uint16_t) = nullptr;    // controller side
   void (*onConfirm)(bool) = nullptr;     // controller side
   void (*onJogExit)() = nullptr;         // controller side — ปุ่มออกจากโหมดขยับเองบนจอ
+  void (*onTime)(uint32_t) = nullptr;    // controller side — ตั้งวันเวลาจากหน้าจอ
 
   // Retransmission tallies. txRetries counts resends, txDropped the messages
   // that were never acknowledged inside LINK_MAX_TRIES and are gone for good —

@@ -2,11 +2,6 @@
 #include <SD.h>
 #include <time.h>
 
-// The wire carries UTC end to end; the offset is added only here, where a human
-// reads the result. Thailand has no DST, so a fixed offset is exact.
-// [TH] เวลาที่ส่งกันเป็น UTC ทั้งหมด บวกเวลาไทยเฉพาะตอนเขียนให้คนอ่าน
-//      ประเทศไทยไม่มีการปรับเวลาตามฤดูกาล ค่าคงที่จึงถูกต้องเสมอ
-#define TZ_OFFSET_SEC (7 * 3600)
 #define SESSIONS "/sessions.csv"
 
 // Rows that could not be written (card absent, write error) wait here. Eight is
@@ -25,8 +20,11 @@ static String isoLocal(uint32_t epochUtc) {
   time_t t = (time_t)epochUtc + TZ_OFFSET_SEC;
   struct tm tmv;
   gmtime_r(&t, &tmv);  // gmtime, because the offset is already in t
+  // A space, not ISO's "T": Excel reads "2026-11-05 14:32:10" as a date and
+  // time it can sort and filter, and the T form as plain text.
+  // [TH] ใช้ช่องว่างแทนตัว T แบบ ISO เพราะ Excel อ่านรูปแบบนี้เป็นวันเวลาที่เรียงและกรองได้ ส่วนแบบมี T จะเป็นข้อความธรรมดา
   char buf[24];
-  strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%S", &tmv);
+  strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &tmv);
   return String(buf);
 }
 
@@ -39,7 +37,15 @@ static String isoLocal(uint32_t epochUtc) {
 //      และการใช้คู่กับ SD.exists ทำให้ไฟล์อยู่รอดหรือไม่ขึ้นกับว่าการอ่านสำเร็จหรือเปล่า
 //      ถ้าเซกเตอร์ไดเรกทอรีอ่านไม่ได้ครั้งเดียวจะตอบว่าไม่มีไฟล์ แล้วการสร้างใหม่จะลบผลรอบทั้งหมดบนการ์ดนั้น
 //      การเปิดแบบต่อท้ายทำลายอะไรไม่ได้ และไฟล์ที่ว่างเปล่าคือไฟล์ที่การเปิดครั้งนี้เพิ่งสร้างขึ้นเอง
-static const char* HEADER = "datetime,patientCode,patientName,durationSec,reps,fault\n";
+// The file starts with a UTF-8 byte order mark. Without it Excel opens the CSV
+// in the PC's ANSI code page and every Thai name turns into mojibake; with it a
+// double-click shows them correctly. A card made before this keeps its old
+// header (the mark is written only when the file is created), so rename or
+// delete that file once to get a fresh one.
+// [TH] ไฟล์ขึ้นต้นด้วยเครื่องหมาย BOM ของ UTF-8 ถ้าไม่มี Excel จะเปิดด้วยรหัสอักษรของเครื่อง ชื่อภาษาไทยจะกลายเป็นตัวอ่านไม่ออก
+//      ถ้ามีจะดับเบิลคลิกแล้วแสดงถูกต้อง การ์ดที่สร้างไฟล์ไว้ก่อนหน้านี้ยังเป็นหัวตารางเดิม (BOM เขียนเฉพาะตอนสร้างไฟล์)
+//      จึงต้องเปลี่ยนชื่อหรือลบไฟล์เดิมหนึ่งครั้งเพื่อให้ได้ไฟล์ใหม่
+static const char* HEADER = "\xEF\xBB\xBF" "datetime,patientCode,patientName,durationSec,reps,fault\n";
 
 // Written in one checked call, like the data rows. An unchecked println on a full
 // card leaves a fragment of the header behind with a non-zero size, so no later
@@ -136,3 +142,67 @@ void sdlogFlushRing() {
 }
 
 int sdlogRingDepth() { return ringCount; }
+
+// "2026-11-05 14:32:10" (or the older "2026-11-05T14:32:10") -> "05/11 14:32".
+// Anything else, "?" included, is shown as it is.
+// [TH] แปลงวันเวลาบนการ์ดเป็นรูปแบบสั้นสำหรับจอ ค่าอื่นรวมถึง "?" แสดงตามเดิม
+static String shortWhen(const String& s) {
+  if (s.length() < 16 || s[4] != '-' || s[7] != '-') return s;
+  return s.substring(8, 10) + "/" + s.substring(5, 7) + " " + s.substring(11, 16);
+}
+
+// The tail read: 6 KB holds about sixty rows of Thai names, three times what the
+// screen lists.
+// [TH] อ่านท้ายไฟล์ 6 กิโลไบต์ ซึ่งจุได้ราวหกสิบแถวที่มีชื่อภาษาไทย มากกว่าที่จอแสดงสามเท่า
+static const uint32_t TAIL_BYTES = 6144;
+
+int sdlogReadRecent(HistRow* out, int max) {
+  if (max <= 0) return 0;
+  File f = SD.open(SESSIONS, FILE_READ);
+  if (!f) return -1;
+  uint32_t size = f.size();
+  uint32_t start = size > TAIL_BYTES ? size - TAIL_BYTES : 0;
+  f.seek(start);
+  if (start > 0) f.readStringUntil('\n');  // landed mid-row: drop the fragment — ตกกลางแถว ทิ้งเศษนั้น
+
+  // out[] is used as a ring while reading, so only the newest `max` rows stay;
+  // head is the next slot to write.
+  // [TH] ใช้ out[] เป็นวงแหวนระหว่างอ่าน จึงเหลือเฉพาะ max แถวล่าสุด head คือช่องถัดไปที่จะเขียน
+  int n = 0, head = 0;
+  while (f.available()) {
+    String line = f.readStringUntil('\n');
+    line.trim();
+    if (!line.length()) continue;
+    if (line.indexOf("datetime,") >= 0) continue;  // the header, BOM or not — หัวตาราง
+    // datetime,code,name,durationSec,reps,fault. Names cannot hold a comma (the
+    // add-patient form strips it), so a positional split is safe.
+    // [TH] ชื่อมีเครื่องหมายจุลภาคไม่ได้ เพราะฟอร์มลงทะเบียนตัดทิ้ง การแยกตามตำแหน่งจึงปลอดภัย
+    int c[5], at = -1;
+    bool ok = true;
+    for (int i = 0; i < 5; i++) {
+      at = line.indexOf(',', at + 1);
+      if (at < 0) { ok = false; break; }
+      c[i] = at;
+    }
+    if (!ok) continue;  // a torn row from a full card — แถวที่ขาดจากการ์ดเต็ม
+    HistRow& r = out[head];
+    r.when = shortWhen(line.substring(0, c[0]));
+    String code = line.substring(c[0] + 1, c[1]);
+    r.who = line.substring(c[1] + 1, c[2]);
+    if (!r.who.length()) r.who = code;
+    r.durationSec = (uint32_t)line.substring(c[2] + 1, c[3]).toInt();
+    r.reps = (uint16_t)line.substring(c[3] + 1, c[4]).toInt();
+    r.fault = line.substring(c[4] + 1) == "1";
+    head = (head + 1) % max;
+    if (n < max) n++;
+  }
+  f.close();
+
+  // Rotate the ring so out[0] is the newest row.
+  // [TH] หมุนวงแหวนให้ out[0] เป็นแถวล่าสุด
+  HistRow* tmp = new HistRow[n > 0 ? n : 1];
+  for (int i = 0; i < n; i++) tmp[i] = out[(head - 1 - i + max) % max];
+  for (int i = 0; i < n; i++) out[i] = tmp[i];
+  delete[] tmp;
+  return n;
+}

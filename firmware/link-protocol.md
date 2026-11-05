@@ -57,6 +57,7 @@ one-shots are single events whose loss is silent and permanent.
 | `settings` | yes | a SAVE the operator watched succeed |
 | `target` | yes | a rep count they just changed |
 | `jogexit` | yes | a tap on the jog exit button |
+| `time` | yes | a lost one leaves every later session logged with `?` for a time |
 | `sets` | yes | the number a confirmed session would run toward |
 | `confirm` | yes | the tap that starts the machine moving |
 | `hello` | no | already re-sent every 3 s until settings arrive |
@@ -119,14 +120,19 @@ discarded as repeats.
 - `{"t":"jogexit"}` — the **ออกจากโหมด** button on the jog screen. The controller
   leaves jog mode and lowers the leg in full, the same as the two-button panel
   exit; ignored when jog mode is not on.
+- `{"t":"time","epoch":unixUTC}` — the date and time typed on the CYD's
+  **วันและเวลา** screen. The controller sets its system clock and, when a
+  DS3231 answers, the chip too. Values outside 2023-11..2100 are refused.
 - `{"t":"hello"}` — CYD boot; asks the controller for current settings + state.
 - `{"t":"ping"}` — 1 Hz keepalive that feeds the controller's UART watchdog.
 
 ## Controller → Display
 
-- `{"t":"state","running":bool,"phase":int,"elapsed":int,"reps":int,"target":int,"wifi":bool,"server":bool,"jog":bool}`
+- `{"t":"state","running":bool,"phase":int,"elapsed":int,"reps":int,"target":int,"wifi":bool,"server":bool,"jog":bool,"now":unixUTC|0}`
   — ~4 Hz. `jog` is true while the panel jog mode is on; a display reading an
-  older controller that omits it treats it as false.
+  older controller that omits it treats it as false. `now` is the controller's
+  clock (DS3231, else the system clock once SNTP or the CYD has set it), 0 when
+  nobody knows the time; the CYD shows it in its status corner.
 - `{"t":"settings", ...current...}` — reply to `hello`, so the CYD settings
   screen pre-fills and the main screen can show the device code. Carries the
   same fields as the `settings` message above, including `lift`, `lower` and
