@@ -107,10 +107,21 @@ class SessionService:
             dev.heartbeat("running", elapsed_sec, reps, target=dev.live_target)
             return session_id
 
-        open_session = db.get_open_session(device_id)
         dev.heartbeat("idle", elapsed_sec, reps, target=dev.live_target)
         # a start cannot be in flight across a completed session
         dev.clear_start_in_flight()
+        # A stopped event that names its session closes that one and nothing else.
+        # Closing "the newest open one" let a late stop for an old session end the
+        # session that had started after it, with the old one's numbers.
+        # [TH] เหตุการณ์ stopped ที่ระบุหมายเลขรอบจะปิดเฉพาะรอบนั้น ไม่ใช่ "รอบล่าสุดที่เปิดอยู่"
+        #      ซึ่งเคยทำให้คำสั่งหยุดที่มาช้าของรอบเก่าไปปิดรอบที่เริ่มทีหลังด้วยตัวเลขของรอบเก่า
+        if uid:
+            named = db.get_session_by_uid(device_id, uid)
+            if named is not None:
+                if named["ended_at"] is None:
+                    db.close_session(named["id"], self._iso_now(), elapsed_sec, reps)
+                return named["id"]
+        open_session = db.get_open_session(device_id)
         if open_session is None:
             return None
         db.close_session(open_session["id"], self._iso_now(), elapsed_sec, reps)
@@ -136,6 +147,8 @@ class SessionService:
              ended_at คือเวลาท้องถิ่นบนการ์ด หรือ None ถ้าอุปกรณ์ไม่ทราบเวลา
              เวลาที่ไม่ทราบหรืออ่านไม่ออกจะใช้เวลาปัจจุบันแทน แถวยังถูกนับ แค่ลงวันที่ตอนที่มาถึง
         """
+        now = datetime.fromtimestamp(self._now(), tz=timezone.utc)
+        duration = timedelta(seconds=max(duration_sec, 0))
         ended = None
         if ended_at:
             try:
@@ -144,9 +157,30 @@ class SessionService:
                 )
             except ValueError:
                 ended = None
-        if ended is None:
-            ended = datetime.fromtimestamp(self._now(), tz=timezone.utc)
-        started = ended - timedelta(seconds=max(duration_sec, 0))
+        # A finish time in the future is a device clock set wrong, not a session
+        # that has not happened yet; it is dated on arrival like an unknown one.
+        # Five minutes of slack covers ordinary drift between the two clocks.
+        # [TH] เวลาจบที่อยู่ในอนาคตคือนาฬิกาอุปกรณ์ที่ตั้งผิด ไม่ใช่รอบที่ยังไม่เกิด จึงลงวันที่ตอนที่มาถึง
+        #      เหมือนเวลาที่ไม่ทราบ เผื่อไว้ห้านาทีสำหรับความคลาดเคลื่อนปกติระหว่างสองนาฬิกา
+        if ended is None or ended > now + timedelta(minutes=5):
+            ended = now
+        # A session the server already opened live keeps the server's clock at both
+        # ends: its start came from that clock, and taking the end from the device's
+        # would let any skew between the two make it end before it began.
+        # [TH] รอบที่เซิร์ฟเวอร์เปิดไว้แล้วแบบสดใช้นาฬิกาของเซิร์ฟเวอร์ทั้งสองฝั่ง เพราะเวลาเริ่มมาจากนาฬิกานั้น
+        #      ถ้าเอาเวลาจบจากนาฬิกาอุปกรณ์ ความคลาดเคลื่อนระหว่างสองนาฬิกาจะทำให้รอบจบก่อนที่จะเริ่มได้
+        live = db.get_session_by_uid(device_id, uid)
+        if live is not None and live["ended_at"] is None:
+            started = datetime.fromisoformat(live["started_at"])
+            ended = started + duration
+        else:
+            started = ended - duration
+        # Stored in UTC like every row the server writes itself: the history is
+        # sorted as text, and mixed offsets do not sort as times.
+        # [TH] เก็บเป็น UTC เหมือนทุกแถวที่เซิร์ฟเวอร์เขียนเอง เพราะประวัติเรียงลำดับแบบข้อความ
+        #      และเวลาที่มีเขตเวลาปนกันจะเรียงไม่ตรงตามเวลาจริง
+        started = started.astimezone(timezone.utc)
+        ended = ended.astimezone(timezone.utc)
         code = patient_code if patient_code and patient_code != "-" else None
         return db.record_device_session(
             device_id,
@@ -250,7 +284,12 @@ class SessionService:
         return db.claim_session(session_id, patient_code)
 
     def list_for_patient(self, patient_code: str) -> list[dict]:
-        self._auto_close_if_silent()
+        # Every device, not just the default one: a patient's sessions can come from
+        # any machine, and a stale one left open on another would stay "running".
+        # [TH] ทุกอุปกรณ์ ไม่ใช่แค่อุปกรณ์ตั้งต้น เพราะรอบของคนไข้มาจากเครื่องไหนก็ได้
+        #      และรอบที่ค้างเปิดไว้บนเครื่องอื่นจะยังเป็น "กำลังทำงาน" อยู่
+        for device_id in list(self._devices):
+            self._auto_close_if_silent(device_id)
         return [
             {
                 "id": row["id"],
@@ -259,6 +298,7 @@ class SessionService:
                 "durationSec": row["duration_sec"],
                 "reps": row["reps"],
                 "patientCode": row["patient_code"],
+                "fault": bool(row["fault"]),
             }
             for row in db.list_sessions(patient_code)
         ]

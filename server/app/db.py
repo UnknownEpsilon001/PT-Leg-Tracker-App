@@ -44,18 +44,34 @@ _UID_INDEX = (
 )
 
 
+# Database files whose schema this process has already brought up to date. The
+# check runs once per file rather than on every query: heartbeats arrive every
+# few seconds per device. Keyed by path because the tests point PTLT_DB at a
+# fresh file each time.
+# [TH] ไฟล์ฐานข้อมูลที่โปรเซสนี้ปรับโครงสร้างให้ล่าสุดแล้ว ตรวจครั้งเดียวต่อไฟล์ ไม่ใช่ทุกคำสั่ง
+#      เพราะสัญญาณชีพมาทุกไม่กี่วินาทีต่ออุปกรณ์ ใช้พาธเป็นคีย์เพราะชุดทดสอบชี้ PTLT_DB ไปที่ไฟล์ใหม่ทุกครั้ง
+_ready: set[str] = set()
+
+
+def _ensure_schema(conn: sqlite3.Connection) -> None:
+    conn.execute(_SCHEMA)
+    have = {r["name"] for r in conn.execute("PRAGMA table_info(sessions)")}
+    for name, decl in _ADDED_COLUMNS.items():
+        if name not in have:
+            conn.execute(f"ALTER TABLE sessions ADD COLUMN {name} {decl}")
+    conn.execute(_UID_INDEX)
+
+
 @contextmanager
 def _db():
-    conn = sqlite3.connect(os.environ.get(DB_PATH_ENV, DEFAULT_DB_PATH))
+    path = os.environ.get(DB_PATH_ENV, DEFAULT_DB_PATH)
+    conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     try:
         with conn:
-            conn.execute(_SCHEMA)
-            have = {r["name"] for r in conn.execute("PRAGMA table_info(sessions)")}
-            for name, decl in _ADDED_COLUMNS.items():
-                if name not in have:
-                    conn.execute(f"ALTER TABLE sessions ADD COLUMN {name} {decl}")
-            conn.execute(_UID_INDEX)
+            if path not in _ready:
+                _ensure_schema(conn)
+                _ready.add(path)
             yield conn
     finally:
         conn.close()
@@ -105,20 +121,28 @@ def record_device_session(
          และรหัสผู้ป่วยจะใส่ให้เฉพาะเมื่อแอปยังไม่ได้ระบุ เพราะการระบุในแอปเชื่อถือได้มากกว่า
     """
     with _db() as conn:
+        # INSERT OR IGNORE, then read back: two requests with the same uid at once
+        # (a retry racing the original, or the live started event) both reach this
+        # point, and a plain INSERT made the second one an IntegrityError and a 500.
+        # The unique index decides which one inserts; the other merges below.
+        # [TH] ใช้ INSERT OR IGNORE แล้วอ่านกลับ เพราะสองคำขอที่มี uid เดียวกันพร้อมกัน
+        #      (การส่งซ้ำที่แข่งกับครั้งแรก หรือกับเหตุการณ์ started แบบสด) มาถึงจุดนี้ทั้งคู่
+        #      INSERT ธรรมดาทำให้คำขอที่สองเกิด IntegrityError และตอบ 500 ดัชนีที่ไม่ซ้ำเป็นตัวตัดสินว่าใครได้เพิ่ม
+        #      อีกคำขอหนึ่งจะไปรวมแถวด้านล่าง
+        session_id = str(uuid.uuid4())
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO sessions (id, device_id, started_at, ended_at,"
+            " duration_sec, reps, patient_code, origin, uid, fault)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, 'device', ?, ?)",
+            (session_id, device_id, started_at, ended_at, duration_sec, reps,
+             patient_code, uid, int(fault)),
+        )
+        if cur.rowcount == 1:
+            return session_id
         row = conn.execute(
             "SELECT id, ended_at FROM sessions WHERE device_id = ? AND uid = ?",
             (device_id, uid),
         ).fetchone()
-        if row is None:
-            session_id = str(uuid.uuid4())
-            conn.execute(
-                "INSERT INTO sessions (id, device_id, started_at, ended_at, duration_sec,"
-                " reps, patient_code, origin, uid, fault)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, 'device', ?, ?)",
-                (session_id, device_id, started_at, ended_at, duration_sec, reps,
-                 patient_code, uid, int(fault)),
-            )
-            return session_id
         if row["ended_at"] is None:
             conn.execute(
                 "UPDATE sessions SET ended_at = ?, duration_sec = ?, reps = ? WHERE id = ?",
