@@ -19,6 +19,7 @@
 #define COL_TEXT 0xf2f5f9    // near-white - primary text
 #define COL_MUTED 0xc6ccd6   // silver     - secondary text
 #define COL_FAULT 0xb00020   // red        - fault
+#define COL_WARN 0xff6b6b    // light red  - warnings that must read on the navy
 
 static TFT_eSPI tft;
 
@@ -983,11 +984,31 @@ static lv_obj_t* makeField(lv_obj_t* parent, const char* label, const char* plac
   return ta;
 }
 
+// Travel is timed, so a lower time shorter than the lift time gives back less
+// than each rep raised: the leg ends every rep higher than it started and climbs
+// toward the top stop. A warning and not a refusal, because a real descent can be
+// faster than the lift; whoever sets it has to be looking at the machine.
+// Wording keeps clear of vowel-over-tone stacks (no ขึ้น).
+// [TH] การเคลื่อนที่นับด้วยเวลา ถ้าเวลาลงสั้นกว่าเวลายก ขาจะคืนระยะน้อยกว่าที่ยกไปในแต่ละครั้ง
+//      จบแต่ละครั้งสูงกว่าตอนเริ่ม และไต่ขึ้นไปหากลไกด้านบน เป็นการเตือน ไม่ใช่การห้าม
+//      เพราะการลดลงจริงอาจเร็วกว่าการยก คนที่ตั้งค่าต้องดูเครื่องอยู่ด้วย ถ้อยคำเลี่ยงสระบนซ้อนวรรณยุกต์ (ไม่ใช้ ขึ้น)
+static lv_obj_t* lblTravelWarn = nullptr;
+
+static void applyTravelWarning() {
+  if (!lblTravelWarn) return;
+  if (lv_spinbox_get_value(spinLower) < lv_spinbox_get_value(spinLift))
+    lv_obj_clear_flag(lblTravelWarn, LV_OBJ_FLAG_HIDDEN);
+  else
+    lv_obj_add_flag(lblTravelWarn, LV_OBJ_FLAG_HIDDEN);
+}
+
 static void spinDown(lv_event_t* e) {
   lv_spinbox_decrement((lv_obj_t*)lv_event_get_user_data(e));
+  applyTravelWarning();
 }
 static void spinUp(lv_event_t* e) {
   lv_spinbox_increment((lv_obj_t*)lv_event_get_user_data(e));
+  applyTravelWarning();
 }
 
 // A bare lv_spinbox cannot be changed by touch at all - LVGL only moves its
@@ -1168,6 +1189,13 @@ static void buildSettings() {
   spinLift = makeSpinRow(col, "ยกขึ้น (วิ)", 7, 1, 20);
   spinHold = makeSpinRow(col, "ค้าง (วิ)", 10, 1, 60);
   spinLower = makeSpinRow(col, "ลดลง (วิ)", 7, 1, 20);
+  lblTravelWarn = lv_label_create(col);
+  lv_obj_set_width(lblTravelWarn, lv_pct(100));
+  lv_label_set_long_mode(lblTravelWarn, LV_LABEL_LONG_WRAP);
+  lv_obj_set_style_text_font(lblTravelWarn, &thai14, 0);
+  lv_obj_set_style_text_color(lblTravelWarn, lv_color_hex(COL_WARN), 0);
+  lv_label_set_text(lblTravelWarn, LV_SYMBOL_WARNING " เวลาลงน้อยกว่าเวลายก ขาจะลงไม่สุด อันตราย");
+  lv_obj_add_flag(lblTravelWarn, LV_OBJ_FLAG_HIDDEN);
   spinRest = makeSpinRow(col, "พัก (วิ)", 10, 1, 60);
   spinTarget = makeSpinRow(col, "จำนวนครั้ง (0=ไม่จำกัด)", 10, 0, 99);
   // "เสียง" and not "ปิดเสียง": positive sense matches the stored field, and the
@@ -1242,6 +1270,7 @@ void uiOpenSettings(const DeviceSettings& cur) {
   lv_spinbox_set_value(spinHold, cur.holdSec);
   lv_spinbox_set_value(spinLower, cur.lowerSec);
   lv_spinbox_set_value(spinRest, cur.restSec);
+  applyTravelWarning();
   // Value set here, widget created in buildSettings(). Creating it here instead
   // is the LVGL pool leak this screen already learned about once.
   // [TH] ตั้งค่าตรงนี้ แต่สร้างวิดเจ็ตใน buildSettings()
@@ -2113,7 +2142,17 @@ void uiShowConfirm(uint16_t controllerTarget, const DeviceSettings& s, bool link
     //      gLast ถูกตั้งต้นตอนบูตด้วยเวลาจังหวะเคลื่อนที่ที่เลิกใช้แล้ว (pt-leg-display.ino) ไม่ใช่แค่
     //      ค่าเริ่มต้นทั่วไป การแสดงก่อนรู้ค่าจริงจากคอนโทรลเลอร์จะบอกโปรแกรมผิดบนหน้าจอเดียวที่มีหน้าที่
     //      บอกว่าจะเกิดอะไรขึ้นจริง
-    if (settingsKnown) {
+    // The last look before the leg moves, so the unsafe pair replaces the summary
+    // in the same two lines instead of adding a third to a full screen.
+    // [TH] เป็นการดูครั้งสุดท้ายก่อนขาจะเคลื่อนที่ ค่าที่ไม่ปลอดภัยจึงแสดงแทนสรุปในสองบรรทัดเดิม ไม่เพิ่มบรรทัดที่สามบนหน้าจอที่เต็มแล้ว
+    bool unsafeTravel = settingsKnown && s.lowerSec < s.liftSec;
+    lv_obj_set_style_text_color(lblConfirmProgramme,
+                                lv_color_hex(unsafeTravel ? COL_WARN : COL_MUTED), 0);
+    if (unsafeTravel) {
+      lv_label_set_text_fmt(lblConfirmProgramme,
+                            LV_SYMBOL_WARNING " ลง %u วิ น้อยกว่ายก %u วิ\nขาจะลงไม่สุด อันตราย",
+                            s.lowerSec, s.liftSec);
+    } else if (settingsKnown) {
       lv_label_set_text_fmt(lblConfirmProgramme, "ยกขึ้น %u ค้าง %u วิ\nลดลง %u พัก %u วิ", s.liftSec,
                             s.holdSec, s.lowerSec, s.restSec);
     } else {
