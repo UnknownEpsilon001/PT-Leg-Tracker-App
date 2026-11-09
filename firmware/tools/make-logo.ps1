@@ -78,7 +78,10 @@ for ($y = 0; $y -lt $h; $y++) {
     $row = $y * $stride
     for ($x = 0; $x -lt $w; $x++) {
         $i = $row + $x * 4
-        $b = $bytes[$i]; $gr = $bytes[$i + 1]; $r = $bytes[$i + 2]; $a = $bytes[$i + 3]
+        # [int] matters: on a [byte], -shl 11 below overflows to 0 and -shl 5 loses
+        # its top bits, so every colour came out blue (white became 0x00FF). The old
+        # logo hid this because -Tint sets these from ints.
+        $b = [int]$bytes[$i]; $gr = [int]$bytes[$i + 1]; $r = [int]$bytes[$i + 2]; $a = $bytes[$i + 3]
         if ($tintOn) { $r = $tr; $gr = $tg; $b = $tb }
         $c = ((($r -shr 3) -shl 11) -bor (($gr -shr 2) -shl 5) -bor ($b -shr 3))
         # LV_COLOR_16_SWAP 1: high byte first, then low byte, then alpha
