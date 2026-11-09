@@ -6,7 +6,7 @@
 # bar with the current step, the time each step took, and a clear finished or
 # failed banner with a beep.
 #
-#   .\tools\build-release.ps1                    # -> release\SmartOAKnee-<date>-<commit>.zip
+#   .\tools\build-release.ps1                    # -> release\MedFlexAutoSmart-<date>-<commit>.zip
 #   .\tools\build-release.ps1 -Version 1.0.0
 #   .\tools\build-release.ps1 -Open              # open the folder when done
 #
@@ -26,7 +26,7 @@ $root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $commit = (git -C $root rev-parse --short HEAD).Trim()
 if (-not $Version) { $Version = "$(Get-Date -Format yyyy.MM.dd)-$commit" }
 $dirty = [bool](git -C $root status --porcelain --untracked-files=no)
-$name = "SmartOAKnee-$Version"
+$name = "MedFlexAutoSmart-$Version"
 $stage = Join-Path $root "release\$name"
 $zip = "$stage.zip"
 $originalTitle = $Host.UI.RawUI.WindowTitle
@@ -55,8 +55,8 @@ function New-ReleasePackage {
     if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
     New-Item -ItemType Directory -Force $stage | Out-Null
 
-    Write-Host "  app\SmartOAKnee.apk"
-    Copy-Into (Join-Path $root "PT-Leg-Tracker\output\PT-Leg-Tracker-debug.apk") (Join-Path $stage "app\SmartOAKnee.apk")
+    Write-Host "  app\MedFlexAutoSmart.apk"
+    Copy-Into (Join-Path $root "PT-Leg-Tracker\output\PT-Leg-Tracker-debug.apk") (Join-Path $stage "app\MedFlexAutoSmart.apk")
 
     # The four separate images and flash_args, not the merged 4 MB image: the
     # merged one also covers NVS and would wipe the Wi-Fi settings on every upgrade.

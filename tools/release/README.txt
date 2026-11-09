@@ -1,9 +1,9 @@
-Smart OA Knee release
+Med-Flex Auto Smart release
 =====================
 
 What is in this folder
 
-  app\SmartOAKnee.apk         Android app (debug build). Copy to the phone and install it.
+  app\MedFlexAutoSmart.apk         Android app (debug build). Copy to the phone and install it.
   firmware\controller\        Controller ESP32 firmware (CP210x USB chip)
   firmware\display\           CYD display firmware (CH340 USB chip)
   sd-card\                    Copy everything inside to the root of the CYD's microSD card

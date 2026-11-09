@@ -1,5 +1,5 @@
 @echo off
-rem Starts the Smart OA Knee server on port 8000, reachable from the LAN.
+rem Starts the Med-Flex Auto Smart server on port 8000, reachable from the LAN.
 rem The first run creates .venv and installs requirements.txt (needs Python 3 and internet).
 cd /d "%~dp0"
 if not exist .venv\Scripts\python.exe (

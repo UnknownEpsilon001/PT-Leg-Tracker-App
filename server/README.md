@@ -1,6 +1,6 @@
-# Smart OA Knee — Server
+# Med-Flex Auto Smart — Server
 
-FastAPI + SQLite server for the Smart OA Knee project. Owns therapy-session
+FastAPI + SQLite server for the Med-Flex Auto Smart project. Owns therapy-session
 state and relays control between the Android app and the ESP32 device.
 Contract spec: `../docs/superpowers/specs/2026-07-13-server-mediated-device-control-design.md`.
 

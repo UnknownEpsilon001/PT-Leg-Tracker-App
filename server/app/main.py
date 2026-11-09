@@ -9,7 +9,7 @@ from .service import SessionService
 
 
 def create_app(service: SessionService | None = None) -> FastAPI:
-    app = FastAPI(title="PT Leg Tracker Server")
+    app = FastAPI(title="Med-Flex Auto Smart Server")
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],

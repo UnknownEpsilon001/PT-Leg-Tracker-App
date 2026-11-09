@@ -16,9 +16,9 @@
 # rather than rendering garbage.
 
 param(
-    [string]$Source = "$PSScriptRoot\..\..\assets\Logo-removebg.png",
+    [string]$Source = "$PSScriptRoot\..\..\assets\logo-med-flex.png",
     [string]$Out = "$PSScriptRoot\..\pt-leg-display\logo_img.c",
-    [int]$Width = 260,
+    [int]$Width = 176,
     [string]$Symbol = "logo_img",
     # Repaint every visible pixel this colour, keeping the original alpha. The
     # source artwork is dark navy, which is invisible on the dark UI background;

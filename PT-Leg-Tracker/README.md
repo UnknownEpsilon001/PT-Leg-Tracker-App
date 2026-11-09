@@ -1,6 +1,6 @@
-# Smart OA Knee — Android app
+# Med-Flex Auto Smart — Android app
 
-Vue 3 + Vite + Capacitor shell for the Smart OA Knee app. The folder keeps its `PT-Leg-Tracker/` name; run every npm and npx command from here.
+Vue 3 + Vite + Capacitor shell for the Med-Flex Auto Smart app. The folder keeps its `PT-Leg-Tracker/` name; run every npm and npx command from here.
 
 ## Recommended IDE Setup
 

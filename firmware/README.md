@@ -1,4 +1,4 @@
-# Smart OA Knee — Device Firmware
+# Med-Flex Auto Smart — Device Firmware
 
 Two ESP32s per machine:
 

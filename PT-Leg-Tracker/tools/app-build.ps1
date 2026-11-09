@@ -163,24 +163,24 @@ function Invoke-AppBuild([switch]$OnlyWhenChanged) {
     if (-not (Test-Path $gradle)) { throw "Gradle wrapper not found: $gradle" }
 
     try {
-        Write-Progress -Activity "Building PT Leg Tracker APK" -Status "1/3 Building Vue web assets" -PercentComplete 10
+        Write-Progress -Activity "Building Med-Flex Auto Smart APK" -Status "1/3 Building Vue web assets" -PercentComplete 10
         Write-Host "[1/3] npm run build" -ForegroundColor Cyan
         Invoke-CheckedCommand $npm @("run", "build") $appRoot "Web build failed"
 
-        Write-Progress -Activity "Building PT Leg Tracker APK" -Status "2/3 Syncing Capacitor Android" -PercentComplete 45
+        Write-Progress -Activity "Building Med-Flex Auto Smart APK" -Status "2/3 Syncing Capacitor Android" -PercentComplete 45
         Write-Host "[2/3] npx cap sync android" -ForegroundColor Cyan
         Invoke-CheckedCommand $npx @("cap", "sync", "android") $appRoot "Capacitor Android sync failed"
 
-        Write-Progress -Activity "Building PT Leg Tracker APK" -Status "3/3 Building Android debug APK" -PercentComplete 70
+        Write-Progress -Activity "Building Med-Flex Auto Smart APK" -Status "3/3 Building Android debug APK" -PercentComplete 70
         Write-Host "[3/3] gradlew assembleDebug" -ForegroundColor Cyan
         Invoke-CheckedCommand $gradle @("assembleDebug") $androidRoot "Android debug build failed"
 
         $result = Publish-Apk $sourceHash
-        Write-Progress -Activity "Building PT Leg Tracker APK" -Status "Complete" -PercentComplete 100
+        Write-Progress -Activity "Building Med-Flex Auto Smart APK" -Status "Complete" -PercentComplete 100
         Write-Host "APK ready: $result" -ForegroundColor Green
         return $result
     } finally {
-        Write-Progress -Activity "Building PT Leg Tracker APK" -Completed
+        Write-Progress -Activity "Building Med-Flex Auto Smart APK" -Completed
     }
 }
 
@@ -350,7 +350,7 @@ function Pair-Wireless {
 
 function Read-Menu {
     Write-Host ""
-    Write-Host "PT Leg Tracker Android tool" -ForegroundColor Cyan
+    Write-Host "Med-Flex Auto Smart Android tool" -ForegroundColor Cyan
     Write-Host "  1  Build debug APK"
     Write-Host "  2  Check Android debugging devices"
     Write-Host "  3  Build, install, and launch via USB debugging"

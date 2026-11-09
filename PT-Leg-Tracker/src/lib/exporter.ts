@@ -37,5 +37,5 @@ export async function shareExport(json: string, patientCode: string): Promise<vo
     directory: Directory.Cache,
     encoding: Encoding.UTF8,
   })
-  await Share.share({ title: 'ข้อมูล Smart OA Knee', url: uri })
+  await Share.share({ title: 'ข้อมูล Med-Flex Auto Smart', url: uri })
 }

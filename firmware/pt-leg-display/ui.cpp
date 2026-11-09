@@ -172,7 +172,7 @@ void uiBegin() {
 // ---------------------------------------------------------------- main screen
 
 static lv_obj_t *scrMain, *lblClock, *lblReps, *lblPhase, *lblPhaseTimer, *lblStatus;
-static lv_obj_t *lblCode, *btnGear, *btnData, *imgLogo;
+static lv_obj_t *lblCode, *lblBrand, *btnGear, *btnData, *imgLogo;
 static lv_obj_t *rowTarget, *btnJogExit;
 // Declared here, ahead of the settings screen's other spinboxes further down, so
 // that uiUpdateMain (below) can keep it synced to the live target — see the
@@ -311,13 +311,14 @@ static void buildMain() {
 
   // Idle branding. Lives in flash, so it costs no RAM; it is swapped out for the
   // session stats the moment the machine starts moving.
-  // No card behind it: logo_img.c is generated with -Tint f2f5f9, so the artwork
-  // is already near-white and reads directly on the navy background. The source
-  // PNG is dark navy (~#002040) and would otherwise vanish into it.
+  // No card behind it: the badge carries its own white interior, and only the
+  // paper around it is transparent. 176 px wide and 6 px below centre clears the
+  // corner buttons above and the name and device code on the bottom line.
+  // [TH] ไม่มีพื้นรองด้านหลัง เพราะตราสัญลักษณ์มีพื้นขาวในตัว โปร่งใสเฉพาะรอบนอก
+  //      กว้าง 176 พิกเซลและต่ำกว่ากึ่งกลาง 6 พิกเซล จึงไม่ทับปุ่มมุมบน และไม่ทับชื่อกับรหัสเครื่องที่บรรทัดล่าง
   imgLogo = lv_img_create(scrMain);
   lv_img_set_src(imgLogo, &logo_img);
-  lv_obj_align(imgLogo, LV_ALIGN_CENTER, 0, -6);  // full-screen idle branding; nothing below it now
-                                                  // [TH] โลโก้ตอนว่างเต็มจอ ไม่มีปุ่มอยู่ข้างล่างแล้ว
+  lv_obj_align(imgLogo, LV_ALIGN_CENTER, 0, 6);
 
   // Hidden from creation, not just once the first controller state arrives: the
   // boot screen must show the logo alone, with no one-frame flash of these
@@ -397,7 +398,13 @@ static void buildMain() {
   lv_obj_set_style_text_font(lblCode, &thai14, 0);
   lv_obj_set_style_text_color(lblCode, lv_color_hex(COL_MUTED), 0);
   lv_label_set_text(lblCode, "");
-  lv_obj_align(lblCode, LV_ALIGN_BOTTOM_MID, 0, -6);
+  lv_obj_align(lblCode, LV_ALIGN_BOTTOM_RIGHT, -8, -6);
+
+  lblBrand = lv_label_create(scrMain);
+  lv_obj_set_style_text_font(lblBrand, &thai14, 0);
+  lv_obj_set_style_text_color(lblBrand, lv_color_hex(COL_MUTED), 0);
+  lv_label_set_text(lblBrand, "Med-Flex Auto Smart");
+  lv_obj_align(lblBrand, LV_ALIGN_BOTTOM_LEFT, 8, -6);
 
   lv_scr_load(scrMain);
 }
@@ -555,12 +562,14 @@ void uiUpdateMain(bool running, Phase phase, uint32_t elapsedSec, uint16_t reps,
   if (showLogo) {
     lv_obj_clear_flag(imgLogo, LV_OBJ_FLAG_HIDDEN);
     lv_obj_fade_in(imgLogo, 200, 0);
+    lv_obj_clear_flag(lblBrand, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(lblClock, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(lblReps, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(lblPhase, LV_OBJ_FLAG_HIDDEN);  // "พร้อม" adds nothing next to the logo
     lv_obj_add_flag(rowTarget, LV_OBJ_FLAG_HIDDEN);
   } else {
     lv_obj_add_flag(imgLogo, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(lblBrand, LV_OBJ_FLAG_HIDDEN);  // the target row needs that corner — แถวเป้าหมายต้องใช้มุมนั้น
     lv_obj_clear_flag(lblClock, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(lblReps, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(lblPhase, LV_OBJ_FLAG_HIDDEN);
