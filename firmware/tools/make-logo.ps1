@@ -16,7 +16,7 @@
 # rather than rendering garbage.
 
 param(
-    [string]$Source = "$PSScriptRoot\..\..\assets\logo-med-flex.png",
+    [string]$Source = "$PSScriptRoot\..\..\assets\logo-med-flex-white.png",
     [string]$Out = "$PSScriptRoot\..\pt-leg-display\logo_img.c",
     [int]$Width = 176,
     [string]$Symbol = "logo_img",

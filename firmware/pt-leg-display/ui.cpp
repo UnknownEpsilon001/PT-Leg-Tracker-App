@@ -312,10 +312,11 @@ static void buildMain() {
 
   // Idle branding. Lives in flash, so it costs no RAM; it is swapped out for the
   // session stats the moment the machine starts moving.
-  // No card behind it: the badge carries its own white interior, and only the
-  // paper around it is transparent. 176 px wide and 6 px below centre clears the
-  // corner buttons above and the name and device code on the bottom line.
-  // [TH] ไม่มีพื้นรองด้านหลัง เพราะตราสัญลักษณ์มีพื้นขาวในตัว โปร่งใสเฉพาะรอบนอก
+  // No card behind it: this is the all-white version of the logo
+  // (assets/logo-med-flex-white.png), drawn straight onto the navy screen. 176 px
+  // wide and 6 px below centre clears the corner buttons above and the name and
+  // device code on the bottom line.
+  // [TH] ไม่มีพื้นรองด้านหลัง เพราะเป็นโลโก้แบบสีขาวล้วน วาดลงบนพื้นจอสีกรมท่าโดยตรง
   //      กว้าง 176 พิกเซลและต่ำกว่ากึ่งกลาง 6 พิกเซล จึงไม่ทับปุ่มมุมบน และไม่ทับชื่อกับรหัสเครื่องที่บรรทัดล่าง
   imgLogo = lv_img_create(scrMain);
   lv_img_set_src(imgLogo, &logo_img);
