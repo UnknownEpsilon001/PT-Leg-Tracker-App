@@ -37,20 +37,32 @@ defineEmits<{ step: [delta: number] }>()
 .target-stepper {
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: space-between;
   gap: 0.75rem;
   margin-bottom: 1rem;
 }
 
+.target-stepper:last-child {
+  margin-bottom: 0;
+}
+
 .target-label {
-  min-width: 8rem;
+  flex: 1;
+  min-width: 0;
   text-align: center;
   font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
 }
 
 .step {
-  min-width: 3rem;
-  font-size: 1.3rem;
-  padding: 0.5rem;
+  flex-shrink: 0;
+  width: 3.25rem;
+  height: 3.25rem;
+  padding: 0;
+  border-color: var(--c-primary);
+  color: var(--c-primary-dark);
+  font-size: 1.5rem;
+  line-height: 1;
 }
 </style>

@@ -57,17 +57,12 @@ h1 {
   margin-bottom: 1rem;
 }
 
-.error {
-  color: #b91c1c;
-  font-weight: 600;
-}
-
 .illus {
   display: block;
   width: 100%;
   margin-bottom: 1rem;
   border: 1.5px solid var(--c-border);
-  border-radius: var(--radius-card);
+  border-radius: var(--radius-btn);
   background: var(--c-card);
 }
 

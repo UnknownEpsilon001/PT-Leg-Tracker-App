@@ -105,6 +105,14 @@ const clock = computed(() => {
   return `${m}:${s}`
 })
 
+// How full the running ring is: reps against the target, or a full ring when
+// the session has no limit (or the target is unknown).
+// [TH] วงแหวนเต็มแค่ไหน: จำนวนรอบเทียบกับเป้าหมาย ถ้าไม่จำกัดหรือไม่ทราบค่า วงจะเต็มวง
+const ringPct = computed(() => {
+  const t = targetShown.value
+  return t !== null && t > 0 ? Math.min(100, (reps.value / t) * 100) : 100
+})
+
 function stopPolling() {
   pollGen++
   if (poller) clearInterval(poller)
@@ -435,6 +443,10 @@ onUnmounted(() => {
 
     <template v-else-if="phase === 'running'">
       <div class="clock-ring">
+        <svg viewBox="0 0 120 120" aria-hidden="true">
+          <circle class="track" cx="60" cy="60" r="54" />
+          <circle class="arc" cx="60" cy="60" r="54" pathLength="100" :stroke-dasharray="`${ringPct} 100`" />
+        </svg>
         <p class="clock">{{ clock }}</p>
       </div>
       <p class="reps">
@@ -466,27 +478,46 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-.clock {
-  font-size: 4rem;
-  text-align: center;
-  font-variant-numeric: tabular-nums;
-  margin: 2rem 0 0.5rem;
-}
-
+/* [TH] วงแหวนความคืบหน้า: เส้นสีเขียวเติมตามจำนวนรอบที่ทำได้ เวลาอยู่ตรงกลาง */
+/* Progress ring: the teal arc fills with reps done; the clock sits in the middle. */
 .clock-ring {
-  width: 14rem;
-  height: 14rem;
-  margin: 2rem auto 0.5rem;
-  border-radius: 50%;
-  border: 4px solid var(--c-primary);
+  position: relative;
+  width: min(15rem, 80vw);
+  aspect-ratio: 1;
+  margin: 1.5rem auto 1rem;
   display: flex;
   align-items: center;
   justify-content: center;
 }
 
-.clock-ring .clock {
-  margin: 0;
-  font-size: 3rem;
+.clock-ring svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  transform: rotate(-90deg);
+}
+
+.clock-ring circle {
+  fill: none;
+  stroke-width: 9;
+}
+
+.track {
+  stroke: var(--c-primary-wash);
+}
+
+.arc {
+  stroke: var(--c-primary);
+  stroke-linecap: round;
+}
+
+.clock {
+  position: relative;
+  font-size: 3.25rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
 }
 
 .reps-num {
@@ -496,18 +527,8 @@ onUnmounted(() => {
 }
 
 @media (prefers-reduced-motion: no-preference) {
-  .clock-ring {
-    animation: ring-pulse 2s ease-in-out infinite;
-  }
-
-  @keyframes ring-pulse {
-    0%,
-    100% {
-      box-shadow: 0 0 0 0 rgb(36 57 94 / 0.35);
-    }
-    50% {
-      box-shadow: 0 0 0 14px rgb(36 57 94 / 0);
-    }
+  .arc {
+    transition: stroke-dasharray 0.6s ease-out;
   }
 
   .pop-enter-active {
@@ -547,17 +568,18 @@ onUnmounted(() => {
 
 .hint {
   text-align: center;
-  margin-bottom: 2rem;
+  color: var(--c-muted);
+  margin-bottom: 1.5rem;
 }
 
 .error {
-  color: #b91c1c;
-  font-weight: 600;
+  margin-bottom: 0.75rem;
 }
 
 .wide {
   width: 100%;
   font-size: 1.2rem;
   min-height: 4rem;
+  margin-bottom: 0.625rem;
 }
 </style>

@@ -75,7 +75,10 @@ async function answer(choiceIndex: number) {
 
     <template v-else-if="!done">
       <p class="progress">ข้อ {{ qIndex + 1 }} / {{ quiz.questions.length }}</p>
-      <h2 class="card">{{ quiz!.questions[qIndex]!.text }}</h2>
+      <div class="bar" aria-hidden="true">
+        <span :style="{ width: `${((qIndex + 1) / quiz.questions.length) * 100}%` }"></span>
+      </div>
+      <h2 class="card question">{{ quiz!.questions[qIndex]!.text }}</h2>
       <button
         v-for="(choice, i) in quiz!.questions[qIndex]!.choices"
         :key="i"
@@ -88,7 +91,7 @@ async function answer(choiceIndex: number) {
 
     <template v-else>
       <div class="card center">
-        <h2>เสร็จเรียบร้อย ขอบคุณค่ะ</h2>
+        <h2>เสร็จเรียบร้อย ขอบคุณ</h2>
         <p v-if="quiz.id !== 'satisfaction'">
           ได้ {{ finalScore }} จาก {{ quiz.questions.length }} คะแนน
         </p>
@@ -100,22 +103,46 @@ async function answer(choiceIndex: number) {
 
 <style scoped>
 .progress {
-  color: #57534e;
-  margin-bottom: 0.5rem;
+  color: var(--c-muted);
+  font-variant-numeric: tabular-nums;
+  margin-bottom: 0.375rem;
 }
 
-.error {
-  color: #b91c1c;
-  font-weight: 600;
+.bar {
+  height: 0.5rem;
+  background: var(--c-primary-wash);
+  overflow: hidden;
+  margin-bottom: 1rem;
+}
+
+.bar span {
+  display: block;
+  height: 100%;
+  background: var(--c-primary);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .bar span {
+    transition: width 0.3s ease-out;
+  }
+}
+
+.question {
+  font-size: 1.25rem;
 }
 
 .choice {
-  display: block;
+  display: flex;
+  justify-content: flex-start;
   width: 100%;
   text-align: left;
   font-size: 1.1rem;
-  margin-bottom: 0.75rem;
+  font-weight: 400;
+  margin-bottom: 0.625rem;
   min-height: 3.5rem;
+  padding: 0.75rem 1rem;
+  border-width: 1px;
+  overflow-wrap: anywhere;
 }
 
 .center {
