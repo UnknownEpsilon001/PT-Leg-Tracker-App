@@ -261,6 +261,8 @@ bool actuatorCapTimerReady() { return capTimer != nullptr; }
 
 bool actuatorPwmReady() { return pwmReady; }
 
+uint16_t actuatorDutyTarget() { return dutyTarget; }
+
 // Drives `dir`, or parks the request behind the dead time when the motor is
 // still turning the other way. Idempotent: applyActuator() calls these every loop
 // while a phase runs. Re-stamping energizeStart every time would keep

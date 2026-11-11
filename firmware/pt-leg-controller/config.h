@@ -4,7 +4,11 @@
 // รวมหมายเลขขา GPIO ของตัวขับมอเตอร์ ปุ่ม และหลอดไฟ กับค่าตั้งต้นของรอบการทำงาน
 // Hardware pin map + default cycle timings for the controller MCU.
 
-#define FW_VERSION "0.1.0"
+#include "build_id.h"
+
+// Printed in the [BUILD] line so the serial log names the motor driver.
+// [TH] พิมพ์ในบรรทัด [BUILD] เพื่อให้รู้ว่าเฟิร์มแวร์นี้ใช้ตัวขับมอเตอร์รุ่นใด
+#define MOTOR_DRIVER "BTS7960"
 
 // The motor is driven by a BTS7960 H-bridge module, not by a pair of relays. The
 // two signal wires keep the connectors the relay coils used, so no harness is

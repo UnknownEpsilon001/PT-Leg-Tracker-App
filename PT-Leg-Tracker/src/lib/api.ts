@@ -40,7 +40,10 @@ export async function syncNow(): Promise<boolean> {
   const sessions = useSessionsStore()
   const url = settings.settings.serverUrl
   const code = profile.profile?.patientCode
-  if (!url || !code) return false
+  if (!url || !code) {
+    console.info('[SYNC] skipped: no server URL or patient code')
+    return false
+  }
   try {
     // claims first, so a session claimed now is in the list fetched below
     // [TH] ผูกเซสชันที่ค้างก่อน เซสชันที่เพิ่งผูกได้จะได้อยู่ในรายการที่ดึงด้านล่าง
@@ -48,8 +51,10 @@ export async function syncNow(): Promise<boolean> {
     const remote = await fetchDeviceSessions(url, code)
     await sessions.replaceAll(mergeSessions(sessions.sessions, remote))
     await settings.update({ lastSync: new Date().toISOString() })
+    console.info(`[SYNC] ok, ${remote.length} from server`)
     return true
-  } catch {
+  } catch (err) {
+    console.warn('[SYNC] failed', err)
     return false
   }
 }

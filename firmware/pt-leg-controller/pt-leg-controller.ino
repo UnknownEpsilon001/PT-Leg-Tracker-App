@@ -45,6 +45,7 @@
 #include <sys/time.h>
 #include <esp_sntp.h>
 #include <esp_log.h>
+#include <esp_system.h>
 #include <driver/gpio.h>
 
 DeviceSettings gSettings;  // ค่าตั้งค่าปัจจุบัน
@@ -569,7 +570,6 @@ static void onLinkConfirm(bool ok) {
   else gSession.cancelConfirm(now);
 }
 
-#if BENCH_DEBUG
 static const char* phaseName(Phase p) {
   switch (p) {
     case Phase::Idle: return "IDLE";
@@ -584,6 +584,61 @@ static const char* phaseName(Phase p) {
   return "?";
 }
 
+// Tagged event lines on USB serial, always on. Each prints only when its value
+// changes, and the scan runs every 20 ms so a bouncing contact cannot flood UART0
+// and stall the loop that services the energize cap.
+// [TH] บรรทัดเหตุการณ์ที่มีป้ายกำกับบนพอร์ต USB เปิดตลอด แต่ละบรรทัดพิมพ์เฉพาะตอนค่าเปลี่ยน
+//      และตรวจทุก 20 มิลลิวินาที หน้าสัมผัสที่เด้งจึงทำให้ UART0 ล้นจนลูปที่ดูแลเพดานเวลาจ่ายไฟค้างไม่ได้
+static void eventsTick(uint32_t now) {
+  static uint32_t lastScan = 0;
+  if (now - lastScan < 20) return;
+  lastScan = now;
+
+  static bool first = true;
+
+  static ActState lastDir = ACT_OFF;
+  static uint16_t lastDuty = 0;
+  ActState dir = actuatorState();
+  uint16_t duty = actuatorDutyTarget();
+  if (first || dir != lastDir || duty != lastDuty) {
+    lastDir = dir;
+    lastDuty = duty;
+    Serial.printf("[MOTOR] %s target=%u/%u\n",
+                  dir == ACT_UP ? "UP" : dir == ACT_DOWN ? "DOWN" : "OFF",
+                  (unsigned)duty, (unsigned)MOTOR_DUTY_MAX);
+  }
+
+  static Phase lastPhase = Phase::Idle;
+  static uint16_t lastReps = 0;
+  if (first || gSession.phase() != lastPhase || gSession.reps() != lastReps) {
+    lastPhase = gSession.phase();
+    lastReps = gSession.reps();
+    Serial.printf("[PHASE] %s reps=%u elapsed=%lus\n", phaseName(lastPhase),
+                  (unsigned)lastReps, (unsigned long)gSession.elapsedSec(now));
+  }
+
+  static bool lastStart = false, lastStop = false;
+  bool start = digitalRead(PIN_BTN_START) == (BTN_START_NC ? HIGH : LOW);
+  bool stop = digitalRead(PIN_BTN_STOP) == (BTN_STOP_NC ? HIGH : LOW);
+  if (first || start != lastStart || stop != lastStop) {
+    lastStart = start;
+    lastStop = stop;
+    Serial.printf("[BTN] start=%s stop=%s\n", start ? "PRESSED" : "rest",
+                  stop ? "PRESSED" : "rest");
+  }
+
+  static bool lastLink = false;
+  uint32_t rx = gLink.lastRxMs();
+  bool link = rx != 0 && (int32_t)(now - rx) <= 2000;
+  if (first || link != lastLink) {
+    lastLink = link;
+    Serial.printf("[LINK] %s\n", link ? "up" : "down");
+  }
+
+  first = false;
+}
+
+#if BENCH_DEBUG
 // The raw level alone means nothing without the button's contact type: HIGH is
 // "pressed" on an NC button and "at rest" on an NO one. Print both so the
 // polarity being tested is never inferred from the pin state.
@@ -678,6 +733,14 @@ void setup() {
   //      และพิมพ์เฉพาะตอนค่าเปลี่ยน จึงไม่ทำให้พอร์ตล้นแบบการลองเชื่อมต่อซ้ำ
   esp_log_level_set("*", ESP_LOG_NONE);
   delay(200);  // let UART0 settle so the boot banner is not clipped — รอ UART0 นิ่งกันข้อความต้นเปิดเครื่องขาด
+  // First thing printed, so a hang later in setup() still shows which build it is.
+  // [TH] พิมพ์เป็นอย่างแรก ถ้า setup() ค้างภายหลังก็ยังรู้ว่าเป็นเฟิร์มแวร์รุ่นไหน
+  Serial.printf("[BUILD] controller v%s commit=%s branch=%s driver=%s built=%s reset=%d\n",
+                FW_VERSION, BUILD_COMMIT_STR, BUILD_BRANCH_STR, MOTOR_DRIVER, BUILD_TIME_STR,
+                (int)esp_reset_reason());
+  Serial.printf("[PINS] lift=%d lower=%d en=%d\n",
+                MOTOR_REVERSED ? PIN_MOT_LPWM : PIN_MOT_RPWM,
+                MOTOR_REVERSED ? PIN_MOT_RPWM : PIN_MOT_LPWM, PIN_MOT_EN);
   // 19200, not 115200. The link carries ~4 messages a second of about 120 bytes
   // — under 500 B/s — so 115200 bought nothing but noise sensitivity. A slower
   // bit is a wider bit: each one is sampled further from its edges, which is the
@@ -764,6 +827,7 @@ void loop() {
   dSeg_net = dSeg_ntp = dSeg_linkPoll = dSeg_cmd = dSeg_hb = dSeg_state = dSeg_btn = 0;
   LD_START(btn);
 #endif
+  eventsTick(now);
   buttonsPoll(now);
   gSession.tick(now);
 #if LOOP_DEBUG

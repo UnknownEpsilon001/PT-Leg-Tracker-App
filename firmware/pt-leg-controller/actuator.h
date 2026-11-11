@@ -82,3 +82,6 @@ bool actuatorCapTimerReady();
 //      ถ้าเป็นเท็จ จะขับมอเตอร์ไม่ได้เลย เครื่องจะหมดเวลาทุกจังหวะแล้วขึ้นความผิดพลาดโดยไม่มีอะไรขยับ
 //      ให้ setup() เป็นคนรายงานด้วยเหตุผลเดียวกับตัวจับเวลาเพดานเวลา คือฟังก์ชันนี้ทำงานก่อนพอร์ตอนุกรมจะเปิด
 bool actuatorPwmReady();
+
+// The commanded duty, for the [MOTOR] serial line — ค่ากำลังขับที่สั่งไว้ สำหรับบรรทัด [MOTOR]
+uint16_t actuatorDutyTarget();

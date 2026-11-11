@@ -19,6 +19,11 @@ import { useSettingsStore } from './stores/settings'
 import { syncNow } from './lib/api'
 import { syncAlarmFromSettings } from './lib/alarm'
 
+console.info(
+  `[BUILD] app v${__BUILD_ID__.version} commit=${__BUILD_ID__.commit} branch=${__BUILD_ID__.branch} built=${__BUILD_ID__.built}`,
+)
+router.afterEach((to) => console.info(`[ROUTE] ${String(to.name)}`))
+
 const app = createApp(App)
 app.use(createPinia())
 

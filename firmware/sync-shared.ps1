@@ -43,7 +43,7 @@ $to = Join-Path $root "pt-leg-display"
 #      ตอนนี้มีคอมเมนต์กำกับไว้ทั้งสองไฟล์แล้ว ซึ่งเป็นสิ่งเดียวที่ยึดความสัมพันธ์นี้ไว้
 #      สคริปต์นี้บังคับให้ตรงกันไม่ได้ เพราะไม่ใช่ไฟล์ที่สคริปต์นี้ดูแลหรือแก้ได้
 #      การตรวจแบบไม่บังคับด้านล่างจะอ่านทั้งสองไฟล์แล้วบอกออกมาถ้าคอมเมนต์ใดหายไป แทนการปล่อยผ่านเงียบๆ
-$shared = @("link.h", "link.cpp", "settings.h")
+$shared = @("link.h", "link.cpp", "settings.h", "build_id.h")
 
 # Soft, informational only — never changes the exit code. -Check's exit code is
 # reserved for the byte-identical $shared files above; failing the build over a

@@ -40,6 +40,18 @@
 #include "audio.h"         // spoken cues from /sounds on the card — เสียงพูดจากการ์ด
 #include <driver/gpio.h>
 #include <esp_heap_caps.h>
+#include "build_id.h"
+
+// Event lines share USB serial, so bench modes that use that port turn them off.
+// [TH] บรรทัดเหตุการณ์ใช้พอร์ต USB ร่วมกัน โหมดทดสอบที่ใช้พอร์ตนี้จึงปิดบรรทัดเหล่านี้
+#define EVENT_PRINTS (!LINK_OVER_USB && !UI_TEST_HOOK)
+
+// Same order as enum Phase in session.h — ลำดับเดียวกับ enum Phase ใน session.h
+static const char* phaseName(int p) {
+  static const char* const names[] = {"IDLE", "LIFT", "HOLD", "LOWER",
+                                      "REST", "SAFE-LOWER", "FAULT", "CONFIRM"};
+  return p >= 0 && p < 8 ? names[p] : "?";
+}
 
 // Both drive the USB serial port, so enabling both means two readers fighting
 // over the same bytes and neither working.
@@ -363,6 +375,10 @@ static void onLinkState(const LinkState& s) {
     uiElapsedRxMs = now;
   }
   uiRunning = s.running;
+#if EVENT_PRINTS
+  if ((Phase)s.phase != uiPhase)
+    Serial.printf("[PHASE] %s reps=%u/%u\n", phaseName(s.phase), (unsigned)s.reps, (unsigned)s.target);
+#endif
   uiPhase = (Phase)s.phase;
   uiReps = s.reps;
   uiTarget = s.target;
@@ -485,6 +501,8 @@ void setup() {
   // [TH] บอกสาเหตุที่ชิปเริ่มทำงานใหม่ ถ้าเครื่องรีบูตเองโดยไม่มีข้อมูลนี้ จะเดาไม่ออกว่าเป็นเพราะ
   //      สายไม่ดี ไฟตก หรือเฟิร์มแวร์ผิดพลาด ซึ่งแก้คนละทางกันหมด
   //      1 คือเปิดเครื่องปกติ 3 คือกดรีเซ็ต 4 คือ watchdog 5 คือโปรแกรมพัง 9 คือไฟตก
+  Serial.printf("[BUILD] display v%s commit=%s branch=%s built=%s reset=%d\n", FW_VERSION,
+                BUILD_COMMIT_STR, BUILD_BRANCH_STR, BUILD_TIME_STR, (int)esp_reset_reason());
   Serial.printf("pt-leg-display boot (reset reason %d)\n", (int)esp_reset_reason());
   // 19200, matching the controller. The link needs under 500 B/s, and a wider
   // bit is sampled further from its edges — the cheapest noise margin there is
@@ -646,6 +664,13 @@ void loop() {
   //      ที่นี่แค่ไฟสถานะกะพริบ ต่างจากฝั่งคอนโทรลเลอร์ที่การเทียบแบบเดียวกันสั่งหยุดรอบการทำงาน
   uint32_t lastRx = gLink.lastRxMs();
   gLinkUp = lastRx != 0 && (int32_t)(now - lastRx) < 2500;
+#if EVENT_PRINTS
+  static int lastLinkUp = -1;
+  if ((int)gLinkUp != lastLinkUp) {
+    lastLinkUp = gLinkUp;
+    Serial.printf("[LINK] %s\n", gLinkUp ? "up" : "down");
+  }
+#endif
   syncLoop(now);
 
   static uint32_t lastUi = 0, lastPing = 0, lastHello = 0;

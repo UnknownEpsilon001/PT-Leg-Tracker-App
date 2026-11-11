@@ -245,6 +245,24 @@ function Get-SketchInfo([string]$role) {
     }
 }
 
+# [TH] ค่าคอมมิตและแบรนช์สำหรับบรรทัด [BUILD] ถ้าโฟลเดอร์ firmware มีไฟล์ค้างแก้จะต่อท้ายคอมมิตด้วย -dirty
+# Commit and branch for the [BUILD] line, as bare tokens: build_id.h stringifies
+# them, so no quotes have to survive PowerShell, arduino-cli and the compiler.
+function Get-BuildFlags {
+    $commit = ""; $branch = ""
+    try {
+        $commit = [string](& git -C $firmware rev-parse --short=7 HEAD)
+        $branch = [string](& git -C $firmware rev-parse --abbrev-ref HEAD)
+        if (& git -C $firmware status --porcelain -- .) { $commit = "$commit-dirty" }
+    } catch { }
+    foreach ($name in "commit", "branch") {
+        $value = (Get-Variable $name -ValueOnly) -replace '[^\w./-]', '_'
+        if (-not $value) { $value = "unknown" }
+        Set-Variable $name $value
+    }
+    return "-DBUILD_COMMIT=$commit -DBUILD_BRANCH=$branch"
+}
+
 function Get-SourceHash($info) {
     $files = @(Get-ChildItem $info.Path -Recurse -File | Where-Object {
         $_.Extension -in @(".ino", ".c", ".cpp", ".h", ".hpp", ".S")
@@ -258,7 +276,9 @@ function Get-SourceHash($info) {
             $relative = $file.FullName.Substring(([string]$firmware).Length).TrimStart("\", "/")
             "$relative|$((Get-FileHash -Algorithm SHA256 $file.FullName).Hash)"
         }
-        $payload = [Text.Encoding]::UTF8.GetBytes(($FQBN + "`n" + ($parts -join "`n")))
+        # The build flags are hashed too: a new commit must rebuild, or the [BUILD]
+        # line would name the commit before it.
+        $payload = [Text.Encoding]::UTF8.GetBytes(($FQBN + "`n" + (Get-BuildFlags) + "`n" + ($parts -join "`n")))
         return ([BitConverter]::ToString($sha.ComputeHash($payload))).Replace("-", "")
     } finally {
         $sha.Dispose()
@@ -548,7 +568,8 @@ function Invoke-Compile([string]$role, [switch]$OnlyWhenChanged) {
         $cli = (Get-Command arduino-cli -CommandType Application | Select-Object -First 1).Source
         $expected = if ($role -eq "display") { 180 } else { 120 }
         Invoke-NativeWithProgress -FilePath $cli -ArgumentList @(
-            "compile", "--fqbn", $FQBN, "--build-path", $stagedInfo.BuildPath, $stagedInfo.Path
+            "compile", "--fqbn", $FQBN, "--build-path", $stagedInfo.BuildPath,
+            "--build-property", "compiler.cpp.extra_flags=$(Get-BuildFlags)", $stagedInfo.Path
         ) -Activity "Compiling $role" -Kind compile -ExpectedSeconds $expected
         $artifacts = Get-BuildArtifactHashes $stagedInfo
         [pscustomobject]@{

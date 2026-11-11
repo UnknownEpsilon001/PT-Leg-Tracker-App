@@ -1037,6 +1037,27 @@ reboot and nothing on serial — a failure mode that cost real debugging time on
 2026-07-21. A reboot with a printed reason is far easier to diagnose, and on a
 patient-facing machine it recovers instead of appearing bricked.
 
+## Reading the serial log
+
+Each board prints a `[BUILD]` line first at boot, with its version, commit, branch,
+build time and reset reason. The controller also names the motor driver. A commit
+ending in `-dirty` had uncommitted firmware changes. `commit=unknown` means the
+board was built outside `flash.ps1`, for example from the Arduino IDE.
+
+After that, tagged lines print only when a value changes:
+
+| Tag | Board | Meaning |
+|---|---|---|
+| `[PINS]` | controller | Lift, lower and enable GPIOs, once at boot |
+| `[MOTOR]` | controller | Commanded direction and target duty |
+| `[PHASE]` | both | Session phase and reps; a fault shows as `FAULT` |
+| `[BTN]` | controller | Panel START and STOP, pressed or at rest |
+| `[LINK]` | both | UART link to the other board went up or down |
+
+`[MOTOR]` is what the firmware commands, not what reached the motor. To check the
+motor side, measure the driver's outputs. The display's event lines are off in
+`LINK_OVER_USB` and `UI_TEST_HOOK` builds because those use the USB port.
+
 ## Wiring
 
 - Motor drive: a **BTS7960** H-bridge module. RPWM GPIO 22 (P3 connector), LPWM
