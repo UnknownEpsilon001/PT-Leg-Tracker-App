@@ -11,6 +11,20 @@ python -m venv .venv
 .venv\Scripts\python -m pip install -r requirements.txt
 ```
 
+## Run on the server PC
+
+Double-click `start-server.cmd`. The first run sets up Python and the packages;
+later runs only start the server. It prints two kinds of address:
+
+- **LAN address** (`192.168.x.x` or `10.x.x.x`): put this in the device's server
+  setting. The device must be on the same Wi-Fi as the server PC, because the
+  ESP32 cannot join Tailscale.
+- **Tailscale address** (`100.x.x.x`): put this in the phone app. It works from
+  any network while the phone's Tailscale app is connected.
+
+Do not port-forward 8000 on the router. The server has no login, so anyone who
+reaches it can start the motor.
+
 ## Run
 
 One-shot dev launcher (server in a new window + interactive mock ESP32 in this

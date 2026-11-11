@@ -42,9 +42,16 @@ try {
     }
 
     Write-Host "server up: $base" -ForegroundColor Green
+    # Device (ESP32) URL: this PC's LAN address, on the same Wi-Fi as the machine.
+    # App URL: the Tailscale address works from anywhere the phone runs Tailscale.
+    # Only adapters with a gateway: that skips VirtualBox and Hyper-V adapters,
+    # whose addresses look like a LAN but reach nothing.
+    Get-NetIPConfiguration | Where-Object { $_.IPv4DefaultGateway } |
+        ForEach-Object { $_.IPv4Address.IPAddress } |
+        ForEach-Object { Write-Host "device + phone on this Wi-Fi: http://${_}:$Port" -ForegroundColor Cyan }
     Get-NetIPAddress -AddressFamily IPv4 |
-        Where-Object { $_.IPAddress -like '192.168.*' } |
-        ForEach-Object { Write-Host "phone URL: http://$($_.IPAddress):$Port" -ForegroundColor Cyan }
+        Where-Object { $_.IPAddress -like '100.*' -and $_.InterfaceAlias -match 'Tailscale' } |
+        ForEach-Object { Write-Host "phone over Tailscale: http://$($_.IPAddress):$Port" -ForegroundColor Cyan }
 
     if ($NoMock) {
         Write-Host 'server only (-NoMock) - Ctrl+C or close this window to stop'
