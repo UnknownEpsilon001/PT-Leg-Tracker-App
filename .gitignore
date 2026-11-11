@@ -23,3 +23,6 @@ docs/*.pdf
 
 # Local Claude instructions
 CLAUDE.md
+
+# Server run logs
+server/logs/
