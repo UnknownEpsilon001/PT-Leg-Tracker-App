@@ -25,6 +25,24 @@ later runs only start the server. It prints two kinds of address:
 Do not port-forward 8000 on the router. The server has no login, so anyone who
 reaches it can start the motor.
 
+## Update the server PC
+
+Close the running server, then double-click `update-server.cmd`. It:
+
+1. Refuses to overwrite tracked local changes.
+2. Fast-forwards `main` from GitHub.
+3. Backs up `ptlt.sqlite3` under `server/backups/`.
+4. Creates the Python environment when missing and installs the locked requirements.
+5. Runs the complete server test suite.
+6. Starts the server after every check passes.
+
+Command-line options:
+
+```powershell
+.\update-server.cmd -Port 9000
+.\update-server.cmd -SkipPull -SkipStart  # setup/test only
+```
+
 ## Run
 
 One-shot dev launcher (server in a new window + interactive mock ESP32 in this
