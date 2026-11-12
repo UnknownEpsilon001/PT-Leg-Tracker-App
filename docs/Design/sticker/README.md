@@ -8,8 +8,8 @@ background. Thai labels with small English subtitles.
 | File | What it is |
 | --- | --- |
 | `panel-sticker.svg` | Source, 1:1 mm, fonts embedded. Opens in Illustrator or Inkscape. |
-| `panel-sticker.pdf` | Same thing, 186 × 156 mm page. Send this to the print shop. |
-| `panel-sticker-preview.png` | 300 dpi flat preview, cut lines hidden. For checking only. |
+| `panel-sticker.pdf` | The decal for the printer, 186 × 156 mm page. Openings print as black shapes; no cut lines. |
+| `panel-sticker-preview.png` | 300 dpi flat preview. For checking only. |
 | `make-panel-sticker.py` | Generates the SVG. Every dimension is asserted here. |
 | `render.py` | Exports the PDF and the PNG through headless Chrome. |
 | `panel-sticker-figma.svg` | The same artwork with the embedded fonts stripped, for dragging into Figma. At ~630 KB it is now too large to push through the Figma MCP in one call; import it by hand. |
@@ -23,7 +23,7 @@ An editable copy lives at
 `panel-sticker-figma.svg` and retargeting the text to real Kanit SemiBold and
 Bold. The frame is **1 unit = 1 mm**, so the cutouts read as the drawing's own
 numbers — the display window sits at x 35, y 26 and the buttons at x 30, 70, 110,
-150. Three layers: `Artwork`, and `Cut lines (magenta)` and `Crop marks (cyan)`,
+150. Layers: `Artwork` and `Crop marks (cyan)` (the Figma copy predates the hand-cut change and still has `Cut lines (magenta)`),
 both locked.
 
 **The Figma copy is currently behind.** It still carries the `"pcb"` background;
@@ -61,9 +61,8 @@ corner of the face.
 | Button 3 — red, STOP | centre 110, 115.5 | Ø29 |
 | Button 4 — green, START | centre 150, 115.5 | Ø29 |
 
-Page is 186 × 156 mm: the 180 × 150 face plus 3 mm of bleed on every side. The
-magenta `cut-lines` layer carries the outline and all six holes; cyan crop marks
-sit at the four trim corners.
+Page is 186 × 156 mm: the 180 × 150 face plus 3 mm of bleed on every side. Cyan
+crop marks sit at the four trim corners to show where the outer edge is cut.
 
 ### The one correction to the drawing
 
@@ -84,12 +83,22 @@ Everything else on the drawing cross-checks exactly: the 6 mm gap between the
 display window and the Ø60 circle, the 6 mm from the circle to the top edge, and
 the 9 mm from the circle to the right edge all fall out of the stated positions.
 
-### Cut tolerances
+### Holes are cut by hand
 
-Each hole is cut 0.5 mm larger than nominal all the way round, so the vinyl can
-never overhang a bore and block a button body. A coloured ring sits 1.2 mm
-outside each cut edge at 0.6 mm wide; it reads as deliberate trim and it hides
-up to about a millimetre of misalignment during application.
+Each of the six openings prints as a solid black shape at the size in the table
+above, 0.5 mm oversize. There is no cut path: the holes are cut by hand once the
+decal is on. Stick it to the panel, then cut from behind with a knife, following
+the panel's own openings. The panel does the measuring, so the holes cannot come
+out in the wrong place, and the black around a 22 mm panel opening is covered by
+the bezel or the yellow collar.
+
+The black shapes are drawn into the artwork rather than knocked out of it, so
+they print black whatever the printer puts behind a transparent area. Nothing
+else is drawn within `KEEPOUT` (2.3 mm) of a hole edge, so cutting never goes
+through text.
+
+An earlier version also shipped a cut file for a vinyl cutter. It was dropped
+because the decal is cut by hand.
 
 The Ø60 figure is the outer diameter of the yellow emergency-stop collar, not the
 bore. The decal clears the collar and tucks under nothing.
@@ -102,7 +111,7 @@ The decal reads top to bottom as who made it, how to drive it, and what it is.
 over **แผนกวิชาช่างอิเล็กทรอนิกส์**.
 
 **Footer, bottom left:** the machine's name,
-**เครื่องช่วยบริหารกล้ามเนื้อต้นขาอัตโนมัติสมาร์ตแอปพลิเคชั่น**, on one line behind a short red
+**เครื่องช่วยบริหารกล้ามเนื้อต้นขาอัตโนมัติสมาร์ทแอปพลิเคชัน**, on one line behind a short red
 bar. It is spelled exactly as supplied. The bottom
 band runs the full 172 mm between the safe margins, so the whole name fits on a
 single line there; up top it had to be broken in two to clear the Ø60 cutout.
@@ -121,7 +130,8 @@ and the `PT-LEG-01` model code went for the same reason.
 | Button 3 | หยุด | STOP |
 | Button 4 | เริ่ม | START |
 
-จอแสดงผล sits 2.3 mm from the window's red ring and is centred on the window's
+จอแสดงผล sits 2.3 mm outside the window's keep-out margin (about 4.1 mm from the
+cut edge) and is centred on the window's
 height, so it reads as that cutout's own label rather than something floating in
 the margin. Rotated to read upward, the bottoms of the letters face the window —
 which is why `STRIP_GAP` is measured from the descent line.
@@ -198,6 +208,25 @@ magick docs/inventor_logo.png -alpha set -bordercolor none -border 1 -trim +repa
   pads off the labels. This one carries far more ink per square millimetre, so it
   runs at 50%; any higher and it competes with the Thai.
 
+## Corner bolts
+
+The box face is held on by a bolt near each corner. `BOLTS` places them at
+(10, 10), (170, 10), (10, 140) and (170, 140) mm. Those positions were read off
+the photos, not measured, so they are good to about ±2 mm. They are treated as
+keep-out zones only: nothing is drawn within `BOLT_KEEP` (8 mm) of a centre, and
+`clear_of_bolts()` checks every logo, the header text and the device name
+against all four. The decal is not cut for the bolts; take them out, apply the
+decal, and push them back through the vinyl.
+
+The header starts at `CLEAR_X` (18.5 mm), just past the top-left bolt.
+
+The bottom row is held tighter: `BOTTOM_CLEAR` keeps 24 mm empty at each side
+edge, red bar included, so nothing sits in the way of the two bottom bolts. That
+leaves 132 mm for the device name, which now sets at 5.0 mm. On the render the
+bar starts at 24.0 mm and the text ends at 153.6 mm, a right margin of 26.4 mm.
+If the bolts are ever measured, update `BOLTS` and rerun; the asserts will say
+what no longer fits.
+
 ## Still open
 
 The display module is held on by four screws just outside the window corners, and
@@ -208,6 +237,10 @@ cutout group.
 
 ## Printing
 
-Ask for white vinyl with a matte laminate, printed CMYK, cut on the magenta
-layer. Matte matters: the panel sits under room lighting at an angle and a gloss
-laminate will wash out the dark background.
+Print `panel-sticker.pdf` at 100% scale, not "fit to page", or the 180 × 150 mm
+face will not match the panel. Trim the outer edge on the crop marks, then cut
+the holes as described under "Holes are cut by hand".
+
+Ask for white vinyl with a matte laminate, printed CMYK. Matte matters: the panel
+sits under room lighting at an angle and a gloss laminate will wash out the dark
+background.

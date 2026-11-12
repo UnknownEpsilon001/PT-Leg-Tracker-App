@@ -60,9 +60,25 @@ BTN_MARGIN = (FACE_W - (BTN_N * BTN_D + (BTN_N - 1) * BTN_GAP)) / 2.0
 
 # cut tolerances — the decal clears each hole so it can never overhang the bore
 CLR = 0.5             # เผื่อรอบรู (ด้านละ 0.5 มม.)
-RING_GAP = 1.2        # gap from the cut edge to the accent ring
-RING_W = 0.6
-RING_OUT = CLR + RING_GAP + RING_W      # outermost ink around a cutout
+# Keep-out margin around every cutout: nothing — text, logo, rule — is drawn
+# closer than this to a nominal hole edge. It is the footprint the coloured
+# outline rings used to occupy (0.5 clearance + 1.2 gap + 0.6 stroke). The rings
+# are gone; the margin stays at their size so no label on the decal moves.
+# [TH] ระยะกันรอบรูเจาะทุกรู ห้ามวางสิ่งใดใกล้ขอบรูกว่านี้
+#      เท่ากับพื้นที่ที่วงแหวนสีเคยใช้ เอาวงแหวนออกแล้วแต่คงระยะไว้ ป้ายต่างๆ จึงไม่ขยับ
+KEEPOUT = CLR + 1.8
+
+# Corner bolts on the box face, one near each corner. These positions are read
+# off the photos, not measured — good to about ±2 mm — so they are keep-out zones
+# only and the decal is not cut for them. Nothing is drawn within BOLT_KEEP of a
+# centre: a head of about 10 mm across, plus the estimate's error.
+# [TH] น็อตยึดหน้ากล่องสี่มุม ตำแหน่งประมาณจากรูปถ่าย ไม่ได้วัดจริง (คลาดได้ราว ±2 มม.)
+#      จึงใช้เป็นเขตห้ามวางเท่านั้น ไม่ได้เจาะรูให้ ห้ามวางสิ่งใดใกล้จุดศูนย์กลางน็อตกว่า BOLT_KEEP
+BOLTS = [(10.0, 10.0), (170.0, 10.0), (10.0, 140.0), (170.0, 140.0)]
+BOLT_KEEP = 8.0
+# Left edge of the header and the device name, just past the left-hand bolts.
+# Both start here, so the two blocks share one column.
+CLEAR_X = BOLTS[0][0] + BOLT_KEEP + 0.5
 
 # derived centres
 ESTOP_R = ESTOP_D / 2.0
@@ -132,7 +148,7 @@ def header_logos():
     [TH] วางโลโก้สองอันมุมซ้ายบนตามขนาดพิกเซลจริง จัดกึ่งกลางแนวเดียวกัน
          แล้วคืนตำแหน่งที่ชื่อวิทยาลัยข้างๆ เริ่มได้
     """
-    placements, x = [], SAFE
+    placements, x = [], CLEAR_X
     mid = HEAD_Y + HEAD_LOGO_H / 2
     for name, scale in LOGO_FILES:
         px_w, px_h = png_size(LOGO_DIR / name)
@@ -141,6 +157,17 @@ def header_logos():
         placements.append((name, x, mid - h / 2, w, h))
         x += w + LOGO_GAP
     return placements, x - LOGO_GAP + HEAD_TEXT_GAP
+
+
+def clear_of_bolts(x0, y0, x1, y1):
+    """True when the box (x0, y0)-(x1, y1) stays at least BOLT_KEEP from every
+    corner bolt centre — the nearest point of the box, not its middle."""
+    for bx, by in BOLTS:
+        dx = max(x0 - bx, 0.0, bx - x1)
+        dy = max(y0 - by, 0.0, by - y1)
+        if math.hypot(dx, dy) < BOLT_KEEP:
+            return False
+    return True
 
 
 def check():
@@ -157,24 +184,24 @@ def check():
     assert abs(FACE_W - (ESTOP_CX + ESTOP_R) - 9.0) < 1e-9, "9 mm estop->right gap"
 
     # every inked cutout, ring included, stays on the face
-    assert WIN_X - RING_OUT > 0 and WIN_Y - RING_OUT > 0
-    assert WIN_X + WIN_W + RING_OUT < FACE_W and WIN_Y + WIN_H + RING_OUT < FACE_H
-    assert ESTOP_CY - ESTOP_R - RING_OUT > 0
-    assert ESTOP_CX + ESTOP_R + RING_OUT < FACE_W
+    assert WIN_X - KEEPOUT > 0 and WIN_Y - KEEPOUT > 0
+    assert WIN_X + WIN_W + KEEPOUT < FACE_W and WIN_Y + WIN_H + KEEPOUT < FACE_H
+    assert ESTOP_CY - ESTOP_R - KEEPOUT > 0
+    assert ESTOP_CX + ESTOP_R + KEEPOUT < FACE_W
     for cx in BTN_CX:
-        assert cx - BTN_R - RING_OUT > 0 and cx + BTN_R + RING_OUT < FACE_W
-    assert BTN_CY + BTN_R + RING_OUT < FACE_H
+        assert cx - BTN_R - KEEPOUT > 0 and cx + BTN_R + KEEPOUT < FACE_W
+    assert BTN_CY + BTN_R + KEEPOUT < FACE_H
 
-    # no two cutouts (with their rings) touch
+    # no two cutouts (with their keep-out margins) touch
     for a, b in zip(BTN_CX, BTN_CX[1:]):
-        assert b - a > BTN_D + 2 * RING_OUT, "button rings collide"
-    win_ring_right = WIN_X + WIN_W + RING_OUT
-    assert ESTOP_CX - ESTOP_R - RING_OUT > win_ring_right, "estop ring hits window ring"
+        assert b - a > BTN_D + 2 * KEEPOUT, "button keep-out zones overlap"
+    win_keepout_right = WIN_X + WIN_W + KEEPOUT
+    assert ESTOP_CX - ESTOP_R - KEEPOUT > win_keepout_right, "e-stop and window keep-out zones overlap"
     for cx in BTN_CX:
         # vertical clearance from the window and the e-stop down to the buttons
-        assert BTN_CY - BTN_R - RING_OUT > WIN_Y + WIN_H + RING_OUT
+        assert BTN_CY - BTN_R - KEEPOUT > WIN_Y + WIN_H + KEEPOUT
         d = math.hypot(cx - ESTOP_CX, BTN_CY - ESTOP_CY)
-        assert d > BTN_R + ESTOP_R + 2 * RING_OUT, "estop ring hits a button ring"
+        assert d > BTN_R + ESTOP_R + 2 * KEEPOUT, "e-stop and a button keep-out zone overlap"
 
     # header, top left: two logos, then college name over department. Everything
     # stays inside the top band, and the text stops short of the window ring's
@@ -190,13 +217,17 @@ def check():
     assert DEPT_Y + DEPT_SIZE * DESC <= BANDS["top"][1]
     head_right = text_x + max(advance_width(NAME, NAME_SIZE),
                               advance_width(DEPT, DEPT_SIZE))
-    assert head_right <= WIN_X + WIN_W + RING_OUT, "header text runs into the e-stop ring"
+    assert head_right <= WIN_X + WIN_W + KEEPOUT, "header text runs into the e-stop keep-out"
+    for name, ix, iy, iw, ih in placements:
+        assert clear_of_bolts(ix, iy, ix + iw, iy + ih), f"{name} sits on a corner bolt"
+    assert clear_of_bolts(text_x - 2.4, NAME_Y - NAME_SIZE * ASC,
+                          head_right, DEPT_Y + DEPT_SIZE * DESC), "header text sits on a corner bolt"
 
     # emergency-stop caption: fits its band, and stays between the window ring
     # and the right safe edge once centred under the Ø60 cutout
     assert ESTOP_Y - ESTOP_SIZE * ASC >= BANDS["estop"][0]
     assert ESTOP_Y + ESTOP_SIZE * DESC <= BANDS["estop"][1]
-    estop_room = 2 * min(ESTOP_CX - (WIN_X + WIN_W + RING_OUT), FACE_W - SAFE - ESTOP_CX)
+    estop_room = 2 * min(ESTOP_CX - (WIN_X + WIN_W + KEEPOUT), FACE_W - SAFE - ESTOP_CX)
     assert advance_width(ESTOP_LABEL, ESTOP_SIZE) <= estop_room, "e-stop caption too wide"
 
     # column labels: Thai over English over the tick, all inside the band, and
@@ -215,17 +246,20 @@ def check():
     device_right = DEVICE_X + advance_width(DEVICE_NAME, DEVICE_SIZE)
     bracket_left = FACE_W - SAFE / 2 - BRACKET_LEN
     assert device_right + 6 <= bracket_left, "device name runs into the corner bracket"
+    assert device_right <= FACE_W - BOTTOM_CLEAR, "device name runs into the right 24 mm margin"
+    assert clear_of_bolts(BOTTOM_CLEAR, DEVICE_Y - DEVICE_SIZE * ASC,
+                          device_right, DEVICE_Y + DEVICE_SIZE * DESC), "device name sits on a corner bolt"
 
     # the three text bands must fit in the gaps the cutouts leave
-    assert BANDS["top"][1] <= WIN_Y - RING_OUT
-    assert BANDS["labels"][0] >= WIN_Y + WIN_H + RING_OUT
-    assert BANDS["labels"][1] <= BTN_CY - BTN_R - RING_OUT
-    assert BANDS["estop"][0] >= ESTOP_CY + ESTOP_R + RING_OUT
+    assert BANDS["top"][1] <= WIN_Y - KEEPOUT
+    assert BANDS["labels"][0] >= WIN_Y + WIN_H + KEEPOUT
+    assert BANDS["labels"][1] <= BTN_CY - BTN_R - KEEPOUT
+    assert BANDS["estop"][0] >= ESTOP_CY + ESTOP_R + KEEPOUT
     assert BANDS["estop"][1] <= BANDS["labels"][0]
-    assert BANDS["bottom"][0] >= BTN_CY + BTN_R + RING_OUT
+    assert BANDS["bottom"][0] >= BTN_CY + BTN_R + KEEPOUT
     assert BANDS["bottom"][1] <= FACE_H - SAFE
     # the left strip sits beside the window, clear of its ring
-    assert STRIP_BASE_X + STRIP_TH * DESC <= WIN_X - RING_OUT - STRIP_GAP + 1e-9
+    assert STRIP_BASE_X + STRIP_TH * DESC <= WIN_X - KEEPOUT - STRIP_GAP + 1e-9
     assert STRIP_BASE_X - STRIP_TH * ASC >= SAFE, "จอแสดงผล runs off the left edge"
     assert advance_width("จอแสดงผล", STRIP_TH) <= WIN_H, "จอแสดงผล is taller than the window"
 
@@ -235,9 +269,13 @@ def check():
 # ring, so the whole name fits in one line here and needs no break.
 # [TH] ชื่อเครื่องอยู่ขอบล่างบรรทัดเดียว แถบล่างกว้างเต็ม 172 มม.
 #      ส่วนแถบบนถูกวงแหวนจอบังอยู่ ชื่อเต็มจึงวางบรรทัดเดียวได้ที่ขอบล่างโดยไม่ต้องตัดคำ
-DEVICE_NAME = "เครื่องช่วยบริหารกล้ามเนื้อต้นขาอัตโนมัติสมาร์ตแอปพลิเคชั่น"
-DEVICE_SIZE, DEVICE_Y = 5.9, 141.3
-DEVICE_X = SAFE + 4.0              # leaves room for the red bar in front of it
+DEVICE_NAME = "เครื่องช่วยบริหารกล้ามเนื้อต้นขาอัตโนมัติสมาร์ทแอปพลิเคชัน"
+# The bottom row stays 24 mm clear of each side edge, red bar included, so the
+# two bottom bolts have nothing in their way.
+# [TH] แถวล่างเว้นห่างขอบซ้ายและขวาข้างละ 24 มม. รวมแถบสีแดง ให้น็อตสองตัวล่างไม่มีอะไรขวาง
+BOTTOM_CLEAR = 24.0
+DEVICE_SIZE, DEVICE_Y = 5.0, 141.3
+DEVICE_X = BOTTOM_CLEAR + 4.0      # leaves room for the red bar in front of it
 
 # corner brackets, top left and bottom right
 BRACKET_LEN = 11.0
@@ -306,7 +344,7 @@ BANDS = {
 # below-baseline marks — so the gap the eye sees is this plus the unused descent,
 # about 2.4 mm.
 STRIP_GAP = 0.6
-STRIP_BASE_X = WIN_X - RING_OUT - STRIP_GAP - STRIP_TH * DESC
+STRIP_BASE_X = WIN_X - KEEPOUT - STRIP_GAP - STRIP_TH * DESC
 STRIP_MID_Y = WIN_Y + WIN_H / 2
 
 
@@ -489,26 +527,18 @@ def build():
     vb_x, vb_y = -BLEED, -BLEED
     vb_w, vb_h = FACE_W + 2 * BLEED, FACE_H + 2 * BLEED
 
-    # --- mask: white keeps the ink, black punches the holes -----------------
+    # Each opening prints as a solid black shape — no cut path. The holes are cut
+    # by hand once the decal is on; the black marks where each one goes. Drawn in
+    # the artwork rather than knocked out of it, so they print black whatever
+    # the printer puts behind a transparent area.
+    # [TH] ตำแหน่งรูพิมพ์เป็นสีดำทึบ ไม่มีเส้นตัด เจาะรูเองหลังติดสติกเกอร์
+    #      วาดเป็นรูปดำในงานพิมพ์เลย ไม่ใช่เว้นโปร่งใส จึงพิมพ์ออกมาเป็นสีดำเสมอ
     holes = [
         f'<rect x="{WIN_X - CLR:.3f}" y="{WIN_Y - CLR:.3f}" width="{WIN_W + 2 * CLR:.3f}" '
         f'height="{WIN_H + 2 * CLR:.3f}" rx="{WIN_R}" fill="#000"/>',
         f'<circle cx="{ESTOP_CX:.3f}" cy="{ESTOP_CY:.3f}" r="{ESTOP_R + CLR:.3f}" fill="#000"/>',
     ] + [f'<circle cx="{cx:.3f}" cy="{BTN_CY:.3f}" r="{BTN_R + CLR:.3f}" fill="#000"/>'
          for cx in BTN_CX]
-
-    # --- accent rings around every cutout -----------------------------------
-    rr = CLR + RING_GAP + RING_W / 2
-    rings = [
-        f'<rect x="{WIN_X - rr:.3f}" y="{WIN_Y - rr:.3f}" width="{WIN_W + 2 * rr:.3f}" '
-        f'height="{WIN_H + 2 * rr:.3f}" rx="{WIN_R + rr:.3f}" fill="none" stroke="{RED}" '
-        f'stroke-width="{RING_W}"/>',
-        f'<circle cx="{ESTOP_CX:.3f}" cy="{ESTOP_CY:.3f}" r="{ESTOP_R + rr:.3f}" fill="none" '
-        f'stroke="{RED}" stroke-width="{RING_W}"/>',
-    ]
-    for (cx, (_, _, col)) in zip(BTN_CX, COLUMNS):
-        rings.append(f'<circle cx="{cx:.3f}" cy="{BTN_CY:.3f}" r="{BTN_R + rr:.3f}" fill="none" '
-                     f'stroke="{col}" stroke-width="{RING_W}" opacity="0.85"/>')
 
     # --- text ----------------------------------------------------------------
     t = []
@@ -545,17 +575,9 @@ def build():
     # bottom left: the device's own name, behind a red bar like the display strip
     bar_top = DEVICE_Y - DEVICE_SIZE * ASC
     bar_h = DEVICE_SIZE * (ASC + DESC)
-    t.append(f'<rect x="{SAFE:.2f}" y="{bar_top:.2f}" width="1.6" '
+    t.append(f'<rect x="{BOTTOM_CLEAR:.2f}" y="{bar_top:.2f}" width="1.6" '
              f'height="{bar_h:.2f}" fill="{RED}"/>')
     t.append(text(DEVICE_X, DEVICE_Y, DEVICE_NAME, DEVICE_SIZE, WHITE, 700))
-
-    # --- cut layer -----------------------------------------------------------
-    cut = [
-        f'<rect x="{WIN_X - CLR:.3f}" y="{WIN_Y - CLR:.3f}" width="{WIN_W + 2 * CLR:.3f}" '
-        f'height="{WIN_H + 2 * CLR:.3f}" rx="{WIN_R}"/>',
-        f'<circle cx="{ESTOP_CX:.3f}" cy="{ESTOP_CY:.3f}" r="{ESTOP_R + CLR:.3f}"/>',
-    ] + [f'<circle cx="{cx:.3f}" cy="{BTN_CY:.3f}" r="{BTN_R + CLR:.3f}"/>' for cx in BTN_CX]
-    cut.append(f'<rect x="0" y="0" width="{FACE_W}" height="{FACE_H}" rx="2.5"/>')
 
     crop = []
     for cx, cy in ((0, 0), (FACE_W, 0), (0, FACE_H), (FACE_W, FACE_H)):
@@ -585,13 +607,9 @@ text {{ dominant-baseline: alphabetic; }}
   <stop offset="0" stop-color="{RED_DIM}" stop-opacity="0.18"/>
   <stop offset="1" stop-color="{RED_DIM}" stop-opacity="0"/>
 </radialGradient>
-<mask id="cutouts">
-  <rect x="{vb_x}" y="{vb_y}" width="{vb_w}" height="{vb_h}" fill="#fff"/>
-  {chr(10).join("  " + h for h in holes)}
-</mask>
 </defs>
 
-<g id="artwork" mask="url(#cutouts)">
+<g id="artwork">
   <rect x="{vb_x}" y="{vb_y}" width="{vb_w}" height="{vb_h}" fill="url(#bg)"/>
   <g opacity="{art_opacity}">
 {art}
@@ -601,13 +619,12 @@ text {{ dominant-baseline: alphabetic; }}
         rx="1.5" fill="none" stroke="#242a33" stroke-width="0.3"/>
   {corner_bracket(SAFE / 2, SAFE / 2, 1, 1)}
   {corner_bracket(FACE_W - SAFE / 2, FACE_H - SAFE / 2, -1, -1)}
-{chr(10).join("  " + r for r in rings)}
+  <g id="holes">
+{chr(10).join("    " + h for h in holes)}
+  </g>
 {chr(10).join("  " + s for s in t)}
 </g>
 
-<g id="cut-lines" fill="none" stroke="#ff00ff" stroke-width="0.25">
-{chr(10).join("  " + c for c in cut)}
-</g>
 <g id="crop-marks">
 {chr(10).join("  " + c for c in crop)}
 </g>
