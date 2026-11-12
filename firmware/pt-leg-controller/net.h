@@ -11,12 +11,10 @@ bool netWifiUp();                            // WiFi เชื่อมต่อ
 bool netServerUp();                          // last HTTP call succeeded — คำขอ HTTP ล่าสุดสำเร็จหรือไม่
 bool netHasServer();                         // a server URL is configured — ตั้งที่อยู่เซิร์ฟเวอร์ไว้หรือไม่
 void netRadioOff();
-// Posts one SD-card session row to the server (/api/device/session). Blocking
-// like every call here, bounded by the same timeouts and the quiet period after a
-// failed connect. True on a 2xx, which is the only answer that lets the CYD
-// advance its sync mark.
-// [TH] ส่งแถวรอบการทำงานจากการ์ดหนึ่งแถวไปเซิร์ฟเวอร์ บล็อกเหมือนคำขออื่นในไฟล์นี้ แต่มีเพดานเวลาเดียวกัน
-//      และหยุดพักหลังเชื่อมต่อไม่ได้ คืน true เมื่อได้ 2xx ซึ่งเป็นคำตอบเดียวที่ให้จอเลื่อนตำแหน่งซิงก์ได้
+// Hands one SD-card session row to the net task for /api/device/session and
+// returns at once. Call again with the same uid: true once the server answered
+// 2xx, which is the only answer that lets the CYD advance its sync mark.
+// [TH] ฝากรายการรอบจากการ์ด SD ให้งานเครือข่ายส่ง แล้วคืนค่าทันที เรียกซ้ำด้วย uid เดิม จะได้ true เมื่อเซิร์ฟเวอร์ตอบ 2xx
 bool netPostSession(const String& uid, const String& whenLocal, const String& patientCode,
                     uint32_t durationSec, uint16_t reps, bool fault);                          // Wi-Fi fully off until the next netBegin — ปิด WiFi จนกว่าจะเรียก netBegin อีกครั้ง
 // Returns "start" | "stop" | "". `targetOut`, when given, receives the target the

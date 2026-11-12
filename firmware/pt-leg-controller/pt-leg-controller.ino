@@ -751,6 +751,9 @@ void setup() {
   //      บิตที่ช้าลงคือบิตที่กว้างขึ้น จุดที่อ่านค่าจะห่างจากขอบมากขึ้น
   //      เป็นวิธีเพิ่มความทนทานที่ถูกที่สุดบนสายจัมเปอร์เปลือยระหว่างสองบอร์ด
   //      ทั้งสองฝั่งต้องตั้งค่าเท่ากัน ต้องแฟลชพร้อมกัน
+  // 4 KB holds ~2 s of link traffic, so a network stall cannot overflow it and drop frames.
+  // [TH] บัฟเฟอร์ 4 KB เก็บข้อมูลจากจอได้ราว 2 วินาที ช่วงที่ค้างรอเครือข่ายจึงไม่ทำให้ข้อความหาย
+  Serial2.setRxBufferSize(4096);
   Serial2.begin(19200, SERIAL_8N1, 16, 17);  // UART to CYD — สาย UART ไปบอร์ดจอ (RX=16, TX=17)
   // Hold RX high while the other board is idle. A floating RX picks up noise
   // that the UART reads as start bits, prefixing every message with a run of
@@ -1019,7 +1022,7 @@ void loop() {
       gUploadPending = false;
       gLink.sendUploaded(gUpload.seq);
     } else {
-      gUploadNextTryMs = now + 10000;
+      gUploadNextTryMs = now + 2000;  // asks the net task again; never blocks — ถามงานเครือข่ายใหม่ ไม่บล็อก
     }
   }
 #if LOOP_DEBUG
@@ -1096,7 +1099,15 @@ void loop() {
   //      เพื่อไม่ให้การเปลี่ยนแปลงในอนาคตที่ย้ายจุดจับค่าใดจุดหนึ่งกลับไปเปิดช่องนี้อีกโดยไม่มีใครรู้ตัว
   //      และการวนซ้ำแบบไม่มีเครื่องหมายเมื่อพลาดจริง (ราวสี่พันล้าน เกิน 2000 สายที่ปกติดีจะสั่งหยุดรอบการทำงาน
   //      ราวหนึ่งวินาทีหลังเริ่มทุกครั้ง) ก็ไม่ใช่รูปแบบความล้มเหลวที่ควรเสี่ยงแลกกับเครื่องหมายเพียงตัวเดียว
-  if (gSession.running() && lastRx != 0 && (int32_t)(now - lastRx) > 2000)
+  // Measured fresh, right after gLink.poll(), not from the snapshot taken at the
+  // top of the loop. The snapshot charged this board's own network stalls to the
+  // display: a pass that spent two seconds in HTTP calls read as a dead link on the
+  // next pass, and a healthy session stopped itself. Frames the CYD sent during
+  // the stall wait in Serial2's enlarged RX buffer and were just read by poll().
+  // [TH] วัดใหม่หลัง gLink.poll() ไม่ใช้ค่าที่จับไว้ต้นลูป เพราะค่าเดิมนับเวลาที่บอร์ดนี้ค้างรอเครือข่ายเป็นความผิดของจอ
+  //      ทำให้รอบที่ปกติดีหยุดเอง ข้อความที่จอส่งมาระหว่างนั้นรออยู่ในบัฟเฟอร์รับของ Serial2 ที่ขยายไว้แล้ว
+  uint32_t rxFresh = gLink.lastRxMs();
+  if (gSession.running() && rxFresh != 0 && (int32_t)(millis() - rxFresh) > 2000)
     gSession.requestStop(now);
 
   static uint32_t lastPoll = 0, lastHb = 0, lastState = 0;

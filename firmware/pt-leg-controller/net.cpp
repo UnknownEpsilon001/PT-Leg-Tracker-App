@@ -1,99 +1,93 @@
-// ตัวรับส่งข้อมูลกับเซิร์ฟเวอร์ผ่าน HTTP: ทำงานบนคอร์เดียวกับลูปความปลอดภัย
-// จึงตั้งค่า timeout ให้สั้น เพื่อไม่ให้บล็อกการอ่านปุ่มและเพดานเวลาจ่ายไฟ
-// Server HTTP client. Runs on the same core as the safety loop, so timeouts are
-// kept short to avoid starving the limit-switch / actuator-cap servicing.
+// ตัวรับส่งข้อมูลกับเซิร์ฟเวอร์ผ่าน HTTP: ทำงานในงานเบื้องหลังบนคอร์ 0
+// ลูปความปลอดภัยบนคอร์ 1 จึงไม่ต้องรอเครือข่ายเลย ฟังก์ชันใน net.h แค่ฝากงานหรืออ่านผลล่าสุด
+// Server HTTP client. Every request runs in a background task on core 0, so the
+// safety loop on core 1 never waits on the network. The functions in net.h only
+// hand work to that task or read its latest results.
+//
+// Why: the loop used to make these calls itself, each bounded by a 400 ms
+// timeout. Over the internet (Tailscale Funnel, https) one request takes longer
+// than that, so requests failed, and while they ran the loop stopped feeding the
+// CYD: the screen flickered "controller not found" whenever Wi-Fi was up and
+// sessions stopped on a false link loss.
+// [TH] เหตุผล: เดิมลูปหลักเรียก HTTP เอง เมื่อต่อผ่านอินเทอร์เน็ต (https) คำขอหนึ่งใช้เวลานานเกิน
+//      คำขอจึงล้มเหลว และระหว่างรอ ลูปหยุดส่งข้อมูลให้จอ จอจึงกะพริบว่าไม่พบตัวควบคุม และรอบการทำงานหยุดเอง
 #include "net.h"
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
+
+// Everything below the lock is shared by the loop (core 1) and the net task
+// (core 0). Hold it only to copy values in or out, never across a request.
+// [TH] ตัวแปรใต้ล็อกนี้ใช้ร่วมกันระหว่างลูป (คอร์ 1) และงานเครือข่าย (คอร์ 0)
+//      ถือล็อกแค่ตอนคัดลอกค่าเข้าออก ห้ามถือไว้ระหว่างรอคำขอ
+static SemaphoreHandle_t lock = nullptr;
+static TaskHandle_t task = nullptr;
 
 static String baseUrl;
 static String devCode;
-static bool serverOk = false;       // สถานะเซิร์ฟเวอร์จากคำขอล่าสุด
-static uint32_t lastReconnect = 0;  // เวลาที่ลองเชื่อมต่อ WiFi ใหม่ครั้งล่าสุด
+static volatile bool serverOk = false;  // last request got a 2xx — คำขอล่าสุดได้ 2xx
+static uint32_t lastReconnect = 0;      // loop-only — ใช้ในลูปเท่านั้น
 
-// Small FIFO of pending events. A single slot dropped a "started" whenever a
-// "stopped" was queued before the first flushed on a slow link, leaving the
-// server with a stop for a session it never saw begin. Four slots comfortably
-// hold a start+stop (plus a spare) in flight; on overflow the OLDEST is dropped.
-// [TH] คิวเหตุการณ์แบบ FIFO ขนาดเล็ก เดิมมีช่องเดียวจึงทำให้เหตุการณ์ "started"
-//      ถูกทับด้วย "stopped" เมื่อเน็ตช้า เซิร์ฟเวอร์เลยเห็นแค่การหยุดของรอบที่ไม่เคยเห็นเริ่ม
-//      สี่ช่องพอสำหรับ start+stop ที่ค้างอยู่ ถ้าเต็มจะทิ้งตัวเก่าสุด
+// Small FIFO of pending events, so a "stopped" queued before its "started" was
+// delivered cannot overtake or replace it. On overflow the OLDEST is dropped.
+// [TH] คิวเหตุการณ์ขนาดเล็ก เพื่อไม่ให้ "stopped" แซงหรือทับ "started" ที่ยังส่งไม่ถึง
 static const int EV_MAX = 4;
 struct Ev { String type; uint32_t elapsed; uint16_t reps; String uid; };
 static Ev evq[EV_MAX];
 static int evHead = 0, evCount = 0;
-
-// A queue that cannot be delivered must not be retried every loop iteration.
-// Each failed attempt costs the full connect timeout, and an event the server
-// never accepts stays queued forever, so the safety loop would drop from
-// hundreds of iterations per second to two: the limit switches need two samples
-// 25 ms apart to be believed, and the panel STOP button the same, so both would
-// answer most of a second late while the motor is still driving.
-// [TH] คิวที่ส่งไม่สำเร็จต้องไม่ลองใหม่ทุกรอบลูป
-//      การลองแต่ละครั้งเสียเวลาเท่ากับ timeout เต็มๆ และเหตุการณ์ที่เซิร์ฟเวอร์ไม่รับจะค้างตลอดไป
-//      ลูปความปลอดภัยจะเหลือแค่ไม่กี่รอบต่อวินาที ลิมิตสวิตช์ต้องอ่านสองครั้งห่างกัน 25 มิลลิวินาที
-//      ปุ่ม STOP ก็เช่นกัน ทั้งคู่จึงตอบสนองช้าเกือบวินาทีทั้งที่มอเตอร์ยังขับอยู่
-static const uint32_t EV_RETRY_MS = 3000;
 static uint32_t evNextTryMs = 0;
+// Counts every removal from the head, so the task can tell whether the event it
+// sent is still the head when the answer comes back.
+// [TH] นับทุกครั้งที่เอาเหตุการณ์ออกจากหัวคิว เพื่อให้งานรู้ว่าเหตุการณ์ที่ส่งไปยังเป็นหัวคิวอยู่หรือไม่
+static uint32_t evPops = 0;
+static const uint32_t EV_RETRY_MS = 3000;
 
-// After a request that never reached a server (no route, connect timeout),
-// every HTTP call stays off for this long. A typed server URL with nothing behind
-// it would otherwise cost a 400 ms connect timeout on the poll every second and
-// on each heartbeat, and the safety loop would spend most of its time waiting on
-// a machine that is not there.
-// [TH] หลังจากคำขอที่ไปไม่ถึงเซิร์ฟเวอร์ (ไม่มีเส้นทาง หรือเชื่อมต่อไม่ทันเวลา) จะหยุดเรียก HTTP ทุกชนิดไว้นานเท่านี้
-//      ไม่อย่างนั้นที่อยู่เซิร์ฟเวอร์ที่พิมพ์ไว้แต่ไม่มีเครื่องอยู่จริง จะกินเวลารอเชื่อมต่อ 400 มิลลิวินาที
-//      ทุกวินาทีตอนถามคำสั่งและทุกครั้งที่ส่งสัญญาณชีพ ลูปความปลอดภัยจะเสียเวลาส่วนใหญ่ไปกับการรอเครื่องที่ไม่มีอยู่
-static const uint32_t NET_QUIET_MS = 30000;
-static uint32_t quietUntilMs = 0;
-static bool quietActive = false;
+// Latest heartbeat body; a newer one replaces an unsent older one.
+// [TH] ข้อมูลสัญญาณชีพล่าสุด อันใหม่ทับอันเก่าที่ยังไม่ได้ส่ง
+static String hbBody;
 
-// Whether an HTTP call may run now. Clears serverOk whenever it says no, for the
-// reason the comment in post() gives.
-// [TH] ตอนนี้เรียก HTTP ได้หรือไม่ ถ้าไม่ได้จะล้าง serverOk ด้วยเหตุผลตามคอมเมนต์ใน post()
-static bool canTalk() {
-  if (quietActive && (int32_t)(millis() - quietUntilMs) < 0) { serverOk = false; return false; }
-  quietActive = false;
-  if (!netWifiUp() || !baseUrl.length()) { serverOk = false; return false; }
-  return true;
-}
+// One SD-card session upload at a time. The loop polls netPostSession() for the
+// same uid until the task reports how it went.
+// [TH] ส่งรอบการทำงานจากการ์ด SD ทีละรายการ ลูปเรียก netPostSession() ซ้ำด้วย uid เดิมจนกว่างานจะรายงานผล
+enum UpState { UP_NONE, UP_PENDING, UP_OK, UP_FAIL };
+static UpState upState = UP_NONE;
+static String upUid, upBody;
 
-// A negative HTTPClient code is a transport failure: nothing answered. An HTTP
-// status, even 500, means a server is there, so it does not start the quiet time.
-// [TH] รหัสติดลบจาก HTTPClient คือการส่งล้มเหลว ไม่มีอะไรตอบกลับ
-//      ส่วนรหัสสถานะ HTTP แม้แต่ 500 แปลว่ามีเซิร์ฟเวอร์อยู่ จึงไม่เริ่มช่วงหยุดพัก
-static void noteResult(int code) {
-  serverOk = code >= 200 && code < 300;
-  if (code < 0) {
-    quietActive = true;
-    quietUntilMs = millis() + NET_QUIET_MS;
-  }
-}
+// The command poll result. A command stays until the loop takes it, so a "start"
+// cannot be overwritten by the empty answer of the next poll.
+// [TH] ผลการดึงคำสั่ง คำสั่งจะค้างไว้จนกว่าลูปจะหยิบไป "start" จึงไม่ถูกคำตอบว่างของรอบถัดไปทับ
+static String cmdPending;
+static int16_t cmdTarget = -1;
+static NetTimings cmdTimings{0, 0, 0, 0, 0};
 
-void netBegin(const DeviceSettings& s) {
-  // [TH] ตั้งค่า URL เซิร์ฟเวอร์และรหัสอุปกรณ์ แล้วเริ่มเชื่อมต่อ WiFi ถ้ามี SSID
-  baseUrl = s.serverUrl;
-  devCode = s.deviceCode;
-  if (s.wifiSsid.length()) {
-    WiFi.mode(WIFI_STA);
-    WiFi.begin(s.wifiSsid.c_str(), s.wifiPass.c_str());
-  }
-}
+// The request timeout no longer blocks the safety loop, so it can be long enough
+// for https over the internet.
+// [TH] เวลารอคำขอไม่ได้บล็อกลูปความปลอดภัยแล้ว จึงตั้งยาวพอสำหรับ https ผ่านอินเทอร์เน็ต
+static const uint16_t HTTP_TIMEOUT_MS = 4000;
+static const uint32_t POLL_MS = 1000;
+// After a request that never reached a server, wait this long before the next.
+// [TH] ถ้าคำขอไปไม่ถึงเซิร์ฟเวอร์ ให้รอเท่านี้ก่อนลองใหม่
+static const uint32_t NET_QUIET_MS = 5000;
+
+static void take() { xSemaphoreTake(lock, portMAX_DELAY); }
+static void give() { xSemaphoreGive(lock); }
 
 bool netWifiUp() { return WiFi.status() == WL_CONNECTED; }
 bool netServerUp() { return serverOk; }
 
-// The device code is typed on a touchscreen or hand-edited into settings.json on
-// the card, and neither path forbids a quote, a backslash, a space or an
-// ampersand. Pasted straight into a JSON body it produces a malformed request
-// the server rejects, and pasted into a query string it truncates or splits the
-// parameter — either way events and heartbeats stop arriving and the only signal
-// is the server showing as down, which reads as a network fault.
-// [TH] รหัสอุปกรณ์พิมพ์จากหน้าจอหรือแก้ในไฟล์บนการ์ดได้ ทั้งสองทางไม่ได้ห้ามอักขระพิเศษ
-//      ถ้าเอาไปต่อสตริงใส่ JSON ตรงๆ จะได้ข้อความผิดรูปแบบที่เซิร์ฟเวอร์ปฏิเสธ
-//      ถ้าใส่ใน query string ก็จะถูกตัดหรือแยกพารามิเตอร์ ผลคือข้อมูลไม่ถึงเซิร์ฟเวอร์
-//      และสิ่งเดียวที่เห็นคือสถานะเซิร์ฟเวอร์ดับ ซึ่งดูเหมือนปัญหาเครือข่าย
+bool netHasServer() {
+  if (!lock) return false;
+  take();
+  bool has = baseUrl.length() > 0;
+  give();
+  return has;
+}
+
+// The device code is typed by hand and may hold any character, so it is encoded
+// before it goes into a query string.
+// [TH] รหัสอุปกรณ์พิมพ์เองจึงอาจมีอักขระใดก็ได้ ต้องเข้ารหัสก่อนใส่ใน query string
 static String urlEncode(const String& s) {
   static const char* HEXDIG = "0123456789ABCDEF";
   String out;
@@ -110,59 +104,31 @@ static String urlEncode(const String& s) {
   return out;
 }
 
-static bool post(const String& path, const String& body) {
-  // Not reachable -> not "up". Returning without clearing serverOk left it frozen
-  // at the last success, so the UI showed a live server while WiFi was down.
-  if (!canTalk()) return false;
+// --- net task (core 0) -------------------------------------------------------
+
+static int httpPost(const String& url, const String& body) {
   HTTPClient http;
-  // Timeouts are the loop's blocking budget: this runs on the same core that
-  // services the limit switches and the actuator cap, so keep it short. The
-  // server is on the LAN; 400 ms is generous. (A full fix moves net I/O off the
-  // safety loop onto core 0.)
-  http.setConnectTimeout(400);
-  http.setTimeout(400);
-  http.begin(baseUrl + path);
+  http.setConnectTimeout(HTTP_TIMEOUT_MS);
+  http.setTimeout(HTTP_TIMEOUT_MS);
+  http.begin(url);
   http.addHeader("Content-Type", "application/json");
   int code = http.POST(body);
   http.end();
-  noteResult(code);
-  return serverOk;
+  return code;
 }
 
-String netPollCommand(int16_t* targetOut, NetTimings* timingsOut) {
-  // Defaulted up front so every early return — including the one right below —
-  // leaves the caller with -1 / all-zero rather than a stale value from a
-  // previous poll.
-  // [TH] ตั้งค่าเริ่มต้นไว้ก่อน เพื่อให้ทุกทางออกก่อนกำหนด รวมถึงบรรทัดถัดไปนี้เอง
-  //      ส่งค่ากลับเป็น -1 / ศูนย์ทั้งหมด ไม่ใช่ค่าค้างจากการถามครั้งก่อน
-  if (targetOut) *targetOut = -1;
-  if (timingsOut) *timingsOut = NetTimings{0, 0, 0, 0, 0};
-  if (!canTalk()) return "";
+static int httpPollCommand(const String& url) {
   HTTPClient http;
-  http.setConnectTimeout(400);
-  http.setTimeout(400);
-  String url = baseUrl + "/api/device/command";
-  if (devCode.length()) url += "?deviceId=" + urlEncode(devCode);
+  http.setConnectTimeout(HTTP_TIMEOUT_MS);
+  http.setTimeout(HTTP_TIMEOUT_MS);
   http.begin(url);
   int code = http.GET();
-  String cmd = "";
   if (code == 200) {
-    // The body is read as a bounded stream, not pulled into a String whole. This
-    // poll runs once a second, and serverUrl can point at anything someone typed
-    // — a captive portal, a router's web UI on the wrong port — which answers 200
-    // with a page. getString() would allocate that page every second on a board
-    // with ~150 KB of usable heap and fragment what the UART buffer, the event
-    // queue and the WiFi stack draw from. The filter keeps only the one field
-    // this function wants, so a large body costs nothing to parse either.
-    // [TH] อ่านเนื้อหาแบบสตรีมที่จำกัดขนาด ไม่ดึงมาเก็บเป็นสตริงทั้งก้อน
-    //      การถามคำสั่งทำทุกวินาที และ serverUrl ชี้ไปที่อะไรก็ได้ที่มีคนพิมพ์ไว้
-    //      เช่นหน้าล็อกอินไวไฟหรือหน้าเว็บของเราเตอร์ที่ตอบ 200 พร้อมหน้าเว็บทั้งหน้า
-    //      getString() จะจองหน่วยความจำเท่าหน้านั้นทุกวินาทีบนบอร์ดที่มีหน่วยความจำว่างราว 150 KB
-    //      และทำให้หน่วยความจำแตกกระจัดกระจายจนบัฟเฟอร์ UART คิวเหตุการณ์ และ WiFi ไม่พอใช้
-    //      ตัวกรองเก็บเฉพาะฟิลด์เดียวที่ต้องใช้ เนื้อหาก้อนใหญ่จึงไม่กินหน่วยความจำตอนแปลงด้วย
-    static const int MAX_BODY = 2048;
+    // Read as a bounded, filtered stream: serverUrl can point at any web page,
+    // and pulling a large page into a String every second fragments the heap.
+    // [TH] อ่านแบบจำกัดขนาดและกรองเฉพาะฟิลด์ที่ใช้ เพราะ URL อาจชี้ไปหน้าเว็บอะไรก็ได้
     int len = http.getSize();
-    if (len > MAX_BODY) {
+    if (len > 2048) {
       Serial.printf("net: command body %d bytes, ignored\n", len);
     } else {
       JsonDocument filter;
@@ -172,96 +138,183 @@ String netPollCommand(int16_t* targetOut, NetTimings* timingsOut) {
       JsonDocument doc;
       if (deserializeJson(doc, http.getStream(), DeserializationOption::Filter(filter)) ==
           DeserializationError::Ok) {
-        if (!doc["command"].isNull()) {
-          cmd = doc["command"].as<String>();
-          if (cmd.length() > 32) cmd = "";  // no command is that long — คำสั่งไม่ยาวขนาดนั้น
-        }
-        if (targetOut)
-          *targetOut = doc["targetReps"].isNull() ? -1 : (int16_t)doc["targetReps"];
-        if (timingsOut) {
-          JsonVariantConst t = doc["timings"];
-          timingsOut->liftSec = t["liftSec"] | (uint16_t)0;
-          timingsOut->lowerSec = t["lowerSec"] | (uint16_t)0;
-          timingsOut->holdSec = t["holdSec"] | (uint16_t)0;
-          timingsOut->restSec = t["restSec"] | (uint16_t)0;
-          timingsOut->maxTravelSec = t["maxTravelSec"] | (uint16_t)0;
-        }
+        String cmd = doc["command"].isNull() ? "" : doc["command"].as<String>();
+        if (cmd.length() > 32) cmd = "";  // no command is that long — คำสั่งไม่ยาวขนาดนั้น
+        JsonVariantConst t = doc["timings"];
+        NetTimings timings{t["liftSec"] | (uint16_t)0, t["lowerSec"] | (uint16_t)0,
+                           t["holdSec"] | (uint16_t)0, t["restSec"] | (uint16_t)0,
+                           t["maxTravelSec"] | (uint16_t)0};
+        take();
+        if (cmd.length()) cmdPending = cmd;
+        cmdTarget = doc["targetReps"].isNull() ? -1 : (int16_t)doc["targetReps"];
+        cmdTimings = timings;
+        give();
       }
     }
   }
   http.end();
-  noteResult(code);
+  return code;
+}
+
+static void netTask(void*) {
+  uint32_t lastPoll = 0, quietUntil = 0;
+  bool lastWasBeat = false;
+  for (;;) {
+    vTaskDelay(pdMS_TO_TICKS(20));
+    uint32_t now = millis();
+    if (!netWifiUp()) { serverOk = false; continue; }  // no route is not "up" — ไม่มีเส้นทางไม่ถือว่าออนไลน์
+    if ((int32_t)(now - quietUntil) < 0) continue;
+
+    // Pick ONE job, copying what it needs under the lock: events first (they
+    // carry session start/stop), then the session upload. The command poll and the
+    // heartbeat take turns when both are due: when each request takes about a
+    // second, a poll that always won left no turn for heartbeats, and the server
+    // marked a working device offline.
+    // [TH] เลือกงานเดียว และคัดลอกข้อมูลที่ต้องใช้ใต้ล็อก ลำดับ: เหตุการณ์ การส่งรอบ
+    //      ส่วนดึงคำสั่งกับสัญญาณชีพผลัดกันเมื่อถึงเวลาทั้งคู่ ถ้าดึงคำสั่งได้ก่อนเสมอ สัญญาณชีพจะไม่ได้ส่งเลย
+    enum Job { NONE, EVENT, UPLOAD, POLL, BEAT } job = NONE;
+    String url, body;
+    uint32_t sentPops = 0;
+    take();
+    if (baseUrl.length()) {
+      if (evCount && (int32_t)(now - evNextTryMs) >= 0) {
+        const Ev& e = evq[evHead];
+        JsonDocument d;
+        d["type"] = e.type;
+        d["elapsedSec"] = e.elapsed;
+        d["reps"] = e.reps;
+        d["deviceId"] = devCode;
+        if (e.uid.length()) d["sessionUid"] = e.uid;
+        serializeJson(d, body);
+        url = baseUrl + "/api/device/event";
+        sentPops = evPops;
+        job = EVENT;
+      } else if (upState == UP_PENDING) {
+        url = baseUrl + "/api/device/session";
+        body = upBody;
+        job = UPLOAD;
+      } else if (now - lastPoll >= POLL_MS && !(hbBody.length() && !lastWasBeat)) {
+        url = baseUrl + "/api/device/command";
+        if (devCode.length()) url += "?deviceId=" + urlEncode(devCode);
+        job = POLL;
+      } else if (hbBody.length()) {
+        url = baseUrl + "/api/device/heartbeat";
+        body = hbBody;
+        hbBody = "";
+        job = BEAT;
+      }
+    }
+    bool hasUrl = baseUrl.length() > 0;
+    give();
+    if (!hasUrl) serverOk = false;
+    if (job == NONE) continue;
+
+    if (job == POLL) lastPoll = now;
+    lastWasBeat = job == BEAT;
+    int code = job == POLL ? httpPollCommand(url) : httpPost(url, body);
+    bool ok = code >= 200 && code < 300;
+    serverOk = ok;
+    // Any HTTP status means a server answered; only a failed connect waits.
+    // [TH] ได้สถานะ HTTP ใดก็ตามแปลว่ามีเซิร์ฟเวอร์ตอบ รอเฉพาะกรณีเชื่อมต่อไม่ได้
+    if (code < 0) quietUntil = millis() + NET_QUIET_MS;
+
+    take();
+    if (job == EVENT) {
+      if (ok && evCount && evPops == sentPops) {
+        evHead = (evHead + 1) % EV_MAX;
+        evCount--;
+        evPops++;
+        evNextTryMs = millis();
+      } else if (ok) {
+        evNextTryMs = millis();  // dropped while in flight; the new head goes next
+      } else {
+        evNextTryMs = millis() + EV_RETRY_MS;
+      }
+    } else if (job == UPLOAD && upState == UP_PENDING) {
+      upState = ok ? UP_OK : UP_FAIL;
+    }
+    give();
+  }
+}
+
+// --- loop-side API (core 1) ---------------------------------------------------
+
+void netBegin(const DeviceSettings& s) {
+  if (!lock) lock = xSemaphoreCreateMutex();
+  String url = s.serverUrl;
+  // "http://pc:8000/" + "/api/..." made "//api", which the server answered 404.
+  // [TH] ตัด / ท้าย URL ทิ้ง ไม่อย่างนั้นจะได้ "//api" ซึ่งเซิร์ฟเวอร์ตอบ 404
+  while (url.endsWith("/")) url.remove(url.length() - 1);
+  take();
+  baseUrl = url;
+  devCode = s.deviceCode;
+  give();
+  if (!task) xTaskCreatePinnedToCore(netTask, "net", 12288, nullptr, 1, &task, 0);
+  if (s.wifiSsid.length()) {
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(s.wifiSsid.c_str(), s.wifiPass.c_str());
+  }
+}
+
+String netPollCommand(int16_t* targetOut, NetTimings* timingsOut) {
+  if (targetOut) *targetOut = -1;
+  if (timingsOut) *timingsOut = NetTimings{0, 0, 0, 0, 0};
+  if (!lock) return "";
+  take();
+  // Each poll result is handed over once, like the command: a cached target
+  // returned on every call would undo an edit made on the CYD each second.
+  // [TH] ผลการดึงแต่ละครั้งส่งให้ลูปครั้งเดียวเหมือนคำสั่ง ถ้าคืนค่าเก่าซ้ำทุกครั้ง จะทับค่าที่แก้บนจอทุกวินาที
+  String cmd = cmdPending;
+  cmdPending = "";
+  if (targetOut) *targetOut = cmdTarget;
+  if (timingsOut) *timingsOut = cmdTimings;
+  cmdTarget = -1;
+  cmdTimings = NetTimings{0, 0, 0, 0, 0};
+  give();
   return cmd;
 }
 
 void netQueueEvent(const char* type, uint32_t elapsedSec, uint16_t reps, const String& uid) {
+  if (!lock) return;
+  take();
   if (evCount == EV_MAX) {  // full: drop the oldest so the newest is never lost
     evHead = (evHead + 1) % EV_MAX;
     evCount--;
+    evPops++;
   }
   int tail = (evHead + evCount) % EV_MAX;
   evq[tail] = {String(type), elapsedSec, reps, uid};
   evCount++;
-}
-
-static void tryFlushEvent(uint32_t nowMs) {
-  if (evCount == 0) return;
-  // Signed compare so the wrap at 49 days does not park the queue for a month.
-  // [TH] เทียบแบบมีเครื่องหมาย เวลาที่วนกลับที่ 49 วันจะได้ไม่ทำให้คิวหยุดส่งเป็นเดือน
-  if ((int32_t)(nowMs - evNextTryMs) < 0) return;
-  const Ev& e = evq[evHead];  // FIFO: preserve start-before-stop ordering
-  // Serialised, not concatenated: ArduinoJson escapes whatever the device code
-  // contains. See urlEncode above for why that matters.
-  // [TH] ใช้ตัวสร้าง JSON แทนการต่อสตริง เพราะไลบรารีจะใส่อักขระหลีกให้เอง
-  JsonDocument d;
-  d["type"] = e.type;
-  d["elapsedSec"] = e.elapsed;
-  d["reps"] = e.reps;
-  d["deviceId"] = devCode;
-  if (e.uid.length()) d["sessionUid"] = e.uid;
-  String body;
-  serializeJson(d, body);
-  if (post("/api/device/event", body)) {
-    evHead = (evHead + 1) % EV_MAX;
-    evCount--;
-    evNextTryMs = nowMs;  // draining works: take the next one on the next pass
-                          // [TH] ส่งได้แล้ว รอบถัดไปส่งตัวต่อไปได้ทันที
-  } else {
-    evNextTryMs = nowMs + EV_RETRY_MS;
-  }
+  give();
 }
 
 void netHeartbeat(const char* state, uint32_t elapsedSec, uint16_t reps, uint16_t target) {
-  // [TH] สัญญาณชีพ: บอกเซิร์ฟเวอร์ว่าอุปกรณ์ยังทำงานและอยู่สถานะใด (ส่งแล้วไม่รอผล)
+  if (!lock) return;
   JsonDocument d;
   d["state"] = state;
   d["elapsedSec"] = elapsedSec;
   d["reps"] = reps;
   d["target"] = target;
+  take();
   d["deviceId"] = devCode;
-  String body;
-  serializeJson(d, body);
-  post("/api/device/heartbeat", body);
+  hbBody = "";  // replace an unsent one, never append to it — แทนที่อันที่ยังไม่ได้ส่ง ไม่ต่อท้าย
+  serializeJson(d, hbBody);
+  give();
 }
-
-// With no server configured the radio has one job, setting the clock, and once
-// that is done it is switched off: an idle machine then makes no reconnect
-// attempts at all. WIFI_OFF also stops netLoop's reconnect below, which only
-// runs in STA mode. netBegin() turns it back on after a settings change.
-// [TH] ถ้าไม่ได้ตั้งเซิร์ฟเวอร์ไว้ วิทยุมีหน้าที่เดียวคือตั้งนาฬิกา พอเสร็จแล้วจึงปิด
-//      เครื่องที่ว่างอยู่จะไม่พยายามเชื่อมต่อใหม่อีกเลย WIFI_OFF ยังหยุดการเชื่อมต่อใหม่ใน netLoop ด้านล่างด้วย
-//      เพราะส่วนนั้นทำงานเฉพาะโหมด STA ส่วน netBegin() จะเปิดกลับมาเมื่อมีการเปลี่ยนค่าตั้งค่า
-void netRadioOff() {
-  if (WiFi.getMode() == WIFI_OFF) return;
-  WiFi.disconnect(true);
-  WiFi.mode(WIFI_OFF);
-  Serial.println("wifi: clock is set and no server is configured, radio off");
-}
-
-bool netHasServer() { return baseUrl.length() > 0; }
 
 bool netPostSession(const String& uid, const String& whenLocal, const String& patientCode,
                     uint32_t durationSec, uint16_t reps, bool fault) {
+  if (!lock) return false;
+  take();
+  if (upUid == uid && upState == UP_OK) {
+    upState = UP_NONE;
+    give();
+    return true;
+  }
+  if (upUid == uid && upState == UP_PENDING) {
+    give();
+    return false;
+  }
   JsonDocument d;
   d["uid"] = uid;
   if (whenLocal.length() && whenLocal != "?") d["endedAt"] = whenLocal;
@@ -271,16 +324,27 @@ bool netPostSession(const String& uid, const String& whenLocal, const String& pa
   d["fault"] = fault;
   if (patientCode.length() && patientCode != "-") d["patientCode"] = patientCode;
   d["deviceId"] = devCode;
-  String body;
-  serializeJson(d, body);
-  return post("/api/device/session", body);
+  upBody = "";
+  serializeJson(d, upBody);
+  upUid = uid;
+  upState = UP_PENDING;
+  give();
+  return false;
+}
+
+// With no server configured the radio has one job, setting the clock, and once
+// that is done it is switched off.
+// [TH] ถ้าไม่ได้ตั้งเซิร์ฟเวอร์ไว้ วิทยุมีงานเดียวคือตั้งนาฬิกา ตั้งเสร็จแล้วก็ปิด
+void netRadioOff() {
+  if (WiFi.getMode() == WIFI_OFF) return;
+  WiFi.disconnect(true);
+  WiFi.mode(WIFI_OFF);
+  Serial.println("wifi: clock is set and no server is configured, radio off");
 }
 
 void netLoop(uint32_t nowMs) {
-  // [TH] งานเครือข่ายประจำลูป: ถ้า WiFi หลุดให้ลองเชื่อมใหม่ทุก 10 วินาที และส่งเหตุการณ์ที่ค้าง
   if (!netWifiUp() && WiFi.getMode() == WIFI_STA && nowMs - lastReconnect > 10000) {
     lastReconnect = nowMs;
     WiFi.reconnect();
   }
-  tryFlushEvent(nowMs);
 }
