@@ -510,6 +510,10 @@ void setup() {
   // [TH] ใช้ 19200 ให้ตรงกับฝั่งคอนโทรลเลอร์ สายนี้ใช้ไม่ถึง 500 ไบต์ต่อวินาที
   //      บิตที่กว้างขึ้นจะถูกอ่านที่จุดห่างจากขอบมากขึ้น เป็นการเพิ่มความทนต่อสัญญาณรบกวนที่ถูกที่สุดบนสายจัมเปอร์
   //      ทั้งสองฝั่งต้องตั้งค่าเท่ากัน ต้องแฟลชพร้อมกัน
+  // 2 KB, not the default 256 B (~130 ms at 19200): a full redraw, an SD write or
+  // a Wi-Fi scan can outlast that, and the overflow dropped controller frames.
+  // [TH] ขยายเป็น 2 KB จากค่าเดิม 256 ไบต์ เพราะการวาดจอ เขียน SD หรือสแกน WiFi นานกว่านั้นได้ และข้อความจากตัวควบคุมหาย
+  Serial2.setRxBufferSize(2048);
   Serial2.begin(19200, SERIAL_8N1, 22, 27);  // UART to controller (CYD free pins) — สาย UART ไปคอนโทรลเลอร์ (ขาว่างของ CYD)
   // Hold RX high while the controller is idle. Measured on this board: a
   // floating GPIO 22 prefixed every incoming frame with 25-32 bytes of 0xFF,

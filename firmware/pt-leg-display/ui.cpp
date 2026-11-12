@@ -562,8 +562,14 @@ void uiUpdateMain(bool running, Phase phase, uint32_t elapsedSec, uint16_t reps,
   bool jogShown = jog && linkUp && !running && !fault;
   bool showLogo = !running && !fault && !jogShown;
   if (showLogo) {
-    lv_obj_clear_flag(imgLogo, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_fade_in(imgLogo, 200, 0);
+    // Fade only when the logo comes back. Fading on every update restarted a
+    // full-logo animation each time the clock, Wi-Fi or server flag changed, which
+    // flickered the logo and kept the screen redrawing.
+    // [TH] ค่อยๆ แสดงเฉพาะตอนโลโก้กลับมา เดิมเริ่มแอนิเมชันใหม่ทุกครั้งที่นาฬิกาหรือสถานะเปลี่ยน โลโก้จึงกะพริบและจอวาดใหม่ไม่หยุด
+    if (lv_obj_has_flag(imgLogo, LV_OBJ_FLAG_HIDDEN)) {
+      lv_obj_clear_flag(imgLogo, LV_OBJ_FLAG_HIDDEN);
+      lv_obj_fade_in(imgLogo, 200, 0);
+    }
     lv_obj_clear_flag(lblBrand, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(lblClock, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(lblReps, LV_OBJ_FLAG_HIDDEN);
