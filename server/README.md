@@ -62,6 +62,11 @@ Manual equivalent:
 ```
 
 `--host 0.0.0.0` exposes the server on the LAN so phone + device can reach it.
+The launcher checks the local server at `127.0.0.1` every 10 seconds. In
+server-only mode it restarts Uvicorn after three failed checks or an unexpected
+process exit, and writes a visible `server alive` line once per minute. Five
+rapid startup failures stop the loop so a broken configuration cannot restart
+forever; the last log path is printed on screen.
 DB file: `ptlt.sqlite3` in the working directory (override with env var `PTLT_DB`).
 
 ## Test
