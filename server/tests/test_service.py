@@ -42,6 +42,16 @@ def test_stopped_event_closes_session_with_final_numbers(clock):
     assert row["reps"] == 25
 
 
+def test_stop_command_repeats_until_stopped_event(clock):
+    svc = make_service(clock)
+    svc.handle_event("started", 0, 0)
+    svc.queue_stop()
+    assert svc.fetch_command() == "stop"
+    assert svc.fetch_command() == "stop"
+    svc.handle_event("stopped", 5, 1)
+    assert svc.fetch_command() is None
+
+
 def test_stopped_with_no_open_session_is_noop(clock):
     svc = make_service(clock)
     assert svc.handle_event("stopped", 10, 1) is None

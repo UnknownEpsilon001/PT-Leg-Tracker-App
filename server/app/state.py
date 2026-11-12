@@ -41,9 +41,13 @@ class DeviceState:
         return self._pending_command
 
     def fetch_command(self) -> str | None:
-        """Consume-on-read: hand the command to the device and clear the slot.
+        """Hand out the command until a device event acknowledges it or it expires.
 
-        [TH] อ่านแล้วล้าง: ส่งคำสั่งให้อุปกรณ์แล้วเคลียร์ช่องทันที กันส่งซ้ำ
+        Repeating makes delivery survive a lost HTTP response. Controller start/stop
+        handling is idempotent while the corresponding transition is in progress.
+
+        [TH] ส่งคำสั่งซ้ำจนกว่าเหตุการณ์จากอุปกรณ์จะยืนยันหรือหมดเวลา เพื่อให้คำตอบ HTTP
+             ที่หายครั้งเดียวไม่ทำให้คำสั่งหายตาม
         """
         # A command poll proves the device is alive as much as a heartbeat does.
         # Over a slow link heartbeats can lag, and counting only them showed a
@@ -52,19 +56,23 @@ class DeviceState:
         #      ลิงก์ที่ช้าจะทำให้อุปกรณ์ที่ยังโพลอยู่ดูเหมือนออฟไลน์ และรอบที่กำลังทำงานถูกปิดเอง
         self._last_heartbeat_at = self._now()
         command = self.pending_command()
-        self._pending_command = None
         if command == "start":
-            self._start_command_fetched = True
-            self._start_fetched_at = self._now()
+            if not self._start_command_fetched:
+                self._start_command_fetched = True
+                self._start_fetched_at = self._now()
         elif command is not None:
             self._start_command_fetched = False
         return command
 
+    def clear_pending_command(self, command: str) -> None:
+        """Acknowledge one command without clearing a newer replacement."""
+        if self._pending_command == command:
+            self._pending_command = None
+
     def clear_pending_start(self) -> None:
         """Drop a still-queued 'start' if the start intent is already satisfied
         (e.g. the physical button won the race before the device fetched it)."""
-        if self._pending_command == "start":
-            self._pending_command = None
+        self.clear_pending_command("start")
 
     def clear_start_in_flight(self) -> None:
         """A start cannot be in flight across a completed session."""
@@ -90,10 +98,9 @@ class DeviceState:
     def fetch_desired_target(self) -> int | None:
         """The target the device should adopt, or None when it already has it.
 
-        Not consume-on-read, unlike commands: a command that is applied twice
-        starts two sessions, while a target that is applied twice is idempotent.
-        So it is repeated until the device's own heartbeat reports that value back,
-        which survives a dropped response.
+        Like commands, it is repeated until the device acknowledges it. A target
+        is acknowledged by the device's heartbeat reporting that value, which
+        survives a dropped response.
 
         The acknowledgement is not the only way out, though: it also expires after
         COMMAND_TTL_SEC, like the timings do. A device whose heartbeat omits the

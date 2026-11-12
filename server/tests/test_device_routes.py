@@ -10,11 +10,13 @@ def make_client(clock):
     return TestClient(create_app(service=SessionService(now=clock)))
 
 
-def test_command_endpoint_consumes(clock):
+def test_command_endpoint_repeats_until_device_event(clock):
     client = make_client(clock)
     service = client.app.state.service
     service.queue_start()
     assert client.get("/api/device/command").json()["command"] == "start"
+    assert client.get("/api/device/command").json()["command"] == "start"
+    client.post("/api/device/event", json={"type": "started"})
     assert client.get("/api/device/command").json()["command"] is None
 
 

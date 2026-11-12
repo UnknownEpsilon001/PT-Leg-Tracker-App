@@ -3,10 +3,12 @@
 from app.state import COMMAND_TTL_SEC, DEVICE_OFFLINE_AFTER_SEC, DeviceState
 
 
-def test_fetch_consumes_command(clock):
+def test_fetch_repeats_command_until_acknowledged(clock):
     state = DeviceState(now=clock)
     state.queue_command("start")
     assert state.fetch_command() == "start"
+    assert state.fetch_command() == "start"
+    state.clear_pending_command("start")
     assert state.fetch_command() is None
 
 

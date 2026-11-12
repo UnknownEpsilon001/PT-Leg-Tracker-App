@@ -79,10 +79,11 @@ const errorMsg = ref('')
 //      0 เป็นค่าที่เลือกได้จริง ("ทำไปเรื่อยๆ จนกว่าจะกด STOP") confirmValue จึงเป็นตัวเลขล้วนๆ ไม่มี null
 const confirmOpen = ref(false)
 const confirmValue = ref(0)
-const confirmLabel = computed(() => (confirmValue.value > 0 ? `${confirmValue.value} ครั้ง` : 'ไม่จำกัด'))
+const confirmLabel = computed(() =>
+  confirmValue.value > 0 ? `${confirmValue.value} ครั้ง` : 'ไม่จำกัด',
+)
 
-let poller: ReturnType<typeof setInterval> | null = null
-let ticker: ReturnType<typeof setInterval> | null = null
+let poller: ReturnType<typeof setTimeout> | null = null
 let disposed = false
 // Bumped by stopPolling so a poll still in flight when polling stops (stop(),
 // failOffline) cannot land afterwards and flip the phase back to 'running'.
@@ -115,24 +116,24 @@ const ringPct = computed(() => {
 
 function stopPolling() {
   pollGen++
-  if (poller) clearInterval(poller)
+  if (poller) clearTimeout(poller)
   poller = null
-  if (ticker) clearInterval(ticker)
-  ticker = null
 }
 
 function startPolling() {
   stopPolling()
   startingFails = 0
-  poller = setInterval(poll, 2000)
-  // smooth 1 s clock between polls; each poll overwrites with the server value
-  ticker = setInterval(() => {
-    if (phase.value === 'running' && elapsedSec.value !== null) elapsedSec.value++
-  }, 1000)
+  const gen = pollGen
+  // Run one request at a time. setInterval allowed a slow older response to
+  // land after a newer one and made the clock jump backwards (23, 21, 22...).
+  // The device/server value is authoritative; the app does not run a second
+  // competing session clock between responses.
+  // [TH] อ่านทีละคำขอเท่านั้น เดิม setInterval ทำให้คำตอบเก่าที่ช้ากว่ามาถึงหลังคำตอบใหม่
+  //      จนเวลาเด้งถอยหลัง แอปจึงใช้เวลาจากเครื่อง/เซิร์ฟเวอร์โดยตรง ไม่จับเวลาแข่งเอง
+  void poll(gen)
 }
 
-async function poll() {
-  const gen = pollGen
+async function poll(gen = pollGen) {
   try {
     const cur = await getCurrent(serverUrl.value, deviceCode.value)
     if (disposed || gen !== pollGen) return
@@ -166,6 +167,10 @@ async function poll() {
       stopPolling()
       phase.value = 'before'
       errorMsg.value = 'เชื่อมต่อไม่สำเร็จ ลองใหม่ภายหลัง'
+    }
+  } finally {
+    if (!disposed && gen === pollGen && (phase.value === 'starting' || phase.value === 'running')) {
+      poller = setTimeout(() => void poll(gen), 1000)
     }
   }
 }
@@ -321,7 +326,6 @@ function attach() {
   attachAvailable.value = false
   phase.value = 'running'
   startPolling()
-  void poll()
 }
 
 async function stop() {
@@ -406,11 +410,15 @@ onUnmounted(() => {
       <template v-if="confirmOpen">
         <div class="card">
           <h2>รอยืนยัน</h2>
-          <TargetStepper :value="confirmValue" :label="confirmLabel" prefix="" noun="เซ็ต" @step="stepConfirm" />
+          <TargetStepper
+            :value="confirmValue"
+            :label="confirmLabel"
+            prefix=""
+            noun="เซ็ต"
+            @step="stepConfirm"
+          />
         </div>
-        <button class="primary wide" @click="confirmStart">
-          <AppIcon name="check" /> ตกลง
-        </button>
+        <button class="primary wide" @click="confirmStart"><AppIcon name="check" /> ตกลง</button>
         <button class="secondary wide" @click="cancelConfirm">ยกเลิก</button>
       </template>
       <template v-else>
@@ -419,7 +427,9 @@ onUnmounted(() => {
           <PainScale v-model="painBefore" />
         </div>
         <TargetStepper :value="targetShown" :label="targetLabel" @step="stepTarget" />
-        <p class="card">สวมอุปกรณ์ให้เรียบร้อย (ดูวิธีใช้ได้ที่เมนู "วิธีใช้เครื่อง") แล้วกดเริ่ม</p>
+        <p class="card">
+          สวมอุปกรณ์ให้เรียบร้อย (ดูวิธีใช้ได้ที่เมนู "วิธีใช้เครื่อง") แล้วกดเริ่ม
+        </p>
         <p v-if="phase === 'starting' && connLost" class="hint">กำลังเชื่อมต่อ…</p>
         <p v-if="errorMsg" class="error">{{ errorMsg }}</p>
         <button
@@ -445,7 +455,14 @@ onUnmounted(() => {
       <div class="clock-ring">
         <svg viewBox="0 0 120 120" aria-hidden="true">
           <circle class="track" cx="60" cy="60" r="54" />
-          <circle class="arc" cx="60" cy="60" r="54" pathLength="100" :stroke-dasharray="`${ringPct} 100`" />
+          <circle
+            class="arc"
+            cx="60"
+            cy="60"
+            r="54"
+            pathLength="100"
+            :stroke-dasharray="`${ringPct} 100`"
+          />
         </svg>
         <p class="clock">{{ clock }}</p>
       </div>

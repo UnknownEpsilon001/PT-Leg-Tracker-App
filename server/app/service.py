@@ -108,6 +108,10 @@ class SessionService:
             return session_id
 
         dev.heartbeat("idle", elapsed_sec, reps, target=dev.live_target)
+        # A stop stays fetchable until this transition confirms that the device
+        # acted. This makes one lost command response harmless.
+        # [TH] คำสั่งหยุดจะยังถูกส่งซ้ำจนกว่าเหตุการณ์นี้ยืนยันว่าเครื่องทำตามแล้ว
+        dev.clear_pending_command("stop")
         # a start cannot be in flight across a completed session
         dev.clear_start_in_flight()
         # A stopped event that names its session closes that one and nothing else.

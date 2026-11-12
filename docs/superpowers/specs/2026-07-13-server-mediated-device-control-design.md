@@ -48,7 +48,7 @@ Base path `/api`. All bodies JSON. All server responses JSON.
 
 | Endpoint | Body → Response | Semantics |
 |---|---|---|
-| `GET /api/device/command` | → `{"command": "start" \| "stop" \| null}` | Consume-on-read: returning a command removes it from the queue. Queue holds at most one pending command. |
+| `GET /api/device/command` | → `{"command": "start" \| "stop" \| null}` | Repeats the pending command until the matching `started`/`stopped` event acknowledges it, or the 30 s TTL expires. Queue holds at most one pending command. |
 | `POST /api/device/event` | `{"type": "started" \| "stopped", "elapsedSec": n, "reps": n}` → `{"sessionId": "..."}` | ESP32 reports **every** transition, regardless of origin (button press or fetched command). `started` creates a session row (server issues the id and returns it); `stopped` closes the open session with final `elapsedSec`/`reps`. This single reporting path is what links dual control. |
 | `POST /api/device/heartbeat` | `{"state": "idle" \| "running", "elapsedSec": n, "reps": n}` → `{"ok": true}` | ~1 s cadence while running, ~5 s while idle. Updates live numbers and device last-seen. |
 

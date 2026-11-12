@@ -62,6 +62,19 @@ node scripts/mock-esp32.mjs http://localhost:8000
 
 Press `b` to simulate the physical start/stop button, `q` to quit.
 
+## Interactive control test (real device)
+
+Start the server, then double-click `device-control.cmd`. The menu can queue
+start/stop commands, inspect live state, change the target/timings, and watch the
+device-reported time and repetitions.
+
+Defaults: server `http://localhost:8000`, device code `default`. To use another
+server or device from PowerShell:
+
+```powershell
+.\device-control.cmd -ServerUrl http://192.168.1.20:8000 -DeviceId KNEE-01
+```
+
 ## API
 
 - ESP32: `GET /api/device/command`, `POST /api/device/event`, `POST /api/device/heartbeat`, `POST /api/device/session` (a finished session from the device's SD card, sent after the fact; merged by `uid`, safe to repeat)
