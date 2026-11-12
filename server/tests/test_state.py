@@ -162,3 +162,11 @@ def test_device_online_tracking(clock):
     clock.advance(DEVICE_OFFLINE_AFTER_SEC + 1)
     assert state.device_online() is False
     assert state.seconds_since_heartbeat() == DEVICE_OFFLINE_AFTER_SEC + 1
+
+
+def test_command_poll_keeps_device_online_without_heartbeats(clock):
+    state = DeviceState(now=clock)
+    state.heartbeat("running", 0, 0)
+    clock.advance(DEVICE_OFFLINE_AFTER_SEC + 1)
+    state.fetch_command()
+    assert state.device_online()

@@ -2,11 +2,12 @@
 # FastAPI app factory: enables CORS, wires the service, mounts device + app routers.
 import logging
 import os
+import re
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from .routes_app import router as app_router
@@ -65,6 +66,12 @@ def create_app(service: SessionService | None = None) -> FastAPI:
     def version() -> dict[str, str]:
         return build
 
+    # Browsers ask for this on every visit; answer empty instead of a logged 404.
+    # [TH] เบราว์เซอร์ขอไฟล์นี้ทุกครั้งที่เปิด ตอบว่างไว้แทน 404 ที่ไปรกบันทึก
+    @app.get("/favicon.ico", include_in_schema=False)
+    def favicon() -> Response:
+        return Response(status_code=204)
+
     # Writes and failures only: polls and heartbeats would bury them. The query
     # string stays out of the log because it can carry a patient code.
     # [TH] บันทึกเฉพาะคำสั่งเขียนและรายการที่ล้มเหลว เพราะการโพลและ heartbeat จะกลบข้อมูลหมด
@@ -78,6 +85,17 @@ def create_app(service: SessionService | None = None) -> FastAPI:
         ):
             log.info("[API] %s %s -> %d", request.method, path, response.status_code)
         return response
+
+    # Devices flashed before the firmware fix send "//api/..." when their server URL
+    # ends in "/". Fold repeated slashes so they are not answered 404. Registered
+    # last, so it runs before routing and before the log line above.
+    # [TH] เครื่องที่ยังไม่ได้อัปเดตเฟิร์มแวร์จะส่ง "//api/..." ถ้า URL ลงท้ายด้วย / จึงรวม / ซ้ำให้เหลืออันเดียว
+    @app.middleware("http")
+    async def fold_slashes(request: Request, call_next):
+        path = request.scope["path"]
+        if "//" in path:
+            request.scope["path"] = re.sub(r"/{2,}", "/", path)
+        return await call_next(request)
 
     return app
 

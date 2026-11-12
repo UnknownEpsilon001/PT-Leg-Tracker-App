@@ -45,6 +45,12 @@ class DeviceState:
 
         [TH] อ่านแล้วล้าง: ส่งคำสั่งให้อุปกรณ์แล้วเคลียร์ช่องทันที กันส่งซ้ำ
         """
+        # A command poll proves the device is alive as much as a heartbeat does.
+        # Over a slow link heartbeats can lag, and counting only them showed a
+        # polling device as offline and auto-closed its running session.
+        # [TH] การดึงคำสั่งก็ยืนยันว่าอุปกรณ์ยังอยู่เหมือนสัญญาณชีพ ถ้านับแค่สัญญาณชีพ
+        #      ลิงก์ที่ช้าจะทำให้อุปกรณ์ที่ยังโพลอยู่ดูเหมือนออฟไลน์ และรอบที่กำลังทำงานถูกปิดเอง
+        self._last_heartbeat_at = self._now()
         command = self.pending_command()
         self._pending_command = None
         if command == "start":
@@ -176,6 +182,8 @@ class DeviceState:
         return self._now() - self._last_heartbeat_at <= DEVICE_OFFLINE_AFTER_SEC
 
     def seconds_since_heartbeat(self) -> float | None:
+        # Since the device was last heard from: a heartbeat or a command poll.
+        # [TH] นับจากครั้งล่าสุดที่ได้ยินอุปกรณ์ ทั้งสัญญาณชีพและการดึงคำสั่ง
         if self._last_heartbeat_at is None:
             return None
         return self._now() - self._last_heartbeat_at

@@ -12,3 +12,13 @@ def test_version_names_the_build(monkeypatch):
     assert body["name"] == "server"
     assert body["commit"] == "abc1234"
     assert body["branch"] == "main"
+
+
+def test_favicon_is_empty_not_404():
+    assert TestClient(create_app()).get("/favicon.ico").status_code == 204
+
+
+def test_double_slash_from_old_firmware_still_routes():
+    client = TestClient(create_app())
+    assert client.get("http://testserver//api/device/command?deviceId=default").status_code == 200
+    assert client.get("/api//sessions/current").status_code == 200
