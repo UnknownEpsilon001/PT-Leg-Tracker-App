@@ -12,16 +12,28 @@
 #define BUILD_STR_(x) #x
 #define BUILD_STR(x) BUILD_STR_(x)
 
+// flash.ps1 writes build_info.h next to the sketch for each build and deletes it
+// after, so only the sketch recompiles when the commit changes; the core and the
+// libraries stay cached. The -D flags are the older way and still work.
+// [TH] flash.ps1 เขียน build_info.h ไว้ข้างสเก็ตช์ทุกครั้งที่คอมไพล์แล้วลบทิ้ง เปลี่ยนคอมมิตจึงคอมไพล์ใหม่แค่สเก็ตช์
+#if __has_include("build_info.h")
+#include "build_info.h"
+#endif
+
+#ifndef BUILD_COMMIT_STR
 #ifdef BUILD_COMMIT
 #define BUILD_COMMIT_STR BUILD_STR(BUILD_COMMIT)
 #else
 #define BUILD_COMMIT_STR "unknown"
 #endif
+#endif
 
+#ifndef BUILD_BRANCH_STR
 #ifdef BUILD_BRANCH
 #define BUILD_BRANCH_STR BUILD_STR(BUILD_BRANCH)
 #else
 #define BUILD_BRANCH_STR "unknown"
+#endif
 #endif
 
 #define BUILD_TIME_STR __DATE__ " " __TIME__

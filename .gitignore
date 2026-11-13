@@ -26,3 +26,6 @@ CLAUDE.md
 
 # Server run logs
 server/logs/
+
+# Generated per build by firmware/tools/flash.ps1
+firmware/*/build_info.h
