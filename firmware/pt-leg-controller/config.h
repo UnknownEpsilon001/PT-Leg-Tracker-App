@@ -245,6 +245,9 @@
 // [TH] รหัสจับคู่ตั้งต้นของเครื่องก่อนตั้งค่าใดๆ ตรงกับค่าเริ่มต้นของแอปบนมือถือ
 //      เครื่องใหม่กับแอปใหม่จึงจับคู่กันได้เลยโดยไม่ต้องพิมพ์ ถ้าเป็นค่าว่างจะจับคู่ไม่ได้เลย
 #define DEFAULT_DEVICE_CODE "default"
+// The project's current server, used when no URL is saved. Same as the app default.
+// [TH] เซิร์ฟเวอร์ปัจจุบันของโครงการ ใช้เมื่อไม่ได้บันทึก URL ไว้ ตรงกับค่าตั้งต้นของแอป
+#define DEFAULT_SERVER_URL "https://med-flex-server-audio-room.tail325fc2.ts.net"
 
 // safety cap: max time a stroke (LIFT/LOWER/SAFE-LOWER) may drive before FAULT
 // [TH] เพดานความปลอดภัย: เวลาสูงสุดที่มอเตอร์วิ่งได้ต่อจังหวะก่อนขึ้นสถานะ FAULT

@@ -1,7 +1,7 @@
 # Interactive app-side controller for testing a real therapy device through the server.
 # LEO WAS HERE ;3
 param(
-    [string]$ServerUrl = 'http://localhost:8000',
+    [string]$ServerUrl = 'https://med-flex-server-audio-room.tail325fc2.ts.net',
     [string]$DeviceId = 'default'
 )
 

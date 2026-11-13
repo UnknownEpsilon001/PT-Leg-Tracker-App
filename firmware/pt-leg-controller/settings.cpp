@@ -48,6 +48,9 @@ void settingsLoad(DeviceSettings& s) {
   s.wifiSsid = p.getString("ssid", "");
   s.wifiPass = p.getString("pass", "");
   s.serverUrl = p.getString("server", "");
+  // An empty or missing URL falls back to the project's current server.
+  // [TH] ถ้าไม่มีหรือว่าง ใช้เซิร์ฟเวอร์ปัจจุบันของโครงการ
+  if (!s.serverUrl.length()) s.serverUrl = DEFAULT_SERVER_URL;
   s.deviceCode = p.getString("code", DEFAULT_DEVICE_CODE);
   s.maxTravelSec = clampSec(p.getUShort("maxtravel", DEFAULT_MAX_TRAVEL_SEC), 1, 20,
                             DEFAULT_MAX_TRAVEL_SEC, "maxtravel");
