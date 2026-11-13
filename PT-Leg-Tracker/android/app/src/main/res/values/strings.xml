@@ -1,7 +1,7 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
-    <string name="app_name">Med-Flex Auto Smart</string>
-    <string name="title_activity_main">Med-Flex Auto Smart</string>
+    <string name="app_name">Med-Flex App</string>
+    <string name="title_activity_main">Med-Flex App</string>
     <string name="package_name">com.unknownaimo.ptlegtracker</string>
     <string name="custom_url_scheme">com.unknownaimo.ptlegtracker</string>
 </resources>

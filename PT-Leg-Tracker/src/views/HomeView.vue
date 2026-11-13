@@ -51,6 +51,11 @@ onMounted(async () => {
     <button class="settings-link" @click="$router.push({ name: 'settings' })">
       <AppIcon name="settings" /> ตั้งค่า
     </button>
+    <img
+      src="/editable-content/images/branding/inventor.png"
+      alt="ตราสิ่งประดิษฐ์ของคนรุ่นใหม่ สำนักงานคณะกรรมการการอาชีวศึกษา"
+      class="inventor"
+    />
   </main>
 </template>
 
@@ -60,6 +65,12 @@ onMounted(async () => {
   width: 9rem;
   max-width: 50%;
   margin: 0.5rem auto 1.25rem;
+}
+
+.inventor {
+  display: block;
+  width: 4.5rem;
+  margin: 1.5rem auto 0.5rem;
 }
 
 @media (prefers-reduced-motion: no-preference) {

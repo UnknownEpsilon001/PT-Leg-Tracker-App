@@ -17,7 +17,7 @@ async function schedule(time: string): Promise<void> {
     notifications: [
       {
         id: ALARM_ID,
-        title: 'Med-Flex Auto Smart',
+        title: 'Med-Flex App',
         body: 'ถึงเวลาบริหารเข่าแล้ว',
         schedule: { on: parseTime(time), allowWhileIdle: true },
       },
