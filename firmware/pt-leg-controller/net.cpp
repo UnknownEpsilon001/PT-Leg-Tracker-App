@@ -14,6 +14,7 @@
 #include "net.h"
 #include <WiFi.h>
 #include <HTTPClient.h>
+#include <WiFiClientSecure.h>
 #include <ArduinoJson.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
@@ -112,23 +113,49 @@ static String urlEncode(const String& s) {
 
 // --- net task (core 0) -------------------------------------------------------
 
-static int httpPost(const String& url, const String& body) {
-  HTTPClient http;
+// One connection, kept open and reused between requests. A fresh https
+// connection per request cost 2.1 to 3.0 s each (measured 2026-11-13 over
+// Tailscale Funnel), almost all of it the TLS handshake, so a start took two of
+// them to reach the motor and two more to show as running in the app.
+// The certificate is not checked, as before with http.begin(url).
+// [TH] ใช้การเชื่อมต่อเดียวซ้ำระหว่างคำขอ เดิมเปิด https ใหม่ทุกครั้งใช้ 2.1 ถึง 3.0 วินาที
+//      แทบทั้งหมดคือการจับมือ TLS คำสั่งเริ่มจึงถึงมอเตอร์ช้า ไม่ตรวจใบรับรองเหมือนเดิม
+static WiFiClientSecure tlsClient;  // net task only — ใช้ในงานเครือข่ายเท่านั้น
+static WiFiClient plainClient;
+static HTTPClient http;
+
+static void beginRequest(const String& url) {
+  http.setReuse(true);
   http.setConnectTimeout(HTTP_TIMEOUT_MS);
   http.setTimeout(HTTP_TIMEOUT_MS);
-  http.begin(url);
+  if (url.startsWith("https://")) {
+    tlsClient.setInsecure();
+    http.begin(tlsClient, url);
+  } else {
+    http.begin(plainClient, url);
+  }
+}
+
+// Keeps the connection only after a clean, fully read answer. Anything else
+// closes it, so leftover bytes can never be read as the next reply.
+// [TH] เก็บการเชื่อมต่อไว้เฉพาะเมื่อได้คำตอบครบและเรียบร้อย กรณีอื่นปิดทิ้ง เศษข้อมูลจะได้ไม่ถูกอ่านเป็นคำตอบถัดไป
+static void endRequest(bool keep) {
+  if (!keep) http.setReuse(false);
+  http.end();
+}
+
+static int httpPost(const String& url, const String& body) {
+  beginRequest(url);
   http.addHeader("Content-Type", "application/json");
   int code = http.POST(body);
-  http.end();
+  endRequest(code >= 200 && code < 300);
   return code;
 }
 
 static int httpPollCommand(const String& url) {
-  HTTPClient http;
-  http.setConnectTimeout(HTTP_TIMEOUT_MS);
-  http.setTimeout(HTTP_TIMEOUT_MS);
-  http.begin(url);
+  beginRequest(url);
   int code = http.GET();
+  bool keep = false;
   if (code == 200) {
     // Read as a bounded, filtered stream: serverUrl can point at any web page,
     // and pulling a large page into a String every second fragments the heap.
@@ -145,6 +172,7 @@ static int httpPollCommand(const String& url) {
       JsonDocument doc;
       if (deserializeJson(doc, http.getStream(), DeserializationOption::Filter(filter)) ==
           DeserializationError::Ok) {
+        keep = len >= 0;  // a known length was read to its end — อ่านครบตามความยาวที่บอกไว้
         String cmd = doc["command"].isNull() ? "" : doc["command"].as<String>();
         if (cmd.length() > 32) cmd = "";  // no command is that long — คำสั่งไม่ยาวขนาดนั้น
         // No id (an older server) keeps the old behaviour: every answer counts.
@@ -177,7 +205,7 @@ static int httpPollCommand(const String& url) {
       }
     }
   }
-  http.end();
+  endRequest(keep);
   return code;
 }
 
@@ -240,8 +268,16 @@ static void netTask(void*) {
 
     if (job == POLL) lastPoll = now;
     lastWasBeat = job == BEAT;
+    uint32_t t0 = millis();
     int code = job == POLL ? httpPollCommand(url) : httpPost(url, body);
     bool ok = code >= 200 && code < 300;
+    // Slow or failed requests only: each one delays commands reaching the motor.
+    // [TH] พิมพ์เฉพาะคำขอที่ช้าหรือล้มเหลว เพราะทุกคำขอที่ช้าทำให้คำสั่งถึงมอเตอร์ช้าลง
+    uint32_t took = millis() - t0;
+    if (!ok || took > 1500) {
+      static const char* const names[] = {"none", "event", "upload", "poll", "beat"};
+      Serial.printf("[NET] %s -> %d in %lu ms\n", names[job], code, (unsigned long)took);
+    }
     serverOk = ok;
     // Any HTTP status means a server answered; only a failed connect waits.
     // [TH] ได้สถานะ HTTP ใดก็ตามแปลว่ามีเซิร์ฟเวอร์ตอบ รอเฉพาะกรณีเชื่อมต่อไม่ได้
