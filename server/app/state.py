@@ -4,9 +4,12 @@
      ใช้เป็นตัวกลางระหว่างแอป (สั่ง start/stop) กับ ESP32 (มาดึงคำสั่งและส่งสัญญาณชีพ)
 """
 
+import logging
 import time
 
 COMMAND_TTL_SEC = 30  # คำสั่งที่ค้างเกินนี้ถือว่าหมดอายุ (วินาที)
+LIVE_EXTRAPOLATE_MAX_SEC = 5  # นับเวลาต่อเองได้ไม่เกินนี้หลังสัญญาณชีพล่าสุด (วินาที)
+log = logging.getLogger("uvicorn.error")
 DEVICE_OFFLINE_AFTER_SEC = 10  # ไม่ได้ยินสัญญาณชีพเกินนี้ถือว่าอุปกรณ์ออฟไลน์ (วินาที)
 
 
@@ -14,12 +17,15 @@ class DeviceState:
     def __init__(self, now=time.time):
         self._now = now
         self._pending_command: str | None = None
+        self.command_id = ""
         self._queued_at = 0.0
         self._start_command_fetched = False
         self._start_fetched_at = 0.0
         self._last_heartbeat_at: float | None = None
         self.live_state = "idle"
         self.live_elapsed_sec = 0
+        self._live_at = 0.0  # when live_* last came from the device — เวลาที่ได้ค่าสดจากอุปกรณ์ล่าสุด
+        self._handed_out: str | None = None
         self.live_reps = 0
         self.live_target = 0
         self._desired_target: int | None = None
@@ -30,6 +36,22 @@ class DeviceState:
     def queue_command(self, command: str) -> None:
         self._pending_command = command
         self._queued_at = self._now()
+        # A new id per queued command, so a device can tell a repeat of the one it
+        # already acted on from a new one. Millisecond time, so ids from a restarted
+        # server never collide with ones a device remembers.
+        # [TH] รหัสใหม่ทุกครั้งที่สั่ง ให้อุปกรณ์แยกคำสั่งซ้ำออกจากคำสั่งใหม่ได้ ใช้เวลาเป็นมิลลิวินาทีจึงไม่ซ้ำแม้เซิร์ฟเวอร์รีสตาร์ต
+        self.command_id = str(max(int(self._now() * 1000), int(self.command_id or 0) + 1))
+
+    def cancel_start(self) -> bool:
+        """Withdraw a start that has not become a session. True if the device had
+        already fetched it, so it may be moving and needs a stop.
+
+        [TH] ยกเลิก start ที่ยังไม่กลายเป็นรอบ คืน True ถ้าอุปกรณ์ดึงไปแล้ว ซึ่งอาจเริ่มขยับแล้วและต้องสั่งหยุด
+        """
+        fetched = self.start_in_flight()
+        self.clear_pending_command("start")
+        self._start_command_fetched = False
+        return fetched
 
     def pending_command(self) -> str | None:
         """Pending command, dropping it first if older than COMMAND_TTL_SEC."""
@@ -56,6 +78,12 @@ class DeviceState:
         #      ลิงก์ที่ช้าจะทำให้อุปกรณ์ที่ยังโพลอยู่ดูเหมือนออฟไลน์ และรอบที่กำลังทำงานถูกปิดเอง
         self._last_heartbeat_at = self._now()
         command = self.pending_command()
+        # Logged on first hand-out only: the command repeats every poll until acked.
+        # [TH] บันทึกเฉพาะครั้งแรกที่ส่งคำสั่ง เพราะคำสั่งถูกส่งซ้ำทุกครั้งที่โพลจนกว่าจะยืนยัน
+        if command != self._handed_out:
+            if command is not None:
+                log.info("[CMD] %s handed to device", command)
+            self._handed_out = command
         if command == "start":
             if not self._start_command_fetched:
                 self._start_command_fetched = True
@@ -173,6 +201,7 @@ class DeviceState:
         #      (ทำไม่จำกัดจำนวนครั้ง) ถ้าถือว่าฟิลด์ที่หายไปคือ 0 จะไปยืนยันความต้องการนั้นทิ้งไป
         #      และทับ live_target ด้วยค่าที่อุปกรณ์ไม่ได้รายงานมาจริง จึงข้ามทั้งสองกรณีถ้าไม่มีฟิลด์นี้ส่งมา
         self._last_heartbeat_at = self._now()
+        self._live_at = self._now()
         self.live_state = state
         self.live_elapsed_sec = elapsed_sec
         self.live_reps = reps
@@ -181,6 +210,20 @@ class DeviceState:
         self.live_target = target
         if self._desired_target is not None and target == self._desired_target:
             self._desired_target = None
+
+    def live_elapsed_now(self) -> int:
+        """Session elapsed as of now, not as of the last heartbeat.
+
+        Over a slow link heartbeats arrive every two or three seconds, so the raw
+        value stalls and then jumps. While running it advances with the server
+        clock, capped so a device that went quiet is not shown counting on.
+        [TH] เวลาที่ผ่านไปของรอบ ณ ตอนนี้ ไม่ใช่ ณ สัญญาณชีพล่าสุด
+             ลิงก์ที่ช้าทำให้ค่าดิบค้างแล้วกระโดด ระหว่างทำงานจึงนับต่อด้วยนาฬิกาเซิร์ฟเวอร์ แต่จำกัดไว้
+        """
+        if self.live_state != "running":
+            return self.live_elapsed_sec
+        ahead = min(max(self._now() - self._live_at, 0.0), LIVE_EXTRAPOLATE_MAX_SEC)
+        return self.live_elapsed_sec + int(ahead)
 
     def device_online(self) -> bool:
         # [TH] อุปกรณ์ออนไลน์ = เพิ่งได้ยินสัญญาณชีพภายในเวลาที่กำหนด

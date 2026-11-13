@@ -172,3 +172,15 @@ def test_command_poll_keeps_device_online_without_heartbeats(clock):
     clock.advance(DEVICE_OFFLINE_AFTER_SEC + 1)
     state.fetch_command()
     assert state.device_online()
+
+
+def test_live_elapsed_counts_on_between_heartbeats_but_capped(clock):
+    state = DeviceState(now=clock)
+    state.heartbeat("running", 10, 2)
+    clock.advance(2)
+    assert state.live_elapsed_now() == 12
+    clock.advance(60)
+    assert state.live_elapsed_now() == 15  # capped: a silent device is not shown counting on
+    state.heartbeat("idle", 20, 3)
+    clock.advance(5)
+    assert state.live_elapsed_now() == 20

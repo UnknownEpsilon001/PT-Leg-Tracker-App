@@ -5,6 +5,8 @@
      พร้อมกลไกเยียวยา เช่น ปิดเซสชันค้างเมื่ออุปกรณ์เงียบหรือพลาดเหตุการณ์ 'stopped'
 """
 
+import functools
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -13,10 +15,32 @@ from .db import DEFAULT_DEVICE_ID
 from .state import DeviceState
 
 AUTO_CLOSE_AFTER_SEC = 60
+# An idle heartbeat closes an open session only once the session is this old: a
+# heartbeat built before the start can land just after the started event.
+# [TH] สัญญาณชีพ idle จะปิดรอบที่เปิดอยู่ได้เมื่อรอบมีอายุเกินนี้ เพราะสัญญาณชีพที่สร้างก่อนเริ่มอาจมาถึงหลังเหตุการณ์ started
+HEAL_GRACE_SEC = 10
 
 # The device writes its card in Thai local time, which has no DST.
 # [TH] อุปกรณ์เขียนเวลาลงการ์ดเป็นเวลาไทย ซึ่งไม่มีการปรับเวลาตามฤดูกาล
 DEVICE_TZ = timezone(timedelta(hours=7))
+
+
+def _locked(method):
+    """Run the method under the service lock.
+
+    FastAPI runs these sync routes on a thread pool, so two requests could interleave
+    inside a check-then-act (two starts both passing the checks, a poll reading a
+    command with another command's id). One lock for the whole service is enough at
+    a few requests a second.
+    [TH] FastAPI รันเส้นทางแบบ sync บนหลายเธรด สองคำขออาจสลับกันกลางการตรวจแล้วทำ จึงล็อกทั้งบริการด้วยล็อกเดียว
+    """
+
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+
+    return wrapper
 
 
 class ConflictError(Exception):
@@ -26,6 +50,7 @@ class ConflictError(Exception):
 class SessionService:
     def __init__(self, now=time.time):
         self._now = now
+        self._lock = threading.RLock()
         self._devices: dict[str, DeviceState] = {}
 
     def _device(self, device_id: str) -> DeviceState:
@@ -45,12 +70,33 @@ class SessionService:
 
     # --- ESP32-facing ---
 
+    @_locked
     def fetch_command(self, device_id: str = DEFAULT_DEVICE_ID) -> str | None:
         return self._device(device_id).fetch_command()
 
+    @_locked
+    def poll_command(self, device_id: str = DEFAULT_DEVICE_ID) -> dict:
+        """Everything a device poll returns, read in one step so the command and its
+        id always belong together.
+        [TH] ทุกอย่างที่การโพลของอุปกรณ์ได้รับ อ่านในขั้นเดียว คำสั่งกับรหัสของมันจึงตรงกันเสมอ
+        """
+        dev = self._device(device_id)
+        return {
+            "command": dev.fetch_command(),
+            "commandId": dev.command_id,
+            "targetReps": dev.fetch_desired_target(),
+            "timings": dev.fetch_desired_timings(),
+        }
+
+    @_locked
+    def command_id(self, device_id: str = DEFAULT_DEVICE_ID) -> str:
+        return self._device(device_id).command_id
+
+    @_locked
     def fetch_target(self, device_id: str = DEFAULT_DEVICE_ID) -> int | None:
         return self._device(device_id).fetch_desired_target()
 
+    @_locked
     def set_target(self, reps: int, device_id: str = DEFAULT_DEVICE_ID) -> None:
         # Never a ConflictError: the target is editable while a session runs, and
         # the controller applies a lowered one at the end of the current rest.
@@ -58,12 +104,15 @@ class SessionService:
         #      และคอนโทรลเลอร์จะใช้ค่าที่ปรับลดลงเมื่อสิ้นสุดการพักครั้งปัจจุบัน
         self._device(device_id).set_desired_target(reps)
 
+    @_locked
     def set_timings(self, timings: dict, device_id: str = DEFAULT_DEVICE_ID) -> None:
         self._device(device_id).set_desired_timings(timings)
 
+    @_locked
     def fetch_timings(self, device_id: str = DEFAULT_DEVICE_ID) -> dict | None:
         return self._device(device_id).fetch_desired_timings()
 
+    @_locked
     def handle_event(
         self,
         event_type: str,
@@ -128,9 +177,15 @@ class SessionService:
         open_session = db.get_open_session(device_id)
         if open_session is None:
             return None
+        # A stop that names a session the server never saw is not for the open one,
+        # unless that one carries no uid (a pre-uid device, or a healed row).
+        # [TH] stop ที่ระบุรอบที่เซิร์ฟเวอร์ไม่รู้จัก ไม่ใช่ของรอบที่เปิดอยู่ ยกเว้นรอบนั้นไม่มี uid
+        if uid and open_session["uid"]:
+            return None
         db.close_session(open_session["id"], self._iso_now(), elapsed_sec, reps)
         return open_session["id"]
 
+    @_locked
     def handle_upload(
         self,
         uid: str,
@@ -197,6 +252,7 @@ class SessionService:
             code,
         )
 
+    @_locked
     def handle_heartbeat(
         self,
         state: str,
@@ -213,13 +269,18 @@ class SessionService:
             # heal: device idle but a session is still open (lost 'stopped' event)
             # [TH] เยียวยา: อุปกรณ์ว่างแต่ยังมีเซสชันเปิดค้าง (เหตุการณ์ 'stopped' หาย) จึงปิดให้
             open_session = db.get_open_session(device_id)
-            if open_session is not None:
+            if open_session is not None and self._age_sec(open_session) >= HEAL_GRACE_SEC:
                 db.close_session(
                     open_session["id"], self._iso_now(), prev_elapsed, prev_reps
                 )
 
+    def _age_sec(self, session) -> float:
+        started = datetime.fromisoformat(session["started_at"])
+        return self._now() - started.timestamp()
+
     # --- app-facing ---
 
+    @_locked
     def queue_start(
         self, device_id: str = DEFAULT_DEVICE_ID, target_reps: int | None = None
     ) -> None:
@@ -239,12 +300,23 @@ class SessionService:
             dev.set_desired_target(target_reps)
         dev.queue_command("start")
 
+    @_locked
     def queue_stop(self, device_id: str = DEFAULT_DEVICE_ID) -> None:
         self._auto_close_if_silent(device_id)
+        dev = self._device(device_id)
         if db.get_open_session(device_id) is None:
+            # A stop before the start became a session cancels the start. Without
+            # this the start kept repeating to the device for up to 30 s after the
+            # user pressed stop, and the leg could still lift.
+            # [TH] stop ก่อนที่ start จะกลายเป็นรอบ คือการยกเลิก start ไม่อย่างนั้น start ยังถูกส่งซ้ำอีกถึง 30 วินาที
+            if dev.pending_command() == "start" or dev.start_in_flight():
+                if dev.cancel_start():
+                    dev.queue_command("stop")  # the device may already be moving
+                return
             raise ConflictError("no session running")
-        self._device(device_id).queue_command("stop")
+        dev.queue_command("stop")
 
+    @_locked
     def current(self, device_id: str = DEFAULT_DEVICE_ID) -> dict:
         self._auto_close_if_silent(device_id)
         dev = self._device(device_id)
@@ -265,7 +337,7 @@ class SessionService:
             return {
                 "sessionId": open_session["id"],
                 "state": "running",
-                "elapsedSec": dev.live_elapsed_sec,
+                "elapsedSec": dev.live_elapsed_now(),
                 "reps": dev.live_reps,
                 "deviceOnline": online,
                 "targetReps": target_reps,
@@ -284,9 +356,11 @@ class SessionService:
             "targetReps": target_reps,
         }
 
+    @_locked
     def claim(self, session_id: str, patient_code: str) -> bool:
         return db.claim_session(session_id, patient_code)
 
+    @_locked
     def list_for_patient(self, patient_code: str) -> list[dict]:
         # Every device, not just the default one: a patient's sessions can come from
         # any machine, and a stale one left open on another would stay "running".

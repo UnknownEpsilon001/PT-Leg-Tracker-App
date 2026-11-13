@@ -59,6 +59,12 @@ static String upUid, upBody;
 // cannot be overwritten by the empty answer of the next poll.
 // [TH] ผลการดึงคำสั่ง คำสั่งจะค้างไว้จนกว่าลูปจะหยิบไป "start" จึงไม่ถูกคำตอบว่างของรอบถัดไปทับ
 static String cmdPending;
+// The server repeats a command until the device's event acknowledges it. The id
+// tells a repeat from a new command, so a repeated "start" cannot restart a
+// session the operator has just stopped on the panel.
+// [TH] เซิร์ฟเวอร์ส่งคำสั่งซ้ำจนกว่าอุปกรณ์จะยืนยัน รหัสคำสั่งใช้แยกคำสั่งซ้ำออกจากคำสั่งใหม่
+//      start ที่ส่งซ้ำจึงไม่เริ่มรอบที่ผู้ใช้เพิ่งกดหยุดที่หน้าปัดใหม่
+static String lastCmdId;  // net task only — ใช้ในงานเครือข่ายเท่านั้น
 static int16_t cmdTarget = -1;
 static NetTimings cmdTimings{0, 0, 0, 0, 0};
 
@@ -133,6 +139,7 @@ static int httpPollCommand(const String& url) {
     } else {
       JsonDocument filter;
       filter["command"] = true;
+      filter["commandId"] = true;
       filter["targetReps"] = true;
       filter["timings"] = true;
       JsonDocument doc;
@@ -140,6 +147,24 @@ static int httpPollCommand(const String& url) {
           DeserializationError::Ok) {
         String cmd = doc["command"].isNull() ? "" : doc["command"].as<String>();
         if (cmd.length() > 32) cmd = "";  // no command is that long — คำสั่งไม่ยาวขนาดนั้น
+        // No id (an older server) keeps the old behaviour: every answer counts.
+        // [TH] ถ้าไม่มีรหัส (เซิร์ฟเวอร์รุ่นเก่า) ทำแบบเดิม ทุกคำตอบนับเป็นคำสั่ง
+        String id = doc["commandId"] | "";
+        if (cmd.length() && id.length()) {
+          if (id == lastCmdId) cmd = "";
+          else lastCmdId = id;
+        }
+        // The first answer after boot may carry a start this board took before a
+        // reset (the id is only in RAM). Starting from it would move the leg on its
+        // own after a power glitch, so that one start is skipped; a stop still runs.
+        // [TH] คำตอบแรกหลังเปิดเครื่องอาจเป็น start ที่รับไปก่อนรีเซ็ต ถ้าทำตามขาจะขยับเองหลังไฟกระพริบ
+        //      จึงข้าม start นั้นครั้งเดียว ส่วน stop ยังทำตาม
+        static bool firstAnswer = true;
+        if (firstAnswer && cmd == "start") {
+          Serial.println("net: start pending at boot, skipped - send it again");
+          cmd = "";
+        }
+        firstAnswer = false;
         JsonVariantConst t = doc["timings"];
         NetTimings timings{t["liftSec"] | (uint16_t)0, t["lowerSec"] | (uint16_t)0,
                            t["holdSec"] | (uint16_t)0, t["restSec"] | (uint16_t)0,
@@ -193,11 +218,15 @@ static void netTask(void*) {
         url = baseUrl + "/api/device/session";
         body = upBody;
         job = UPLOAD;
-      } else if (now - lastPoll >= POLL_MS && !(hbBody.length() && !lastWasBeat)) {
+      } else if (now - lastPoll >= POLL_MS && !(hbBody.length() && !evCount && !lastWasBeat)) {
         url = baseUrl + "/api/device/command";
         if (devCode.length()) url += "?deviceId=" + urlEncode(devCode);
         job = POLL;
-      } else if (hbBody.length()) {
+      } else if (hbBody.length() && !evCount) {
+        // Never while an event waits for its retry: a heartbeat sent in that gap
+        // reached the server before the older event, and the event then set the
+        // session clock back (app showed 3, 2, 1, 3...).
+        // [TH] ห้ามส่งระหว่างที่เหตุการณ์รอส่งซ้ำ ไม่อย่างนั้นสัญญาณชีพจะถึงก่อนเหตุการณ์ที่เก่ากว่า แล้วเวลาย้อนกลับ
         url = baseUrl + "/api/device/heartbeat";
         body = hbBody;
         hbBody = "";
@@ -220,6 +249,13 @@ static void netTask(void*) {
 
     take();
     if (job == EVENT) {
+      // A 4xx is the server refusing this event for good (malformed, unknown).
+      // Retrying it forever would hold every later event, and the heartbeats
+      // that wait behind events, so it is dropped like a delivered one.
+      // [TH] 4xx คือเซิร์ฟเวอร์ปฏิเสธเหตุการณ์นี้ถาวร ถ้าส่งซ้ำไม่จบ เหตุการณ์ถัดไปและสัญญาณชีพจะค้างหมด จึงทิ้งไป
+      bool refused = code >= 400 && code < 500;
+      if (refused) Serial.printf("net: event refused by server (%d), dropped\n", code);
+      ok = ok || refused;
       if (ok && evCount && evPops == sentPops) {
         evHead = (evHead + 1) % EV_MAX;
         evCount--;
@@ -250,7 +286,15 @@ void netBegin(const DeviceSettings& s) {
   devCode = s.deviceCode;
   give();
   if (!task) xTaskCreatePinnedToCore(netTask, "net", 12288, nullptr, 1, &task, 0);
-  if (s.wifiSsid.length()) {
+  // Restart Wi-Fi only when the network itself changed. Every settings change
+  // comes through here, and WiFi.begin drops a working connection for seconds,
+  // so changing a lift time used to take the device offline.
+  // [TH] เริ่ม WiFi ใหม่เฉพาะเมื่อเครือข่ายเปลี่ยน การตั้งค่าทุกอย่างผ่านจุดนี้ และ WiFi.begin ตัดการเชื่อมต่อหลายวินาที
+  static String wifiSsid, wifiPass;
+  bool same = s.wifiSsid == wifiSsid && s.wifiPass == wifiPass && WiFi.getMode() == WIFI_STA;
+  if (s.wifiSsid.length() && !same) {
+    wifiSsid = s.wifiSsid;
+    wifiPass = s.wifiPass;
     WiFi.mode(WIFI_STA);
     WiFi.begin(s.wifiSsid.c_str(), s.wifiPass.c_str());
   }
@@ -285,6 +329,10 @@ void netQueueEvent(const char* type, uint32_t elapsedSec, uint16_t reps, const S
   int tail = (evHead + evCount) % EV_MAX;
   evq[tail] = {String(type), elapsedSec, reps, uid};
   evCount++;
+  // An unsent heartbeat describes the state before this event. Sent after it, an
+  // old "idle" told the server a session had ended right after it started.
+  // [TH] สัญญาณชีพที่ยังไม่ได้ส่งเป็นสถานะก่อนเหตุการณ์นี้ ถ้าส่งตามหลัง "idle" เก่าจะทำให้เซิร์ฟเวอร์ปิดรอบที่เพิ่งเริ่ม
+  hbBody = "";
   give();
 }
 

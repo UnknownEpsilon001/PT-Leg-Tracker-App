@@ -227,6 +227,7 @@ def test_idle_heartbeat_closes_lost_session(clock):
     svc = make_service(clock)
     session_id = svc.handle_event("started", 0, 0)
     svc.handle_heartbeat("running", 45, 4)
+    clock.advance(HEAL_GRACE_SEC + 1)
     svc.handle_heartbeat("idle", 0, 0)
     assert db.get_open_session() is None
     svc.claim(session_id, "PT001")
@@ -236,6 +237,7 @@ def test_idle_heartbeat_closes_lost_session(clock):
 
 
 from app.db import DEFAULT_DEVICE_ID
+from app.service import HEAL_GRACE_SEC
 
 
 def test_two_devices_have_isolated_queues_and_sessions(clock):
@@ -307,3 +309,52 @@ def test_default_device_backcompat(clock):
     svc.queue_start()  # no device_id
     assert svc.fetch_command() == "start"
     assert svc.device is svc._device(DEFAULT_DEVICE_ID)
+
+
+def test_late_idle_heartbeat_does_not_close_a_fresh_session(clock):
+    svc = make_service(clock)
+    svc.handle_event("started", 0, 0, uid="u1")
+    svc.handle_heartbeat("idle", 0, 0)
+    assert db.get_open_session() is not None
+
+
+def test_stop_cancels_a_start_the_device_has_not_fetched(clock):
+    svc = make_service(clock)
+    svc.queue_start()
+    svc.queue_stop()
+    assert svc.fetch_command() is None
+    assert svc.current()["state"] == "idle"
+
+
+def test_stop_after_device_fetched_start_sends_stop(clock):
+    svc = make_service(clock)
+    svc.queue_start()
+    assert svc.fetch_command() == "start"
+    svc.queue_stop()
+    assert svc.fetch_command() == "stop"
+    assert svc.current()["state"] == "idle"
+
+
+def test_each_queued_command_gets_a_new_id(clock):
+    svc = make_service(clock)
+    svc.queue_start()
+    first = svc.command_id()
+    svc.fetch_command()
+    assert svc.command_id() == first  # a repeat keeps its id
+    svc.queue_stop()
+    assert svc.command_id() != first
+
+
+def test_stop_for_unknown_uid_leaves_the_open_session(clock):
+    svc = make_service(clock)
+    svc.handle_event("started", 0, 0, uid="new")
+    svc.handle_event("stopped", 30, 3, uid="old-never-seen")
+    assert db.get_open_session() is not None
+
+
+def test_poll_returns_command_with_its_own_id(clock):
+    svc = make_service(clock)
+    svc.queue_start()
+    polled = svc.poll_command()
+    assert polled["command"] == "start"
+    assert polled["commandId"] == svc.command_id()

@@ -1253,6 +1253,8 @@ void loop() {
       gLink.sendSettings(currentAsLink());  // keep the CYD's spinbox honest
                                             // [TH] ให้ช่องปรับค่าบนจอตรงกับของจริง
     }
+    if (cmd.length())
+      Serial.printf("[CMD] %s from server, phase %s\n", cmd.c_str(), phaseName(gSession.phase()));
     if (cmd == "start" && buttonStartStuck()) {
       Serial.println("server start refused: START reads pressed, check its wiring");
     } else if (cmd == "start") {

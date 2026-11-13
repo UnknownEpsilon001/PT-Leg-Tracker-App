@@ -145,9 +145,16 @@ async function poll(gen = pollGen) {
     targetUnconfirmed.value = false
     if (cur.state === 'running') {
       phase.value = 'running'
+      // Within one session the clock and the reps only move forward. A reply that
+      // carries a slightly older value (a late heartbeat) keeps what is shown.
+      // [TH] ในรอบเดียวกัน เวลาและจำนวนครั้งเดินหน้าเท่านั้น ค่าที่เก่ากว่าเล็กน้อยจะไม่ทับค่าที่แสดงอยู่
+      const same = sessionId.value === cur.sessionId
+      const shownSec = elapsedSec.value
+      const back =
+        same && shownSec !== null && cur.elapsedSec < shownSec && shownSec - cur.elapsedSec <= 3
+      elapsedSec.value = back ? shownSec : cur.elapsedSec
+      reps.value = same && cur.reps < reps.value ? reps.value : cur.reps
       sessionId.value = cur.sessionId
-      elapsedSec.value = cur.elapsedSec
-      reps.value = cur.reps
     } else if (cur.state === 'starting') {
       if (!cur.deviceOnline) failOffline()
     } else if (phase.value === 'starting') {
@@ -179,6 +186,22 @@ function failOffline() {
   stopPolling()
   phase.value = 'before'
   errorMsg.value = 'เครื่องออฟไลน์'
+}
+
+// Withdraws a start the machine has not begun. The server drops the queued start,
+// or sends stop if the machine already picked it up, so the leg cannot lift later.
+// [TH] ยกเลิกคำสั่งเริ่มที่เครื่องยังไม่ได้ทำ เซิร์ฟเวอร์ลบคำสั่งที่ค้าง หรือสั่งหยุดถ้าเครื่องรับไปแล้ว
+async function cancelStart() {
+  stopPolling()
+  try {
+    await queueStop(serverUrl.value, deviceCode.value)
+    errorMsg.value = ''
+  } catch (err) {
+    // A conflict means there was nothing left to cancel: the start had expired.
+    // [TH] ถ้าขัดแย้งแปลว่าไม่มีอะไรให้ยกเลิกแล้ว คำสั่งเริ่มหมดเวลาไปเอง
+    errorMsg.value = err instanceof DeviceError ? '' : 'ยกเลิกไม่สำเร็จ ลองใหม่อีกครั้ง'
+  }
+  phase.value = 'before'
 }
 
 // The controller owns the target: this sends the change, then re-reads /current
@@ -439,6 +462,9 @@ onUnmounted(() => {
         >
           <AppIcon name="play" />
           {{ phase === 'starting' ? 'กำลังสั่งเครื่อง...' : 'สั่งเครื่องเริ่มทำงาน' }}
+        </button>
+        <button v-if="phase === 'starting'" class="secondary wide" @click="cancelStart">
+          ยกเลิกคำสั่งเริ่ม
         </button>
         <button
           v-if="attachAvailable"

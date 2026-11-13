@@ -53,12 +53,7 @@ class HeartbeatBody(BaseModel):
 
 @router.get("/command")
 def get_command(request: Request, deviceId: str = "default"):
-    service = request.app.state.service
-    return {
-        "command": service.fetch_command(deviceId),
-        "targetReps": service.fetch_target(deviceId),
-        "timings": service.fetch_timings(deviceId),
-    }
+    return request.app.state.service.poll_command(deviceId)
 
 
 @router.post("/event")
